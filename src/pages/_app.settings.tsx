@@ -1,0 +1,99 @@
+
+import { useState } from "react";
+import { PageHeader } from "@/components/AppLayout";
+import { Card, CardHeader, Button } from "@/components/ui-kit";
+import { useAuth } from "@/lib/auth";
+
+function Page() {
+  const { user } = useAuth();
+  const [prefs, setPrefs] = useState({
+    notifications: true,
+    sms: false,
+    geofence: true,
+    overspeed: 60,
+    coldMin: 2,
+    coldMax: 6,
+    fuelAlert: 25,
+  });
+  const [saved, setSaved] = useState(false);
+
+  function save() {
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  return (
+    <div>
+      <PageHeader title="Settings" subtitle="Account, notifications and platform preferences" />
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader title="Profile" />
+          <div className="p-4 space-y-3 text-sm">
+            <div className="flex justify-between"><span className="text-muted-foreground">Name</span><span className="font-medium">{user?.name}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Email</span><span className="font-medium">{user?.email}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Role</span><span className="font-medium capitalize">{user?.role}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Organisation</span><span className="font-medium">Nanjil Integrated Dairy Development</span></div>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader title="Notifications" />
+          <div className="p-4 space-y-3 text-sm">
+            <Toggle label="Email notifications" value={prefs.notifications}
+              onChange={(v) => setPrefs({ ...prefs, notifications: v })} />
+            <Toggle label="SMS alerts for high-severity events" value={prefs.sms}
+              onChange={(v) => setPrefs({ ...prefs, sms: v })} />
+            <Toggle label="Geofence alerts" value={prefs.geofence}
+              onChange={(v) => setPrefs({ ...prefs, geofence: v })} />
+          </div>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader title="Alert Thresholds" subtitle="Adjust when alerts are triggered" />
+          <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Field label="Overspeed threshold" suffix="km/h" value={prefs.overspeed}
+              onChange={(v) => setPrefs({ ...prefs, overspeed: v })} />
+            <Field label="Cold chain min" suffix="°C" value={prefs.coldMin}
+              onChange={(v) => setPrefs({ ...prefs, coldMin: v })} />
+            <Field label="Cold chain max" suffix="°C" value={prefs.coldMax}
+              onChange={(v) => setPrefs({ ...prefs, coldMax: v })} />
+            <Field label="Low fuel alert" suffix="%" value={prefs.fuelAlert}
+              onChange={(v) => setPrefs({ ...prefs, fuelAlert: v })} />
+          </div>
+        </Card>
+      </div>
+
+      <div className="mt-4 flex items-center gap-3">
+        <Button onClick={save}>Save changes</Button>
+        {saved && <span className="text-sm text-success">Settings saved.</span>}
+      </div>
+    </div>
+  );
+}
+
+function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button onClick={() => onChange(!value)} className="flex items-center justify-between w-full">
+      <span>{label}</span>
+      <span className={`relative inline-block w-10 h-6 rounded-full transition-colors ${value ? "bg-primary" : "bg-muted"}`}>
+        <span className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${value ? "translate-x-4" : ""}`} />
+      </span>
+    </button>
+  );
+}
+
+function Field({ label, value, suffix, onChange }: { label: string; value: number; suffix: string; onChange: (v: number) => void }) {
+  return (
+    <div>
+      <label className="text-sm font-medium">{label}</label>
+      <div className="mt-1 flex items-center gap-2 h-10 px-3 border border-border rounded-md bg-card">
+        <input type="number" value={value} onChange={(e) => onChange(Number(e.target.value))}
+          className="bg-transparent outline-none text-sm w-full" />
+        <span className="text-xs text-muted-foreground">{suffix}</span>
+      </div>
+    </div>
+  );
+}
+
+export default Page;
