@@ -1,21 +1,56 @@
 
-import { MAINTENANCE, type MaintenanceRecord } from "@/lib/mock-data";
+import { type MaintenanceRecord } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Kpi, Card, Badge, Button } from "@/components/ui-kit";
 import { Wrench, AlertCircle, CheckCircle2, Calendar } from "lucide-react";
 import { DataTable } from "@/components/DataTable";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase";
 
 function Page() {
-  const [records, setRecords] = useState(MAINTENANCE);
+  const [records, setRecords] = useState<MaintenanceRecord[]>([]);
+
+  async function loadMaintenance() {
+    const [mRes, vRes] = await Promise.all([
+      supabase.from('maintenance_records').select('*'),
+      supabase.from('vehicles').select('*')
+    ]);
+
+    if (mRes.data) {
+      setRecords(mRes.data.map(m => {
+        const vObj = vRes.data?.find(x => x.id === m.vehicle_id);
+        return {
+          id: m.id,
+          vehicle: vObj ? vObj.number : 'Unknown',
+          service: m.service,
+          dueIn: m.due_in || '',
+          dueDate: m.due_date || '',
+          status: m.status,
+          cost: Number(m.cost || 0)
+        };
+      }));
+    }
+  }
+
+  useEffect(() => {
+    loadMaintenance();
+  }, []);
+
+  async function markCompleted(id: string) {
+    const { error } = await supabase
+      .from('maintenance_records')
+      .update({ status: 'Completed', completed_at: new Date().toISOString() })
+      .eq('id', id);
+
+    if (!error) {
+      loadMaintenance();
+    }
+  }
+
   const overdue = records.filter((r) => r.status === "Overdue").length;
   const upcoming = records.filter((r) => r.status === "Upcoming").length;
   const completed = records.filter((r) => r.status === "Completed").length;
   const totalCost = records.reduce((s, r) => s + r.cost, 0);
-
-  function markCompleted(id: string) {
-    setRecords((arr) => arr.map((r) => (r.id === id ? { ...r, status: "Completed" } : r)));
-  }
 
   return (
     <div>

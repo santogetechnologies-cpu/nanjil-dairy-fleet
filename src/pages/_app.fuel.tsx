@@ -1,20 +1,53 @@
 
 import { Kpi, Card, CardHeader, Badge } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
-import { VEHICLES, dailyFuel, fuelEfficiencyByVehicle, ALERTS } from "@/lib/mock-data";
+import { dailyFuel, fuelEfficiencyByVehicle } from "@/lib/mock-data";
 import { Fuel, TrendingDown, Gauge, AlertTriangle, Sparkles } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
 } from "recharts";
 import { DataTable } from "@/components/DataTable";
 
-function Page() {
-  const fuelAlerts = ALERTS.filter((a) => a.type === "Fuel");
-  const totalConsumed = 4280;
-  const avgKmpl = 4.8;
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase";
 
-  const efficiency = fuelEfficiencyByVehicle();
-  const trend = dailyFuel().map((d) => ({ ...d, mileage: +(3 + Math.random() * 3).toFixed(2) }));
+function Page() {
+  const [vehicles, setVehicles] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [eff, setEff] = useState<any[]>([]);
+  const [trend, setTrend] = useState<any[]>([]);
+
+  useEffect(() => {
+    async function load() {
+      const [vRes, aRes, effRes, trendRes] = await Promise.all([
+        supabase.from('v_vehicles').select('*'),
+        supabase.from('alerts').select('*'),
+        supabase.from('v_fuel_efficiency_by_vehicle').select('*').limit(10),
+        supabase.from('v_daily_fuel_fleet').select('*')
+      ]);
+
+      if (vRes.data) setVehicles(vRes.data);
+      if (aRes.data) setAlerts(aRes.data);
+      if (effRes.data && effRes.data.length > 0) {
+        setEff(effRes.data.map(e => ({ vehicle: e.number.split("-").slice(0, 2).join("-"), kmpl: Number(e.kmpl) })));
+      }
+      if (trendRes.data && trendRes.data.length > 0) {
+        setTrend(trendRes.data.map(f => ({
+          day: f.log_date,
+          consumed: Number(f.total_consumed_l),
+          mileage: Number(f.avg_mileage_kmpl)
+        })));
+      }
+    }
+    load();
+  }, []);
+
+  const fuelAlerts = alerts.filter((a) => a.type === "Fuel");
+  const totalConsumed = trend.reduce((s, t) => s + (t.consumed || 0), 0) || 4280;
+  const avgKmpl = eff.reduce((s, e) => s + (e.kmpl || 0), 0) / (eff.length || 1) || 4.8;
+
+  const efficiency = eff.length > 0 ? eff : fuelEfficiencyByVehicle();
+  const finalTrend = trend.length > 0 ? trend : dailyFuel().map((d) => ({ ...d, mileage: +(3 + Math.random() * 3).toFixed(2) }));
 
   return (
     <div>
@@ -43,7 +76,7 @@ function Page() {
           <CardHeader title="Daily Consumption" subtitle="Litres consumed across the fleet" />
           <div className="p-3" style={{ height: 280 }}>
             <ResponsiveContainer>
-              <BarChart data={trend}>
+              <BarChart data={finalTrend}>
                 <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
                 <XAxis dataKey="day" fontSize={12} />
                 <YAxis fontSize={12} />
@@ -57,7 +90,7 @@ function Page() {
           <CardHeader title="Fleet Mileage Trend" subtitle="km/L weekly" />
           <div className="p-3" style={{ height: 280 }}>
             <ResponsiveContainer>
-              <LineChart data={trend}>
+              <LineChart data={finalTrend}>
                 <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
                 <XAxis dataKey="day" fontSize={12} />
                 <YAxis fontSize={12} />
@@ -87,10 +120,10 @@ function Page() {
 
       <div className="mt-4">
         <DataTable
-          data={VEHICLES.slice(0, 20).map((v) => ({
+          data={vehicles.slice(0, 20).map((v) => ({
             number: v.number,
-            driver: v.driver,
-            fuel: v.fuel,
+            driver: v.driver_name || 'Driver',
+            fuel: v.fuel || 0,
             consumed: Math.round(40 + Math.random() * 80),
             mileage: +(3 + Math.random() * 3).toFixed(2),
             status: v.fuel < 25 ? "Low Fuel" : v.fuel < 50 ? "Half Tank" : "OK",

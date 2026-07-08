@@ -1,18 +1,53 @@
 
-import { useState } from "react";
-import { TRIPS, VEHICLES, type Trip } from "@/lib/mock-data";
+import { useState, useEffect } from "react";
+import { type Trip } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Card, Badge, Button } from "@/components/ui-kit";
 import { DataTable } from "@/components/DataTable";
 import { Play, X } from "lucide-react";
 import { motion } from "framer-motion";
+import { supabase } from "@/lib/supabase";
 
 function TripsPage() {
   const [vehicle, setVehicle] = useState("All");
   const [date, setDate] = useState("");
   const [playback, setPlayback] = useState<Trip | null>(null);
+  const [trips, setTrips] = useState<Trip[]>([]);
+  const [vehicles, setVehicles] = useState<any[]>([]);
 
-  const data = TRIPS.filter((t) => {
+  useEffect(() => {
+    async function load() {
+      const [tRes, vRes] = await Promise.all([
+        supabase.from('trips').select('*'),
+        supabase.from('vehicles').select('*')
+      ]);
+
+      if (vRes.data) {
+        setVehicles(vRes.data);
+      }
+
+      if (tRes.data) {
+        setTrips(tRes.data.map(t => {
+          const vObj = vRes.data?.find(x => x.id === t.vehicle_id);
+          const dName = t.driver_id ? 'Driver' : ''; // fallback
+          return {
+            id: t.id,
+            vehicle: vObj ? vObj.number : 'Unknown',
+            driver: t.driver_id ? 'Assigned Driver' : 'No Driver', // will be resolved or mock
+            date: t.date,
+            start: t.start,
+            destination: t.destination,
+            distance: Number(t.distance),
+            duration: t.duration,
+            status: t.status
+          };
+        }));
+      }
+    }
+    load();
+  }, []);
+
+  const data = trips.filter((t) => {
     if (vehicle !== "All" && t.vehicle !== vehicle) return false;
     if (date && t.date !== date) return false;
     return true;
@@ -20,13 +55,13 @@ function TripsPage() {
 
   return (
     <div>
-      <PageHeader title="Trips & Routes" subtitle={`${TRIPS.length} trips logged · last 19 days`} />
+      <PageHeader title="Trips & Routes" subtitle={`${trips.length} trips logged · last 19 days`} />
 
       <div className="flex flex-wrap gap-2 mb-3">
         <select value={vehicle} onChange={(e) => setVehicle(e.target.value)}
                 className="h-9 px-3 rounded-md border border-border bg-card text-sm">
           <option value="All">All vehicles</option>
-          {VEHICLES.map((v) => <option key={v.id} value={v.number}>{v.number}</option>)}
+          {vehicles.map((v) => <option key={v.id} value={v.number}>{v.number}</option>)}
         </select>
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
                className="h-9 px-3 rounded-md border border-border bg-card text-sm" />

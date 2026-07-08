@@ -1,15 +1,47 @@
 
-import { COLLECTION_ROUTES, type CollectionRoute } from "@/lib/mock-data";
+import { useState, useEffect } from "react";
+import { type CollectionRoute } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Badge } from "@/components/ui-kit";
 import { DataTable } from "@/components/DataTable";
+import { supabase } from "@/lib/supabase";
 
 function Page() {
+  const [routes, setRoutes] = useState<CollectionRoute[]>([]);
+
+  useEffect(() => {
+    async function load() {
+      const [rRes, vRes] = await Promise.all([
+        supabase.from('collection_routes').select('*'),
+        supabase.from('vehicles').select('*')
+      ]);
+
+      if (rRes.data) {
+        setRoutes(rRes.data.map(r => {
+          const vObj = vRes.data?.find(x => x.id === r.vehicle_id);
+          return {
+            id: r.id,
+            name: r.name,
+            vehicle: vObj ? vObj.number : 'Unknown',
+            driver: 'Assigned Driver', // can be fetched or resolved
+            centres: r.centres,
+            startTime: r.start_time || '',
+            endTime: r.end_time || '',
+            status: r.status,
+            litres: r.litres,
+            completion: r.completion
+          };
+        }));
+      }
+    }
+    load();
+  }, []);
+
   return (
     <div>
       <PageHeader title="Dairy Collection Routes" subtitle="Milk collection loops, centres and delivery points" />
       <DataTable<CollectionRoute>
-        data={COLLECTION_ROUTES}
+        data={routes}
         searchKeys={["name", "vehicle", "driver"]}
         columns={[
           { key: "name", label: "Route" },

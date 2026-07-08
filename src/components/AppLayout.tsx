@@ -6,8 +6,8 @@ import {
   ShieldCheck, Cog, Thermometer, Bell, Wrench, FileText, Sparkles,
   Users, Settings, LogOut, Search, Menu, X, ChevronDown, UserCircle2,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
-import { ALERTS } from "@/lib/mock-data";
+import { useState, useEffect, type ReactNode } from "react";
+import { supabase } from "@/lib/supabase";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -33,8 +33,31 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [unread, setUnread] = useState(0);
 
-  const unread = ALERTS.filter((a) => !a.resolved).length;
+  useEffect(() => {
+    async function getUnread() {
+      const { data } = await supabase
+        .from('alerts')
+        .select('id')
+        .eq('resolved', false);
+      if (data) {
+        setUnread(data.length);
+      }
+    }
+    getUnread();
+
+    const channel = supabase
+      .channel('alerts-badge')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => {
+        getUnread();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   // Driver gets simplified UI
   if (user?.role === "driver") {

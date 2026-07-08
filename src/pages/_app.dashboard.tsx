@@ -15,6 +15,8 @@ import {
   PieChart, Pie, Cell, Legend,
 } from "recharts";
 
+import { supabase } from "@/lib/supabase";
+
 const STATUS_COLORS: Record<string, string> = {
   Moving: "oklch(0.62 0.16 150)",
   Idle: "oklch(0.78 0.16 75)",
@@ -24,21 +26,100 @@ const STATUS_COLORS: Record<string, string> = {
 
 function DashboardPage() {
   const [now, setNow] = useState(new Date());
+  const [vehicles, setVehicles] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [maintenance, setMaintenance] = useState<any[]>([]);
+  const [eff, setEff] = useState<any[]>([]);
+  const [fuelData, setFuelData] = useState<any[]>([]);
+
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  const recentAlerts = ALERTS.filter((a) => !a.resolved).slice(0, 6);
+  useEffect(() => {
+    async function load() {
+      const [vRes, aRes, mRes, effRes, fuelRes] = await Promise.all([
+        supabase.from('v_vehicles').select('*'),
+        supabase.from('alerts').select('*'),
+        supabase.from('maintenance_records').select('*'),
+        supabase.from('v_fuel_efficiency_by_vehicle').select('*').limit(10),
+        supabase.from('v_daily_fuel_fleet').select('*')
+      ]);
+
+      if (vRes.data) setVehicles(vRes.data);
+      if (aRes.data) setAlerts(aRes.data);
+      if (mRes.data) setMaintenance(mRes.data);
+      if (effRes.data && effRes.data.length > 0) {
+        setEff(effRes.data.map(e => ({ vehicle: e.number.split("-").slice(0, 2).join("-"), kmpl: Number(e.kmpl) })));
+      }
+      if (fuelRes.data && fuelRes.data.length > 0) {
+        setFuelData(fuelRes.data.map(f => ({ day: f.log_date, consumed: Number(f.total_consumed_l) })));
+      }
+    }
+    load();
+  }, []);
+
+  const mappedVehicles = vehicles.map(v => ({
+    id: v.id,
+    number: v.number,
+    type: v.type,
+    model: v.model,
+    route: v.route,
+    insuranceExpiry: v.insurance_expiry,
+    lastService: v.last_service,
+    nextServiceKm: v.next_service_km,
+    odometer: v.odometer,
+    engineHours: Number(v.engine_hours),
+    status: v.status,
+    location: v.location,
+    lat: Number(v.lat),
+    lng: Number(v.lng),
+    speed: v.speed,
+    fuel: v.fuel,
+    temperature: Number(v.temperature),
+    humidity: v.humidity,
+    engineOn: v.engine_on,
+    ignition: v.ignition,
+    driver: v.driver_name || '',
+    driverId: v.driver_id || '',
+    lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago'
+  }));
+
+  const mappedAlerts = alerts.map(a => {
+    const vObj = vehicles.find(x => x.id === a.vehicle_id);
+    return {
+      id: a.id,
+      type: a.type,
+      severity: a.severity,
+      vehicle: vObj ? vObj.number : 'Unknown',
+      message: a.message,
+      time: a.time ? new Date(a.time).toLocaleTimeString() : '1h ago',
+      resolved: a.resolved
+    };
+  });
+
+  const recentAlerts = mappedAlerts.filter((a) => !a.resolved).slice(0, 6);
+
+  const kpiData = {
+    totalVehicles: mappedVehicles.length || KPI.totalVehicles,
+    moving: mappedVehicles.filter(v => v.status === 'Moving').length || KPI.moving,
+    idle: mappedVehicles.filter(v => v.status === 'Idle').length || KPI.idle,
+    parked: mappedVehicles.filter(v => v.status === 'Parked').length || KPI.parked,
+    offline: mappedVehicles.filter(v => v.status === 'Offline').length || KPI.offline,
+    fuelAlerts: mappedAlerts.filter(a => a.type === 'Fuel' && !a.resolved).length || KPI.fuelAlerts,
+    tempAlerts: mappedAlerts.filter(a => a.type === 'Temperature' && !a.resolved).length || KPI.tempAlerts,
+    maintenanceDue: maintenance.filter(m => m.status !== 'Completed').length || KPI.maintenanceDue,
+  };
 
   const statusData = [
-    { name: "Moving", value: KPI.moving },
-    { name: "Idle", value: KPI.idle },
-    { name: "Parked", value: KPI.parked },
-    { name: "Offline", value: KPI.offline },
+    { name: "Moving", value: kpiData.moving },
+    { name: "Idle", value: kpiData.idle },
+    { name: "Parked", value: kpiData.parked },
+    { name: "Offline", value: kpiData.offline },
   ];
-  const fuelData = dailyFuel();
-  const eff = fuelEfficiencyByVehicle();
+  const finalFuelData = fuelData.length > 0 ? fuelData : dailyFuel();
+  const finalEffData = eff.length > 0 ? eff : fuelEfficiencyByVehicle();
 
   return (
     <div>
@@ -53,13 +134,13 @@ function DashboardPage() {
       />
 
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3">
-        <Kpi label="Total Vehicles" value={KPI.totalVehicles} icon={<Truck className="h-5 w-5" />} hint="Fleet size" />
-        <Kpi label="Currently Moving" value={KPI.moving} accent="success" icon={<Activity className="h-5 w-5" />} hint={`${Math.round((KPI.moving/KPI.totalVehicles)*100)}% of fleet`} />
-        <Kpi label="Idle Vehicles" value={KPI.idle} accent="warning" icon={<Pause className="h-5 w-5" />} hint="Engine on, no motion" />
-        <Kpi label="Parked Vehicles" value={KPI.parked} icon={<ParkingSquare className="h-5 w-5" />} hint="Engine off" />
-        <Kpi label="Fuel Alerts" value={KPI.fuelAlerts} accent="destructive" icon={<Fuel className="h-5 w-5" />} hint="Open issues" />
-        <Kpi label="Temperature Alerts" value={KPI.tempAlerts} accent="info" icon={<Thermometer className="h-5 w-5" />} hint="Cold-chain" />
-        <Kpi label="Maintenance Due" value={KPI.maintenanceDue} accent="warning" icon={<Wrench className="h-5 w-5" />} hint="Next 30 days" />
+        <Kpi label="Total Vehicles" value={kpiData.totalVehicles} icon={<Truck className="h-5 w-5" />} hint="Fleet size" />
+        <Kpi label="Currently Moving" value={kpiData.moving} accent="success" icon={<Activity className="h-5 w-5" />} hint={`${Math.round((kpiData.moving/kpiData.totalVehicles)*100)}% of fleet`} />
+        <Kpi label="Idle Vehicles" value={kpiData.idle} accent="warning" icon={<Pause className="h-5 w-5" />} hint="Engine on, no motion" />
+        <Kpi label="Parked Vehicles" value={kpiData.parked} icon={<ParkingSquare className="h-5 w-5" />} hint="Engine off" />
+        <Kpi label="Fuel Alerts" value={kpiData.fuelAlerts} accent="destructive" icon={<Fuel className="h-5 w-5" />} hint="Open issues" />
+        <Kpi label="Temperature Alerts" value={kpiData.tempAlerts} accent="info" icon={<Thermometer className="h-5 w-5" />} hint="Cold-chain" />
+        <Kpi label="Maintenance Due" value={kpiData.maintenanceDue} accent="warning" icon={<Wrench className="h-5 w-5" />} hint="Next 30 days" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-5">
@@ -68,7 +149,7 @@ function DashboardPage() {
             <CardHeader title="Live Vehicle Map" subtitle="Kanyakumari district · 40 vehicles tracked"
               action={<Link to="/tracking" className="text-xs font-medium text-primary hover:underline">View full map →</Link>} />
             <div className="p-3">
-              <VehicleMap vehicles={VEHICLES} height={420} />
+              <VehicleMap vehicles={mappedVehicles} height={420} />
             </div>
           </Card>
         </div>
@@ -114,7 +195,7 @@ function DashboardPage() {
           <CardHeader title="Daily Fuel Consumption" subtitle="Litres consumed across the fleet" />
           <div className="p-3" style={{ height: 260 }}>
             <ResponsiveContainer>
-              <BarChart data={fuelData}>
+              <BarChart data={finalFuelData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
                 <XAxis dataKey="day" fontSize={12} />
                 <YAxis fontSize={12} />
@@ -145,7 +226,7 @@ function DashboardPage() {
         <CardHeader title="Fuel Efficiency by Vehicle" subtitle="km/L · top 10 vehicles" />
         <div className="p-3" style={{ height: 260 }}>
           <ResponsiveContainer>
-            <BarChart data={eff}>
+            <BarChart data={finalEffData}>
               <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
               <XAxis dataKey="vehicle" fontSize={12} />
               <YAxis fontSize={12} />

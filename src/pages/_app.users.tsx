@@ -1,31 +1,52 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { PageHeader } from "@/components/AppLayout";
 import { Card, Badge, Button } from "@/components/ui-kit";
 import { DataTable } from "@/components/DataTable";
 import { useAuth } from "@/lib/auth";
 import { Plus, X } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 interface UserRow {
   id: string; name: string; email: string; role: string; status: string; lastLogin: string;
 }
 
-const INITIAL: UserRow[] = [
-  { id: "U001", name: "Person 1", email: "admin@nanjilmilk.com", role: "Administrator", status: "Active", lastLogin: "2 min ago" },
-  { id: "U002", name: "Person 2", email: "manager@nanjilmilk.com", role: "Fleet Manager", status: "Active", lastLogin: "18 min ago" },
-  { id: "U003", name: "Person 3", email: "driver@nanjilmilk.com", role: "Driver", status: "Active", lastLogin: "1 hour ago" },
-  { id: "U004", name: "Murali Krishnan", email: "ops@nanjilmilk.com", role: "Operations", status: "Active", lastLogin: "3 hours ago" },
-  { id: "U005", name: "Selvi M", email: "accounts@nanjilmilk.com", role: "Accounts", status: "Active", lastLogin: "Yesterday" },
-  { id: "U006", name: "Pradeep Kumar", email: "supervisor@nanjilmilk.com", role: "Supervisor", status: "Inactive", lastLogin: "5 days ago" },
-  { id: "U007", name: "Vimala R", email: "qa@nanjilmilk.com", role: "QA", status: "Active", lastLogin: "30 min ago" },
-  { id: "U008", name: "Senthil Babu", email: "logistics@nanjilmilk.com", role: "Logistics", status: "Active", lastLogin: "2 hours ago" },
-];
-
 function Page() {
   const { user } = useAuth();
-  const [users, setUsers] = useState(INITIAL);
+  const [users, setUsers] = useState<UserRow[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", role: "Driver" });
+
+  async function loadUsers() {
+    const { data } = await supabase.from('profiles').select('*');
+    if (data) {
+      const roleMapRev: Record<string, string> = {
+        admin: "Administrator",
+        manager: "Fleet Manager",
+        driver: "Driver",
+        operations: "Operations",
+        supervisor: "Supervisor",
+        qa: "QA",
+        logistics: "Logistics",
+        accounts: "Accounts"
+      };
+
+      setUsers(data.map(u => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: roleMapRev[u.role] || u.role,
+        status: u.status || 'Active',
+        lastLogin: u.last_login ? new Date(u.last_login).toLocaleTimeString() : 'sec ago'
+      })));
+    }
+  }
+
+  useEffect(() => {
+    if (user?.role === "admin") {
+      loadUsers();
+    }
+  }, [user]);
 
   if (user?.role !== "admin") {
     return (
@@ -36,18 +57,67 @@ function Page() {
     );
   }
 
-  function addUser(e: React.FormEvent) {
+  async function addUser(e: React.FormEvent) {
     e.preventDefault();
-    setUsers((u) => [
-      { id: `U${String(u.length + 1).padStart(3, "0")}`, name: form.name, email: form.email, role: form.role, status: "Active", lastLogin: "Just now" },
-      ...u,
-    ]);
+    const password = "password123";
+    const roleMapping: Record<string, string> = {
+      "Administrator": "admin",
+      "Fleet Manager": "manager",
+      "Driver": "driver",
+      "Operations": "operations",
+      "Supervisor": "supervisor",
+      "QA": "qa",
+      "Logistics": "logistics",
+      "Accounts": "accounts"
+    };
+    const roleVal = roleMapping[form.role] || "driver";
+
+    // Sign up user
+    const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
+      email: form.email,
+      password: password,
+      options: {
+        data: {
+          name: form.name,
+          role: roleVal
+        }
+      }
+    });
+
+    if (signUpErr) {
+      alert("Error adding user: " + signUpErr.message);
+      return;
+    }
+
+    if (signUpData.user) {
+      const { error: profErr } = await supabase.from('profiles').insert({
+        id: signUpData.user.id,
+        name: form.name,
+        email: form.email,
+        role: roleVal,
+        status: 'Active'
+      });
+      if (profErr) {
+        // Fallback in case trigger failed or had conflict
+        await supabase.from('profiles').update({
+          name: form.name,
+          role: roleVal,
+          status: 'Active'
+        }).eq('id', signUpData.user.id);
+      }
+    }
+
     setShowNew(false);
     setForm({ name: "", email: "", role: "Driver" });
+    loadUsers();
   }
 
-  function toggle(id: string) {
-    setUsers((arr) => arr.map((u) => (u.id === id ? { ...u, status: u.status === "Active" ? "Inactive" : "Active" } : u)));
+  async function toggle(id: string) {
+    const userToToggle = users.find(u => u.id === id);
+    if (!userToToggle) return;
+    const newStatus = userToToggle.status === "Active" ? "Inactive" : "Active";
+    await supabase.from('profiles').update({ status: newStatus }).eq('id', id);
+    loadUsers();
   }
 
   return (

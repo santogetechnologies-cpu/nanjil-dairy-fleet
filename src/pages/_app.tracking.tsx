@@ -1,16 +1,52 @@
 
-import { useState } from "react";
-import { VEHICLES, type VehicleStatus } from "@/lib/mock-data";
+import { useState, useEffect } from "react";
+import { type Vehicle, type VehicleStatus } from "@/lib/mock-data";
 import { Card } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { VehicleMap } from "@/components/VehicleMap";
 import { Search, MapPin } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 function TrackingPage() {
   const [filter, setFilter] = useState<VehicleStatus | "All">("All");
   const [q, setQ] = useState("");
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
 
-  const data = VEHICLES.filter((v) => {
+  useEffect(() => {
+    async function load() {
+      const { data } = await supabase.from('v_vehicles').select('*');
+      if (data) {
+        setVehicles(data.map(v => ({
+          id: v.id,
+          number: v.number,
+          type: v.type,
+          model: v.model,
+          route: v.route || '',
+          insuranceExpiry: v.insurance_expiry || '',
+          lastService: v.last_service || '',
+          nextServiceKm: v.next_service_km || 0,
+          odometer: v.odometer || 0,
+          engineHours: Number(v.engine_hours || 0),
+          status: v.status,
+          location: v.location || '',
+          lat: Number(v.lat || 0),
+          lng: Number(v.lng || 0),
+          speed: v.speed || 0,
+          fuel: v.fuel || 0,
+          temperature: Number(v.temperature || 0),
+          humidity: v.humidity || 0,
+          engineOn: v.engine_on || false,
+          ignition: v.ignition || false,
+          driver: v.driver_name || '',
+          driverId: v.driver_id || '',
+          lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago'
+        })));
+      }
+    }
+    load();
+  }, []);
+
+  const data = vehicles.filter((v) => {
     if (filter !== "All" && v.status !== filter) return false;
     if (q && !`${v.number} ${v.driver} ${v.location}`.toLowerCase().includes(q.toLowerCase())) return false;
     return true;
@@ -46,7 +82,7 @@ function TrackingPage() {
                     filter === s ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"
                   }`}
                 >
-                  {s} ({s === "All" ? VEHICLES.length : VEHICLES.filter((v) => v.status === s).length})
+                  {s} ({s === "All" ? vehicles.length : vehicles.filter((v) => v.status === s).length})
                 </button>
               ))}
             </div>

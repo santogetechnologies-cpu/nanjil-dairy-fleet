@@ -26,25 +26,31 @@ function LoginPage() {
     else nav("/dashboard");
   }
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    setTimeout(() => {
-      const r = login(email, password);
+    try {
+      const r = await login(email, password);
       setBusy(false);
       if (!r.ok) setError(r.error ?? "Login failed");
       else if (r.role) go(r.role);
-    }, 300);
+    } catch (err: any) {
+      setBusy(false);
+      setError(err?.message || "Login failed");
+    }
   }
 
-  function quickLogin(role: Role) {
+  async function quickLogin(role: Role) {
     setBusy(true);
-    setTimeout(() => {
-      const r = loginAs(role);
+    try {
+      const r = await loginAs(role);
       setBusy(false);
       go(r);
-    }, 200);
+    } catch (err: any) {
+      setBusy(false);
+      setError(err?.message || "Demo login failed");
+    }
   }
 
   const features = [

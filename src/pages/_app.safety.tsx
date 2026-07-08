@@ -1,10 +1,12 @@
 
-import { DRIVERS, type Driver } from "@/lib/mock-data";
+import { useState, useEffect } from "react";
+import { type Driver } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Kpi, Card, CardHeader, Badge } from "@/components/ui-kit";
 import { ShieldCheck, AlertTriangle, TrendingUp, UsersRound } from "lucide-react";
 import { DataTable } from "@/components/DataTable";
 import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, Radar, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
+import { supabase } from "@/lib/supabase";
 
 const eventTypes = [
   { name: "Overspeed", value: 42 },
@@ -15,10 +17,33 @@ const eventTypes = [
 ];
 
 function Page() {
-  const sorted = [...DRIVERS].sort((a, b) => b.score - a.score);
-  const topPerformer = sorted[0];
+  const [drivers, setDrivers] = useState<Driver[]>([]);
+
+  useEffect(() => {
+    async function load() {
+      const { data } = await supabase.from('v_driver_safety_ranking').select('*');
+      if (data) {
+        setDrivers(data.map(d => ({
+          id: d.id,
+          name: d.name,
+          vehicle: d.vehicle || 'Unknown',
+          phone: '',
+          license: '',
+          score: d.score,
+          events: d.events,
+          rating: d.rating,
+          trips: d.trips,
+          totalKm: d.total_km
+        })));
+      }
+    }
+    load();
+  }, []);
+
+  const sorted = [...drivers].sort((a, b) => b.score - a.score);
+  const topPerformer = sorted[0] || { name: "None", score: 0, vehicle: "N/A" };
   const needsImprovement = sorted.filter((d) => d.score < 80).length;
-  const avgScore = Math.round(DRIVERS.reduce((s, d) => s + d.score, 0) / DRIVERS.length);
+  const avgScore = drivers.length > 0 ? Math.round(drivers.reduce((s, d) => s + d.score, 0) / drivers.length) : 86;
 
   const radar = [
     { metric: "Speed", score: 88 },
@@ -36,7 +61,7 @@ function Page() {
         <Kpi label="Average Safety Score" value={`${avgScore}%`} accent="success" icon={<ShieldCheck className="h-5 w-5" />} />
         <Kpi label="Top Performer" value={topPerformer.name} hint={`${topPerformer.score}% · ${topPerformer.vehicle}`} icon={<TrendingUp className="h-5 w-5" />} />
         <Kpi label="Needs Improvement" value={needsImprovement} accent="warning" icon={<AlertTriangle className="h-5 w-5" />} hint="Score < 80%" />
-        <Kpi label="Total Drivers" value={DRIVERS.length} icon={<UsersRound className="h-5 w-5" />} />
+        <Kpi label="Total Drivers" value={drivers.length} icon={<UsersRound className="h-5 w-5" />} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">

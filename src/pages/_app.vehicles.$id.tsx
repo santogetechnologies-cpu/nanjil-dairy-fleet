@@ -10,9 +10,61 @@ import {
   ChevronLeft, Truck, Fuel, Thermometer, Gauge, MapPin, Calendar, FileText, Activity,
 } from "lucide-react";
 
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase";
+import { type Vehicle } from "@/lib/mock-data";
+
 function VehicleDetailPage() {
   const { id } = useParams();
-  const v = VEHICLES.find((x) => x.id === id);
+  const [v, setV] = useState<Vehicle | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      const { data } = await supabase
+        .from('v_vehicles')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (data) {
+        setV({
+          id: data.id,
+          number: data.number,
+          type: data.type,
+          model: data.model,
+          route: data.route || '',
+          insuranceExpiry: data.insurance_expiry || '',
+          lastService: data.last_service || '',
+          nextServiceKm: data.next_service_km || 0,
+          odometer: data.odometer || 0,
+          engineHours: Number(data.engine_hours || 0),
+          status: data.status,
+          location: data.location || '',
+          lat: Number(data.lat || 0),
+          lng: Number(data.lng || 0),
+          speed: data.speed || 0,
+          fuel: data.fuel || 0,
+          temperature: Number(data.temperature || 0),
+          humidity: data.humidity || 0,
+          engineOn: data.engine_on || false,
+          ignition: data.ignition || false,
+          driver: data.driver_name || '',
+          driverId: data.driver_id || '',
+          lastUpdate: data.last_update ? new Date(data.last_update).toLocaleTimeString() : 'sec ago'
+        });
+      }
+      setLoading(false);
+    }
+    load();
+  }, [id]);
+
+  if (loading) {
+    return (
+      <div className="p-8 text-center">
+        <div className="text-lg font-medium">Loading vehicle details...</div>
+      </div>
+    );
+  }
 
   if (!v) {
     return (

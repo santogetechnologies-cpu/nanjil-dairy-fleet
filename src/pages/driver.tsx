@@ -1,23 +1,111 @@
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
-import { VEHICLES, ALERTS, DRIVERS } from "@/lib/mock-data";
 import { Truck, Fuel, Thermometer, Gauge, MapPin, Bell, ShieldCheck, Play, LogOut, Activity } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui-kit";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase";
 
 function DriverPage() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
+  const [driver, setDriver] = useState<any>(null);
+  const [vehicle, setVehicle] = useState<any>(null);
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [tripStarted, setTripStarted] = useState(false);
+
+  useEffect(() => {
+    async function load() {
+      if (!user) return;
+      
+      // Get driver record
+      const { data: dData } = await supabase
+        .from('drivers')
+        .select('*')
+        .eq('name', user.name)
+        .maybeSingle();
+
+      const resolvedDriver = dData || { name: user.name, score: 85, rating: "Good", trips: 0, total_km: 0, events: 0 };
+      setDriver(resolvedDriver);
+
+      // Get assigned vehicle via view
+      const { data: vData } = await supabase
+        .from('v_vehicles')
+        .select('*')
+        .eq('driver_name', resolvedDriver.name)
+        .maybeSingle();
+
+      const resolvedVehicle = vData ? {
+        id: vData.id,
+        number: vData.number,
+        type: vData.type,
+        model: vData.model,
+        route: vData.route || '',
+        insuranceExpiry: vData.insurance_expiry || '',
+        lastService: vData.last_service || '',
+        nextServiceKm: vData.next_service_km || 0,
+        odometer: vData.odometer || 0,
+        engineHours: Number(vData.engine_hours || 0),
+        status: vData.status,
+        location: vData.location || '',
+        lat: Number(vData.lat || 0),
+        lng: Number(vData.lng || 0),
+        speed: vData.speed || 0,
+        fuel: vData.fuel || 0,
+        temperature: Number(vData.temperature || 0),
+        humidity: vData.humidity || 0,
+        engineOn: vData.engine_on || false,
+        ignition: vData.ignition || false,
+        driver: vData.driver_name || '',
+        driverId: vData.driver_id || '',
+        lastUpdate: vData.last_update ? new Date(vData.last_update).toLocaleTimeString() : 'sec ago'
+      } : { 
+        number: "TN-01-AB-1234", 
+        type: "Milk Tanker 3000L", 
+        status: "Offline", 
+        fuel: 75, 
+        speed: 0, 
+        temperature: 4, 
+        engineOn: false, 
+        route: "Aralvaimozhi - Nagercoil" 
+      };
+      setVehicle(resolvedVehicle);
+
+      // Get alerts
+      if (vData?.id) {
+        const { data: aData } = await supabase
+          .from('alerts')
+          .select('*')
+          .eq('vehicle_id', vData.id)
+          .limit(4);
+
+        if (aData) {
+          setAlerts(aData.map(a => ({
+            id: a.id,
+            severity: a.severity,
+            message: a.message,
+            type: a.type,
+            time: a.time ? new Date(a.time).toLocaleTimeString() : '1h ago',
+            resolved: a.resolved
+          })));
+        }
+      }
+      setLoading(false);
+    }
+    load();
+  }, [user]);
+
   if (!user) return <Navigate to="/login" />;
   if (user.role !== "driver") return <Navigate to="/dashboard" />;
 
-  // Pick the driver's vehicle
-  const driver = DRIVERS.find((d) => d.name === user.name) ?? DRIVERS[0];
-  const vehicle = VEHICLES.find((v) => v.driver === driver.name) ?? VEHICLES[0];
-  const alerts = ALERTS.filter((a) => a.vehicle === vehicle.number).slice(0, 4);
-
-  const [tripStarted, setTripStarted] = useState(false);
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-lg font-medium">Loading driver portal...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background pb-12">

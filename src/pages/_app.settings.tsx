@@ -1,8 +1,9 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { PageHeader } from "@/components/AppLayout";
 import { Card, CardHeader, Button } from "@/components/ui-kit";
 import { useAuth } from "@/lib/auth";
+import { supabase } from "@/lib/supabase";
 
 function Page() {
   const { user } = useAuth();
@@ -17,9 +18,50 @@ function Page() {
   });
   const [saved, setSaved] = useState(false);
 
-  function save() {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  useEffect(() => {
+    async function load() {
+      if (user?.id) {
+        const { data } = await supabase
+          .from('settings')
+          .select('*')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        if (data) {
+          setPrefs({
+            notifications: data.notifications,
+            sms: data.sms,
+            geofence: data.geofence,
+            overspeed: data.overspeed,
+            coldMin: data.cold_min,
+            coldMax: data.cold_max,
+            fuelAlert: data.fuel_alert,
+          });
+        }
+      }
+    }
+    load();
+  }, [user]);
+
+  async function save() {
+    if (user?.id) {
+      const { error } = await supabase.from('settings').upsert({
+        user_id: user.id,
+        notifications: prefs.notifications,
+        sms: prefs.sms,
+        geofence: prefs.geofence,
+        overspeed: prefs.overspeed,
+        cold_min: prefs.coldMin,
+        cold_max: prefs.coldMax,
+        fuel_alert: prefs.fuelAlert,
+      });
+
+      if (!error) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      } else {
+        alert("Failed to save settings: " + error.message);
+      }
+    }
   }
 
   return (

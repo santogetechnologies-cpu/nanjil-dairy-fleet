@@ -1,19 +1,53 @@
 
-import { useState } from "react";
-import { ALERTS, type AlertItem } from "@/lib/mock-data";
+import { useState, useEffect } from "react";
+import { type AlertItem } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Card, Badge, Button } from "@/components/ui-kit";
 import { DataTable } from "@/components/DataTable";
 import { CheckCircle2 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 function Page() {
-  const [alerts, setAlerts] = useState<AlertItem[]>(ALERTS);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [type, setType] = useState<string>("All");
   const [severity, setSeverity] = useState<string>("All");
   const [resolved, setResolved] = useState<"All" | "Open" | "Resolved">("Open");
 
-  function resolve(id: string) {
-    setAlerts((arr) => arr.map((a) => (a.id === id ? { ...a, resolved: true } : a)));
+  async function loadAlerts() {
+    const [aRes, vRes] = await Promise.all([
+      supabase.from('alerts').select('*'),
+      supabase.from('vehicles').select('*')
+    ]);
+
+    if (aRes.data) {
+      setAlerts(aRes.data.map(a => {
+        const vObj = vRes.data?.find(x => x.id === a.vehicle_id);
+        return {
+          id: a.id,
+          type: a.type,
+          severity: a.severity,
+          vehicle: vObj ? vObj.number : 'Unknown',
+          message: a.message,
+          time: a.time ? new Date(a.time).toLocaleTimeString() : '1h ago',
+          resolved: a.resolved
+        };
+      }));
+    }
+  }
+
+  useEffect(() => {
+    loadAlerts();
+  }, []);
+
+  async function resolve(id: string) {
+    const { error } = await supabase
+      .from('alerts')
+      .update({ resolved: true, resolved_at: new Date().toISOString() })
+      .eq('id', id);
+
+    if (!error) {
+      loadAlerts();
+    }
   }
 
   const data = alerts.filter((a) => {
