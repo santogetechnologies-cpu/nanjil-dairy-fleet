@@ -16,6 +16,7 @@ function DriverPage() {
   const [tripStarted, setTripStarted] = useState(false);
 
   useEffect(() => {
+    let active = true;
     async function load() {
       if (!user) return;
       
@@ -26,8 +27,14 @@ function DriverPage() {
         .eq('name', user.name)
         .maybeSingle();
 
+      if (!active) return;
+
       const resolvedDriver = dData || { name: user.name, score: 85, rating: "Good", trips: 0, total_km: 0, events: 0 };
       setDriver(resolvedDriver);
+
+      // Check current session validity
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session || !active) return;
 
       // Get assigned vehicle via view
       const { data: vData } = await supabase
@@ -35,6 +42,8 @@ function DriverPage() {
         .select('*')
         .eq('driver_name', resolvedDriver.name)
         .maybeSingle();
+
+      if (!active) return;
 
       const resolvedVehicle = vData ? {
         id: vData.id,
@@ -74,13 +83,16 @@ function DriverPage() {
 
       // Get alerts
       if (vData?.id) {
+        const { data: { session: alertSession } } = await supabase.auth.getSession();
+        if (!alertSession || !active) return;
+
         const { data: aData } = await supabase
           .from('alerts')
           .select('*')
           .eq('vehicle_id', vData.id)
           .limit(4);
 
-        if (aData) {
+        if (aData && active) {
           setAlerts(aData.map(a => ({
             id: a.id,
             severity: a.severity,
@@ -91,9 +103,12 @@ function DriverPage() {
           })));
         }
       }
-      setLoading(false);
+      if (active) setLoading(false);
     }
     load();
+    return () => {
+      active = false;
+    };
   }, [user]);
 
   if (!user) return <Navigate to="/login" />;
