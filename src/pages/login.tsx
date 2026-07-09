@@ -1,15 +1,15 @@
 import { useNavigate, Navigate } from "react-router-dom";
 import { useState } from "react";
-import { useAuth, type Role } from "@/lib/auth";
+import { useAuth } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
 import {
   Mail, Lock, Loader2, Shield, Snowflake, Fuel, MapPin,
-  Eye, EyeOff, ArrowRight, Truck,
+  Eye, EyeOff, ArrowRight,
 } from "lucide-react";
 import { motion } from "framer-motion";
 
 function LoginPage() {
-  const { login, loginAs, user } = useAuth();
+  const { login, user } = useAuth();
   const nav = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -41,29 +41,11 @@ function LoginPage() {
     }
   }
 
-  async function quickLogin(role: Role) {
-    setBusy(true);
-    try {
-      const r = await loginAs(role);
-      setBusy(false);
-      go(r);
-    } catch (err: any) {
-      setBusy(false);
-      setError(err?.message || "Demo login failed");
-    }
-  }
-
   const features = [
-    { icon: MapPin,    label: "Live GPS tracking",   desc: "40+ vehicles",        accent: "from-sky-500/15 to-blue-500/5",     ring: "ring-sky-500/20",    text: "text-sky-600",     span: "col-span-2 row-span-2" },
-    { icon: Fuel,      label: "Fuel intelligence",   desc: "Theft alerts",        accent: "from-amber-500/15 to-orange-500/5", ring: "ring-amber-500/20",  text: "text-amber-600",   span: "col-span-2" },
-    { icon: Shield,    label: "Driver safety",       desc: "AI scoring",          accent: "from-emerald-500/15 to-teal-500/5", ring: "ring-emerald-500/20",text: "text-emerald-600", span: "" },
-    { icon: Snowflake, label: "Cold-chain",          desc: "2°C – 6°C",           accent: "from-cyan-500/15 to-indigo-500/5",  ring: "ring-cyan-500/20",   text: "text-cyan-600",    span: "" },
-  ];
-
-  const roles = [
-    { role: "admin" as const, name: "Administrator", color: "from-blue-500 to-indigo-600" },
-    { role: "manager" as const, name: "Fleet Manager", color: "from-emerald-500 to-teal-600" },
-    { role: "driver" as const, name: "Driver", color: "from-amber-500 to-orange-600" },
+    { icon: MapPin, label: "Live GPS tracking", desc: "40+ vehicles", accent: "from-sky-500/15 to-blue-500/5", ring: "ring-sky-500/20", text: "text-sky-600", span: "col-span-2 row-span-2" },
+    { icon: Fuel, label: "Fuel intelligence", desc: "Theft alerts", accent: "from-amber-500/15 to-orange-500/5", ring: "ring-amber-500/20", text: "text-amber-600", span: "col-span-2" },
+    { icon: Shield, label: "Driver safety", desc: "AI scoring", accent: "from-emerald-500/15 to-teal-500/5", ring: "ring-emerald-500/20", text: "text-emerald-600", span: "" },
+    { icon: Snowflake, label: "Cold-chain", desc: "2°C – 6°C", accent: "from-cyan-500/15 to-indigo-500/5", ring: "ring-cyan-500/20", text: "text-cyan-600", span: "" },
   ];
 
   return (
@@ -163,7 +145,7 @@ function LoginPage() {
                       className="bg-transparent outline-none text-sm w-full"
                     />
                     <button type="button" onClick={() => setShowPwd((s) => !s)}
-                            className="text-muted-foreground hover:text-foreground">
+                      className="text-muted-foreground hover:text-foreground">
                       {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
                   </div>
@@ -180,32 +162,7 @@ function LoginPage() {
                   className="w-full h-11 inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-60 shadow-sm shadow-primary/30 transition"
                 >
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <>Sign in <ArrowRight className="h-4 w-4" /></>}
-                </button>
               </form>
-
-              <div className="mt-6">
-                <div className="flex items-center gap-3 text-[11px] uppercase tracking-wider text-muted-foreground">
-                  <span className="flex-1 h-px bg-border" /> One-click demo <span className="flex-1 h-px bg-border" />
-                </div>
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  {roles.map((d) => (
-                    <button
-                      key={d.role}
-                      onClick={() => quickLogin(d.role)}
-                      disabled={busy}
-                      className="group relative overflow-hidden p-3 border border-border rounded-lg hover:border-primary/50 hover:shadow-sm bg-background transition text-left"
-                    >
-                      <div className={`h-7 w-7 rounded-md bg-gradient-to-br ${d.color} text-white flex items-center justify-center mb-1.5 shadow-sm`}>
-                        <Truck className="h-3.5 w-3.5" />
-                      </div>
-                      <div className="text-xs font-semibold">{d.name}</div>
-                      <div className="text-[10px] text-muted-foreground truncate mt-0.5">
-                        {d.role}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
           </motion.div>
         </div>
