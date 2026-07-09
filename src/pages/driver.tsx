@@ -209,7 +209,7 @@ function DriverPage() {
               <div className="text-xs text-muted-foreground">Trips</div>
             </div>
             <div>
-              <div className="text-2xl font-semibold">{(driver.totalKm / 1000).toFixed(1)}k</div>
+              <div className="text-2xl font-semibold">{(driver.total_km / 1000).toFixed(1)}k</div>
               <div className="text-xs text-muted-foreground">km driven</div>
             </div>
             <div>

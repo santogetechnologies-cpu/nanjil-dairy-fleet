@@ -44,17 +44,27 @@ function Page() {
   }
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    // Subscribe to telemetry changes for real-time cold-chain compliance updates
-    const channel = supabase
-      .channel('coldchain-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => { load(); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => { load(); })
-      .subscribe();
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
+      load();
+
+      channel = supabase
+        .channel('coldchain-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => { if (!cancelled) load(); })
+        .subscribe();
+    }
+
+    init();
 
     return () => {
-      channel.unsubscribe();
+      cancelled = true;
+      channel?.unsubscribe();
     };
   }, []);
 

@@ -45,16 +45,26 @@ function TripsPage() {
   }
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    // Subscribe to trips table changes in real time
-    const channel = supabase
-      .channel('trips-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => { load(); })
-      .subscribe();
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
+      load();
+
+      channel = supabase
+        .channel('trips-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => { if (!cancelled) load(); })
+        .subscribe();
+    }
+
+    init();
 
     return () => {
-      channel.unsubscribe();
+      cancelled = true;
+      channel?.unsubscribe();
     };
   }, []);
 

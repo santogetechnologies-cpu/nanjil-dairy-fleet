@@ -32,16 +32,26 @@ function Page() {
   }
 
   useEffect(() => {
-    loadMaintenance();
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    // Subscribe to maintenance records updates in real time
-    const channel = supabase
-      .channel('maintenance-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'maintenance_records' }, () => { loadMaintenance(); })
-      .subscribe();
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
+      loadMaintenance();
+
+      channel = supabase
+        .channel('maintenance-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'maintenance_records' }, () => { if (!cancelled) loadMaintenance(); })
+        .subscribe();
+    }
+
+    init();
 
     return () => {
-      channel.unsubscribe();
+      cancelled = true;
+      channel?.unsubscribe();
     };
   }, []);
 

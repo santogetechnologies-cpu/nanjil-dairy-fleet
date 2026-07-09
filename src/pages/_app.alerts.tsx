@@ -35,16 +35,26 @@ function Page() {
   }
 
   useEffect(() => {
-    loadAlerts();
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    // Subscribe to physical alerts table updates
-    const channel = supabase
-      .channel('alerts-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => { loadAlerts(); })
-      .subscribe();
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
+      loadAlerts();
+
+      channel = supabase
+        .channel('alerts-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => { if (!cancelled) loadAlerts(); })
+        .subscribe();
+    }
+
+    init();
 
     return () => {
-      channel.unsubscribe();
+      cancelled = true;
+      channel?.unsubscribe();
     };
   }, []);
 

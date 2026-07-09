@@ -49,17 +49,27 @@ function Page() {
   }
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    // Subscribe to database changes to refresh in real time
-    const channel = supabase
-      .channel('fuel-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => { load(); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => { load(); })
-      .subscribe();
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
+      load();
+
+      channel = supabase
+        .channel('fuel-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => { if (!cancelled) load(); })
+        .subscribe();
+    }
+
+    init();
 
     return () => {
-      channel.unsubscribe();
+      cancelled = true;
+      channel?.unsubscribe();
     };
   }, []);
 

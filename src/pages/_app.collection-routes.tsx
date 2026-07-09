@@ -41,16 +41,26 @@ function Page() {
   }
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-    // Subscribe to routes table updates in real time
-    const channel = supabase
-      .channel('routes-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'collection_routes' }, () => { load(); })
-      .subscribe();
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
+      load();
+
+      channel = supabase
+        .channel('routes-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'collection_routes' }, () => { if (!cancelled) load(); })
+        .subscribe();
+    }
+
+    init();
 
     return () => {
-      channel.unsubscribe();
+      cancelled = true;
+      channel?.unsubscribe();
     };
   }, []);
 
