@@ -162,6 +162,7 @@ function LoginPage() {
                   className="w-full h-11 inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-60 shadow-sm shadow-primary/30 transition"
                 >
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <>Sign in <ArrowRight className="h-4 w-4" /></>}
+                </button>
               </form>
             </div>
           </motion.div>
