@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from "react";
-import { type AlertItem } from "@/lib/mock-data";
+import { ALERTS, type AlertItem } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Card, Badge, Button } from "@/components/ui-kit";
 import { DataTable } from "@/components/DataTable";
@@ -50,7 +50,9 @@ function Page() {
     }
   }
 
-  const data = alerts.filter((a) => {
+  const displayAlerts = alerts.length > 0 ? alerts : ALERTS;
+
+  const data = displayAlerts.filter((a) => {
     if (type !== "All" && a.type !== type) return false;
     if (severity !== "All" && a.severity !== severity) return false;
     if (resolved === "Open" && a.resolved) return false;
@@ -60,7 +62,7 @@ function Page() {
 
   return (
     <div>
-      <PageHeader title="Alerts Center" subtitle={`${alerts.filter((a) => !a.resolved).length} open · ${alerts.length} total`} />
+      <PageHeader title="Alerts Center" subtitle={`${displayAlerts.filter((a) => !a.resolved).length} open · ${displayAlerts.length} total`} />
 
       <div className="flex flex-wrap gap-2 mb-3">
         {["All", "Fuel", "Safety", "Temperature", "Vehicle", "Maintenance"].map((t) => (

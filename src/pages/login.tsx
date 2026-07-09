@@ -1,6 +1,6 @@
 import { useNavigate, Navigate } from "react-router-dom";
 import { useState } from "react";
-import { useAuth } from "@/lib/auth";
+import { useAuth, REDIRECT_MAP } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
 import {
   Mail, Lock, Loader2, Shield, Snowflake, Fuel, MapPin,
@@ -18,12 +18,11 @@ function LoginPage() {
   const [busy, setBusy] = useState(false);
 
   if (user) {
-    return <Navigate to={user.role === "driver" ? "/driver" : "/dashboard"} />;
+    return <Navigate to={REDIRECT_MAP[user.role]} />;
   }
 
-  function go(role: Role) {
-    if (role === "driver") nav("/driver");
-    else nav("/dashboard");
+  function go(role: any) {
+    nav(REDIRECT_MAP[role as keyof typeof REDIRECT_MAP]);
   }
 
   async function submit(e: React.FormEvent) {

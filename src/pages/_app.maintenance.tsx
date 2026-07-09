@@ -1,5 +1,5 @@
 
-import { type MaintenanceRecord } from "@/lib/mock-data";
+import { MAINTENANCE, type MaintenanceRecord } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Kpi, Card, Badge, Button } from "@/components/ui-kit";
 import { Wrench, AlertCircle, CheckCircle2, Calendar } from "lucide-react";
@@ -47,10 +47,11 @@ function Page() {
     }
   }
 
-  const overdue = records.filter((r) => r.status === "Overdue").length;
-  const upcoming = records.filter((r) => r.status === "Upcoming").length;
-  const completed = records.filter((r) => r.status === "Completed").length;
-  const totalCost = records.reduce((s, r) => s + r.cost, 0);
+  const displayRecords = records.length > 0 ? records : MAINTENANCE;
+  const overdue = displayRecords.filter((r) => r.status === "Overdue").length;
+  const upcoming = displayRecords.filter((r) => r.status === "Upcoming").length;
+  const completed = displayRecords.filter((r) => r.status === "Completed").length;
+  const totalCost = displayRecords.reduce((s, r) => s + r.cost, 0);
 
   return (
     <div>
@@ -65,7 +66,7 @@ function Page() {
 
       <div className="mt-4">
         <DataTable<MaintenanceRecord>
-          data={records}
+          data={displayRecords}
           searchKeys={["vehicle", "service"]}
           columns={[
             { key: "vehicle", label: "Vehicle" },

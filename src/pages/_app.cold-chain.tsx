@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from "react";
-import { tempHistory } from "@/lib/mock-data";
+import { VEHICLES, ALERTS, tempHistory } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Kpi, Card, CardHeader, Badge } from "@/components/ui-kit";
 import { Thermometer, Droplets, ShieldAlert, CheckCircle2 } from "lucide-react";
@@ -25,18 +25,32 @@ function Page() {
     load();
   }, []);
 
-  const tempAlerts = alerts.filter((a) => a.type === "Temperature");
-  const compliant = vehicles.filter((v) => Number(v.temperature || 0) >= 2 && Number(v.temperature || 0) <= 6).length;
-  const compliance = vehicles.length > 0 ? Math.round((compliant / vehicles.length) * 100) : 96;
+  const displayVehicles = vehicles.length > 0 ? vehicles.map(v => ({
+    number: v.number,
+    route: v.route || '',
+    temperature: Number(v.temperature || 0),
+    humidity: v.humidity || 0
+  })) : VEHICLES.map(v => ({
+    number: v.number,
+    route: v.route || '',
+    temperature: Number(v.temperature || 0),
+    humidity: v.humidity || 0
+  }));
+
+  const displayAlerts = alerts.length > 0 ? alerts : ALERTS;
+
+  const tempAlerts = displayAlerts.filter((a) => a.type === "Temperature");
+  const compliant = displayVehicles.filter((v) => v.temperature >= 2 && v.temperature <= 6).length;
+  const compliance = displayVehicles.length > 0 ? Math.round((compliant / displayVehicles.length) * 100) : 96;
 
   return (
     <div>
       <PageHeader title="Cold Chain Monitoring" subtitle="Temperature, humidity and compliance for milk transport (target 2°C – 6°C)" />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Kpi label="Compliance Rate" value={`${compliance}%`} accent="success" icon={<CheckCircle2 className="h-5 w-5" />} hint={`${compliant}/${vehicles.length || 1} within range`} />
-        <Kpi label="Average Temperature" value={`${(vehicles.reduce((s, v) => s + Number(v.temperature || 0), 0) / (vehicles.length || 1)).toFixed(1)}°C`} icon={<Thermometer className="h-5 w-5" />} hint="Across the fleet" />
-        <Kpi label="Average Humidity" value={`${Math.round(vehicles.reduce((s, v) => s + (v.humidity || 0), 0) / (vehicles.length || 1))}%`} accent="info" icon={<Droplets className="h-5 w-5" />} />
+        <Kpi label="Compliance Rate" value={`${compliance}%`} accent="success" icon={<CheckCircle2 className="h-5 w-5" />} hint={`${compliant}/${displayVehicles.length} within range`} />
+        <Kpi label="Average Temperature" value={`${(displayVehicles.reduce((s, v) => s + v.temperature, 0) / (displayVehicles.length || 1)).toFixed(1)}°C`} icon={<Thermometer className="h-5 w-5" />} hint="Across the fleet" />
+        <Kpi label="Average Humidity" value={`${Math.round(displayVehicles.reduce((s, v) => s + v.humidity, 0) / (displayVehicles.length || 1))}%`} accent="info" icon={<Droplets className="h-5 w-5" />} />
         <Kpi label="Temp Alerts" value={tempAlerts.filter((a) => !a.resolved).length} accent="destructive" icon={<ShieldAlert className="h-5 w-5" />} hint={`${tempAlerts.length} total`} />
       </div>
 
@@ -59,14 +73,14 @@ function Page() {
       <Card className="mt-4">
         <CardHeader title="Vehicle Sensor Readings" />
         <DataTable
-          data={vehicles.map((v) => ({
+          data={displayVehicles.map((v) => ({
             number: v.number,
             route: v.route || '',
-            temperature: Number(v.temperature || 0),
-            humidity: v.humidity || 0,
-            min: +(Number(v.temperature || 0) - 1).toFixed(1),
-            max: +(Number(v.temperature || 0) + 1.5).toFixed(1),
-            compliance: Number(v.temperature || 0) >= 2 && Number(v.temperature || 0) <= 6 ? "Compliant" : "Violation",
+            temperature: v.temperature,
+            humidity: v.humidity,
+            min: +(v.temperature - 1).toFixed(1),
+            max: +(v.temperature + 1.5).toFixed(1),
+            compliance: v.temperature >= 2 && v.temperature <= 6 ? "Compliant" : "Violation",
           }))}
           searchKeys={["number", "route"]}
           columns={[

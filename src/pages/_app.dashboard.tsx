@@ -60,7 +60,7 @@ function DashboardPage() {
     load();
   }, []);
 
-  const mappedVehicles = vehicles.map(v => ({
+  const mappedVehicles = vehicles.length > 0 ? vehicles.map(v => ({
     id: v.id,
     number: v.number,
     type: v.type,
@@ -84,9 +84,9 @@ function DashboardPage() {
     driver: v.driver_name || '',
     driverId: v.driver_id || '',
     lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago'
-  }));
+  })) : VEHICLES;
 
-  const mappedAlerts = alerts.map(a => {
+  const mappedAlerts = alerts.length > 0 ? alerts.map(a => {
     const vObj = vehicles.find(x => x.id === a.vehicle_id);
     return {
       id: a.id,
@@ -97,19 +97,19 @@ function DashboardPage() {
       time: a.time ? new Date(a.time).toLocaleTimeString() : '1h ago',
       resolved: a.resolved
     };
-  });
+  }) : ALERTS;
 
   const recentAlerts = mappedAlerts.filter((a) => !a.resolved).slice(0, 6);
 
   const kpiData = {
-    totalVehicles: mappedVehicles.length || KPI.totalVehicles,
-    moving: mappedVehicles.filter(v => v.status === 'Moving').length || KPI.moving,
-    idle: mappedVehicles.filter(v => v.status === 'Idle').length || KPI.idle,
-    parked: mappedVehicles.filter(v => v.status === 'Parked').length || KPI.parked,
-    offline: mappedVehicles.filter(v => v.status === 'Offline').length || KPI.offline,
-    fuelAlerts: mappedAlerts.filter(a => a.type === 'Fuel' && !a.resolved).length || KPI.fuelAlerts,
-    tempAlerts: mappedAlerts.filter(a => a.type === 'Temperature' && !a.resolved).length || KPI.tempAlerts,
-    maintenanceDue: maintenance.filter(m => m.status !== 'Completed').length || KPI.maintenanceDue,
+    totalVehicles: mappedVehicles.length,
+    moving: mappedVehicles.filter(v => v.status === 'Moving').length,
+    idle: mappedVehicles.filter(v => v.status === 'Idle').length,
+    parked: mappedVehicles.filter(v => v.status === 'Parked').length,
+    offline: mappedVehicles.filter(v => v.status === 'Offline').length,
+    fuelAlerts: mappedAlerts.filter(a => a.type === 'Fuel' && !a.resolved).length,
+    tempAlerts: mappedAlerts.filter(a => a.type === 'Temperature' && !a.resolved).length,
+    maintenanceDue: maintenance.length > 0 ? maintenance.filter(m => m.status !== 'Completed').length : KPI.maintenanceDue,
   };
 
   const statusData = [

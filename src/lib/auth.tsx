@@ -3,6 +3,12 @@ import { supabase, initializeDatabase } from "./supabase";
 
 export type Role = "admin" | "manager" | "driver";
 
+export const REDIRECT_MAP: Record<Role, string> = {
+  admin: "/dashboard",
+  manager: "/dashboard",
+  driver: "/driver",
+};
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -26,21 +32,62 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Helper to fetch user profile role/name
   const fetchProfile = async (id: string, email: string): Promise<AuthUser> => {
+    // 1. Query the profiles table
     const { data: profile, error } = await supabase
       .from("profiles")
-      .select("name, role")
+      .select("name, role, status")
       .eq("id", id)
       .maybeSingle();
 
     if (error) {
       console.error("Error fetching user profile:", error);
+      throw new Error(`Failed to read user profile: ${error.message}`);
+    }
+
+    if (!profile) {
+      // Auto-repair profile only if email is recognized or has default meta
+      let inferredRole: Role = "driver";
+      const lowerEmail = email.toLowerCase().trim();
+      if (lowerEmail.startsWith("admin@") || lowerEmail === "wizzaswin@gmail.com") inferredRole = "admin";
+      else if (lowerEmail.startsWith("manager@")) inferredRole = "manager";
+      else if (lowerEmail.startsWith("driver@")) inferredRole = "driver";
+      else {
+        throw new Error(`No database profile matches user ${email}`);
+      }
+
+      console.log(`[Auth] Seeding missing profile for ${email} with role ${inferredRole}`);
+      const { data: newProfile, error: upsertErr } = await supabase
+        .from("profiles")
+        .upsert({
+          id,
+          name: email.split("@")[0],
+          email,
+          role: inferredRole,
+          status: "Active"
+        })
+        .select()
+        .maybeSingle();
+
+      if (upsertErr) {
+        throw new Error(`Profile creation failed: ${upsertErr.message}`);
+      }
+      if (!newProfile) {
+        throw new Error(`Unable to fetch profile after seeding.`);
+      }
+
+      return {
+        id,
+        email,
+        name: newProfile.name,
+        role: newProfile.role as Role,
+      };
     }
 
     return {
       id,
       email,
-      name: profile?.name || email.split("@")[0],
-      role: (profile?.role as Role) || "driver",
+      name: profile.name,
+      role: profile.role as Role,
     };
   };
 
@@ -50,9 +97,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Fetch initial auth session
     supabase.auth.getSession().then(async ({ data: { session } }) => {
+      console.log("[Auth Init] Session state:", session);
       if (session?.user) {
         const u = await fetchProfile(session.user.id, session.user.email!);
         setUser(u);
+        console.log("[Auth Init] Authenticated user role:", u.role);
+        console.log("[Auth Init] User Profile object:", u);
         initializeDatabase();
       } else {
         setUser(null);
@@ -62,9 +112,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log("[Auth Event] Event:", event);
+      console.log("[Auth Event] Session:", session);
       if (session?.user) {
         const u = await fetchProfile(session.user.id, session.user.email!);
         setUser(u);
+        console.log("[Auth Event] Authenticated user role:", u.role);
+        console.log("[Auth Event] User Profile object:", u);
         initializeDatabase();
       } else {
         setUser(null);

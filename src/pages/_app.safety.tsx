@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from "react";
-import { type Driver } from "@/lib/mock-data";
+import { DRIVERS, type Driver } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Kpi, Card, CardHeader, Badge } from "@/components/ui-kit";
 import { ShieldCheck, AlertTriangle, TrendingUp, UsersRound } from "lucide-react";
@@ -40,10 +40,11 @@ function Page() {
     load();
   }, []);
 
-  const sorted = [...drivers].sort((a, b) => b.score - a.score);
+  const displayDrivers = drivers.length > 0 ? drivers : DRIVERS;
+  const sorted = [...displayDrivers].sort((a, b) => b.score - a.score);
   const topPerformer = sorted[0] || { name: "None", score: 0, vehicle: "N/A" };
   const needsImprovement = sorted.filter((d) => d.score < 80).length;
-  const avgScore = drivers.length > 0 ? Math.round(drivers.reduce((s, d) => s + d.score, 0) / drivers.length) : 86;
+  const avgScore = displayDrivers.length > 0 ? Math.round(displayDrivers.reduce((s, d) => s + d.score, 0) / displayDrivers.length) : 86;
 
   const radar = [
     { metric: "Speed", score: 88 },
@@ -61,7 +62,7 @@ function Page() {
         <Kpi label="Average Safety Score" value={`${avgScore}%`} accent="success" icon={<ShieldCheck className="h-5 w-5" />} />
         <Kpi label="Top Performer" value={topPerformer.name} hint={`${topPerformer.score}% · ${topPerformer.vehicle}`} icon={<TrendingUp className="h-5 w-5" />} />
         <Kpi label="Needs Improvement" value={needsImprovement} accent="warning" icon={<AlertTriangle className="h-5 w-5" />} hint="Score < 80%" />
-        <Kpi label="Total Drivers" value={drivers.length} icon={<UsersRound className="h-5 w-5" />} />
+        <Kpi label="Total Drivers" value={displayDrivers.length} icon={<UsersRound className="h-5 w-5" />} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">

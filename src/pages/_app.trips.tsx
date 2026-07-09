@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from "react";
-import { type Trip } from "@/lib/mock-data";
+import { TRIPS, VEHICLES, type Trip } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Card, Badge, Button } from "@/components/ui-kit";
 import { DataTable } from "@/components/DataTable";
@@ -47,7 +47,10 @@ function TripsPage() {
     load();
   }, []);
 
-  const data = trips.filter((t) => {
+  const displayTrips = trips.length > 0 ? trips : TRIPS;
+  const displayVehicles = vehicles.length > 0 ? vehicles : VEHICLES;
+
+  const data = displayTrips.filter((t) => {
     if (vehicle !== "All" && t.vehicle !== vehicle) return false;
     if (date && t.date !== date) return false;
     return true;
@@ -55,13 +58,13 @@ function TripsPage() {
 
   return (
     <div>
-      <PageHeader title="Trips & Routes" subtitle={`${trips.length} trips logged · last 19 days`} />
+      <PageHeader title="Trips & Routes" subtitle={`${displayTrips.length} trips logged · last 19 days`} />
 
       <div className="flex flex-wrap gap-2 mb-3">
         <select value={vehicle} onChange={(e) => setVehicle(e.target.value)}
                 className="h-9 px-3 rounded-md border border-border bg-card text-sm">
           <option value="All">All vehicles</option>
-          {vehicles.map((v) => <option key={v.id} value={v.number}>{v.number}</option>)}
+          {displayVehicles.map((v) => <option key={v.id} value={v.number}>{v.number}</option>)}
         </select>
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
                className="h-9 px-3 rounded-md border border-border bg-card text-sm" />

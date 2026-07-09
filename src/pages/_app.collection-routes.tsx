@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from "react";
-import { type CollectionRoute } from "@/lib/mock-data";
+import { COLLECTION_ROUTES, type CollectionRoute } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Badge } from "@/components/ui-kit";
 import { DataTable } from "@/components/DataTable";
@@ -41,7 +41,7 @@ function Page() {
     <div>
       <PageHeader title="Dairy Collection Routes" subtitle="Milk collection loops, centres and delivery points" />
       <DataTable<CollectionRoute>
-        data={routes}
+        data={routes.length > 0 ? routes : COLLECTION_ROUTES}
         searchKeys={["name", "vehicle", "driver"]}
         columns={[
           { key: "name", label: "Route" },

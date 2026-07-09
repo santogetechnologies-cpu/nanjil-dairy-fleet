@@ -1,5 +1,6 @@
 
 import { useState, useEffect } from "react";
+import { VEHICLES } from "@/lib/mock-data";
 import { PageHeader } from "@/components/AppLayout";
 import { Kpi, Card, CardHeader, Badge } from "@/components/ui-kit";
 import { Cog, Power, Clock, AlertTriangle } from "lucide-react";
@@ -19,9 +20,25 @@ function Page() {
     load();
   }, []);
 
-  const running = vehicles.filter((v) => v.engine_on).length;
-  const idle = vehicles.filter((v) => v.status === "Idle").length;
-  const totalHours = vehicles.reduce((s, v) => s + Number(v.engine_hours || 0), 0);
+  const displayVehicles = vehicles.length > 0 ? vehicles.map(v => ({
+    number: v.number,
+    driver_name: v.driver_name,
+    engine_on: v.engine_on,
+    ignition: v.ignition,
+    engine_hours: Number(v.engine_hours || 0),
+    status: v.status
+  })) : VEHICLES.map(v => ({
+    number: v.number,
+    driver_name: v.driver,
+    engine_on: v.engineOn,
+    ignition: v.ignition,
+    engine_hours: Number(v.engineHours || 0),
+    status: v.status
+  }));
+
+  const running = displayVehicles.filter((v) => v.engine_on).length;
+  const idle = displayVehicles.filter((v) => v.status === "Idle").length;
+  const totalHours = displayVehicles.reduce((s, v) => s + v.engine_hours, 0);
   const abnormal = 4;
 
   return (
@@ -29,7 +46,7 @@ function Page() {
       <PageHeader title="Engine & Ignition Monitoring" subtitle="Engine status, ignition and operating hours" />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Kpi label="Engines Running" value={running} accent="success" icon={<Cog className="h-5 w-5" />} hint={`${vehicles.length - running} off`} />
+        <Kpi label="Engines Running" value={running} accent="success" icon={<Cog className="h-5 w-5" />} hint={`${displayVehicles.length - running} off`} />
         <Kpi label="Idle Vehicles" value={idle} accent="warning" icon={<Power className="h-5 w-5" />} hint="Engine on, no motion" />
         <Kpi label="Total Engine Hours" value={`${(totalHours / 1000).toFixed(1)}k`} icon={<Clock className="h-5 w-5" />} hint="Lifetime" />
         <Kpi label="Abnormal Activity" value={abnormal} accent="destructive" icon={<AlertTriangle className="h-5 w-5" />} hint="Last 24h" />
@@ -38,12 +55,12 @@ function Page() {
       <Card className="mt-4">
         <CardHeader title="Engine & Ignition Status" />
         <DataTable
-          data={vehicles.map((v) => ({
+          data={displayVehicles.map((v) => ({
             number: v.number,
             driver: v.driver_name || 'Driver',
             engine: v.engine_on ? "ON" : "OFF",
             ignition: v.ignition ? "ON" : "OFF",
-            hours: Number(v.engine_hours || 0),
+            hours: v.engine_hours,
             usage: `${Math.round(60 + Math.random() * 220)} min today`,
             power: v.status === "Offline" ? "Low" : "OK",
           }))}
