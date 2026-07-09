@@ -29,7 +29,7 @@ function DriverPage() {
 
       if (!active) return;
 
-      const resolvedDriver = dData || { name: user.name, score: 85, rating: "Good", trips: 0, total_km: 0, events: 0 };
+      const resolvedDriver = dData || { name: user.name, score: 0, rating: "Poor", trips: 0, total_km: 0, events: 0 };
       setDriver(resolvedDriver);
 
       // Check current session validity
@@ -70,14 +70,14 @@ function DriverPage() {
         driverId: vData.driver_id || '',
         lastUpdate: vData.last_update ? new Date(vData.last_update).toLocaleTimeString() : 'sec ago'
       } : { 
-        number: "TN-01-AB-1234", 
-        type: "Milk Tanker 3000L", 
+        number: "Unassigned", 
+        type: "No Assigned Vehicle", 
         status: "Offline", 
-        fuel: 75, 
+        fuel: 0, 
         speed: 0, 
-        temperature: 4, 
+        temperature: 0, 
         engineOn: false, 
-        route: "Aralvaimozhi - Nagercoil" 
+        route: "No route assigned" 
       };
       setVehicle(resolvedVehicle);
 
@@ -158,9 +158,11 @@ function DriverPage() {
         <Card className="mt-4 p-4">
           <div className="flex items-center gap-2"><MapPin className="h-4 w-4 text-primary" /><div className="font-medium text-sm">Today's Route</div></div>
           <div className="mt-2 text-sm">{vehicle.route}</div>
-          <div className="text-xs text-muted-foreground mt-1">14 collection centres · target completion 11:30</div>
+          <div className="text-xs text-muted-foreground mt-1">
+            {vehicle.route && vehicle.route !== "No route assigned" ? "Active collection loop in progress." : "No route loop currently active."}
+          </div>
           <div className="mt-3 h-2 bg-muted rounded-full overflow-hidden">
-            <div className="h-full bg-primary" style={{ width: tripStarted ? "62%" : "0%", transition: "width 0.6s" }} />
+            <div className="h-full bg-primary" style={{ width: tripStarted ? "100%" : "0%", transition: "width 0.6s" }} />
           </div>
           <div className="mt-3 flex gap-2">
             <Button className="flex-1" onClick={() => setTripStarted((v) => !v)}>

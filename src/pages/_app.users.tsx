@@ -7,7 +7,8 @@ import { Plus, X, Eye, EyeOff, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { createClient } from "@supabase/supabase-js";
 
-// Temp isolated client for creating users without logging out current Admin session
+// Isolated client for creating new users without affecting the admin session.
+// Uses a unique storageKey + no-op storage to prevent any shared state with the main client.
 const tempClient = createClient(
   import.meta.env.VITE_SUPABASE_URL || "",
   import.meta.env.VITE_SUPABASE_ANON_KEY || "",
@@ -16,6 +17,7 @@ const tempClient = createClient(
       persistSession: false,
       autoRefreshToken: false,
       detectSessionInUrl: false,
+      storageKey: "nanjil-user-creation-temp",
       storage: {
         getItem: () => null,
         setItem: () => {},

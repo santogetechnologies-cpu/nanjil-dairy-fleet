@@ -1,6 +1,6 @@
 import { Link, useSearchParams } from "react-router-dom";
 import { useState, useMemo, useEffect } from "react";
-import { VEHICLES, type Vehicle, type VehicleStatus } from "@/lib/mock-data";
+import { type Vehicle, type VehicleStatus } from "@/lib/types";
 import { Badge } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { DataTable } from "@/components/DataTable";
@@ -12,50 +12,61 @@ function VehiclesPage() {
   const [filter, setFilter] = useState<VehicleStatus | "All">("All");
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
 
-  useEffect(() => {
-    async function load() {
-      const { data } = await supabase.from('v_vehicles').select('*');
-      if (data) {
-        setVehicles(data.map(v => ({
-          id: v.id,
-          number: v.number,
-          type: v.type,
-          model: v.model,
-          route: v.route || '',
-          insuranceExpiry: v.insurance_expiry || '',
-          lastService: v.last_service || '',
-          nextServiceKm: v.next_service_km || 0,
-          odometer: v.odometer || 0,
-          engineHours: Number(v.engine_hours || 0),
-          status: v.status,
-          location: v.location || '',
-          lat: Number(v.lat || 0),
-          lng: Number(v.lng || 0),
-          speed: v.speed || 0,
-          fuel: v.fuel || 0,
-          temperature: Number(v.temperature || 0),
-          humidity: v.humidity || 0,
-          engineOn: v.engine_on || false,
-          ignition: v.ignition || false,
-          driver: v.driver_name || '',
-          driverId: v.driver_id || '',
-          lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago'
-        })));
-      }
+  async function load() {
+    const { data } = await supabase.from('v_vehicles').select('*');
+    if (data) {
+      setVehicles(data.map(v => ({
+        id: v.id,
+        number: v.number,
+        type: v.type,
+        model: v.model,
+        route: v.route || '',
+        insuranceExpiry: v.insurance_expiry || '',
+        lastService: v.last_service || '',
+        nextServiceKm: v.next_service_km || 0,
+        odometer: v.odometer || 0,
+        engineHours: Number(v.engine_hours || 0),
+        status: v.status,
+        location: v.location || '',
+        lat: Number(v.lat || 0),
+        lng: Number(v.lng || 0),
+        speed: v.speed || 0,
+        fuel: v.fuel || 0,
+        temperature: Number(v.temperature || 0),
+        humidity: v.humidity || 0,
+        engineOn: v.engine_on || false,
+        ignition: v.ignition || false,
+        driver: v.driver_name || '',
+        driverId: v.driver_id || '',
+        lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago'
+      })));
     }
+  }
+
+  useEffect(() => {
     load();
+
+    // Subscribe to physical telemetry tables and assignments to push view updates
+    const channel = supabase
+      .channel('vehicles-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => { load(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => { load(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => { load(); })
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
   }, []);
 
-  const displayVehicles = vehicles.length > 0 ? vehicles : VEHICLES;
-
   const data = useMemo(() => {
-    if (filter === "All") return displayVehicles;
-    return displayVehicles.filter((v) => v.status === filter);
+    if (filter === "All") return vehicles;
+    return vehicles.filter((v) => v.status === filter);
   }, [filter, vehicles]);
 
   return (
     <div>
-      <PageHeader title="Vehicles" subtitle={`${displayVehicles.length} vehicles in the fleet`} />
+      <PageHeader title="Vehicles" subtitle={`${vehicles.length} vehicles in the fleet`} />
 
       <div className="flex flex-wrap gap-2 mb-3">
         {(["All", "Moving", "Idle", "Parked", "Offline"] as const).map((s) => (
@@ -66,7 +77,7 @@ function VehiclesPage() {
               filter === s ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"
             }`}
           >
-            {s} {s !== "All" && <span className="opacity-60 ml-1">({displayVehicles.filter((v) => v.status === s).length})</span>}
+            {s} {s !== "All" && <span className="opacity-60 ml-1">({vehicles.filter((v) => v.status === s).length})</span>}
           </button>
         ))}
       </div>

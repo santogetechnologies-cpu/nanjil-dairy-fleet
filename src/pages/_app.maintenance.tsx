@@ -1,5 +1,4 @@
-
-import { MAINTENANCE, type MaintenanceRecord } from "@/lib/mock-data";
+import { type MaintenanceRecord } from "@/lib/types";
 import { PageHeader } from "@/components/AppLayout";
 import { Kpi, Card, Badge, Button } from "@/components/ui-kit";
 import { Wrench, AlertCircle, CheckCircle2, Calendar } from "lucide-react";
@@ -34,6 +33,16 @@ function Page() {
 
   useEffect(() => {
     loadMaintenance();
+
+    // Subscribe to maintenance records updates in real time
+    const channel = supabase
+      .channel('maintenance-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'maintenance_records' }, () => { loadMaintenance(); })
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
   }, []);
 
   async function markCompleted(id: string) {
@@ -47,15 +56,14 @@ function Page() {
     }
   }
 
-  const displayRecords = records.length > 0 ? records : MAINTENANCE;
-  const overdue = displayRecords.filter((r) => r.status === "Overdue").length;
-  const upcoming = displayRecords.filter((r) => r.status === "Upcoming").length;
-  const completed = displayRecords.filter((r) => r.status === "Completed").length;
-  const totalCost = displayRecords.reduce((s, r) => s + r.cost, 0);
+  const overdue = records.filter((r) => r.status === "Overdue").length;
+  const upcoming = records.filter((r) => r.status === "Upcoming").length;
+  const completed = records.filter((r) => r.status === "Completed").length;
+  const totalCost = records.reduce((s, r) => s + r.cost, 0);
 
   return (
     <div>
-      <PageHeader title="Maintenance Management" subtitle="Service reminders, history and schedules" />
+      <PageHeader title="Maintenance Management" subtitle={`Service reminders · ${records.length} logs`} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Kpi label="Overdue" value={overdue} accent="destructive" icon={<AlertCircle className="h-5 w-5" />} />
@@ -66,7 +74,7 @@ function Page() {
 
       <div className="mt-4">
         <DataTable<MaintenanceRecord>
-          data={displayRecords}
+          data={records}
           searchKeys={["vehicle", "service"]}
           columns={[
             { key: "vehicle", label: "Vehicle" },

@@ -36,26 +36,38 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [unread, setUnread] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
     async function getUnread() {
       const { data } = await supabase
         .from('alerts')
         .select('id')
         .eq('resolved', false);
-      if (data) {
-        setUnread(data.length);
-      }
+      if (cancelled) return;
+      if (data) setUnread(data.length);
     }
-    getUnread();
 
-    const channel = supabase
-      .channel('alerts-badge')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => {
-        getUnread();
-      })
-      .subscribe();
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
+      getUnread();
+
+      // Register handler BEFORE subscribe()
+      channel = supabase
+        .channel('alerts-badge')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => {
+          if (!cancelled) getUnread();
+        })
+        .subscribe();
+    }
+
+    init();
 
     return () => {
-      supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
     };
   }, []);
 

@@ -8,13 +8,9 @@ import { Kpi, Card, CardHeader, Badge } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { VehicleMap } from "@/components/VehicleMap";
 import {
-  KPI, VEHICLES, ALERTS, dailyFuel, fuelEfficiencyByVehicle,
-} from "@/lib/mock-data";
-import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
   PieChart, Pie, Cell, Legend,
 } from "recharts";
-
 import { supabase } from "@/lib/supabase";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -38,6 +34,9 @@ function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
     async function load() {
       const [vRes, aRes, mRes, effRes, fuelRes] = await Promise.all([
         supabase.from('v_vehicles').select('*'),
@@ -46,21 +45,51 @@ function DashboardPage() {
         supabase.from('v_fuel_efficiency_by_vehicle').select('*').limit(10),
         supabase.from('v_daily_fuel_fleet').select('*')
       ]);
-
+      if (cancelled) return;
       if (vRes.data) setVehicles(vRes.data);
       if (aRes.data) setAlerts(aRes.data);
       if (mRes.data) setMaintenance(mRes.data);
-      if (effRes.data && effRes.data.length > 0) {
-        setEff(effRes.data.map(e => ({ vehicle: e.number.split("-").slice(0, 2).join("-"), kmpl: Number(e.kmpl) })));
+      if (effRes.data) {
+        setEff(effRes.data.map(e => ({
+          vehicle: e.number ? e.number.split("-").slice(0, 2).join("-") : 'Unknown',
+          kmpl: Number(e.kmpl)
+        })));
       }
-      if (fuelRes.data && fuelRes.data.length > 0) {
-        setFuelData(fuelRes.data.map(f => ({ day: f.log_date, consumed: Number(f.total_consumed_l) })));
+      if (fuelRes.data) {
+        setFuelData(fuelRes.data.map(f => ({
+          day: f.log_date ? new Date(f.log_date).toLocaleDateString([], { weekday: 'short' }) : 'Unknown',
+          consumed: Number(f.total_consumed_l)
+        })));
       }
     }
-    load();
+
+    async function init() {
+      // Guard: only query if a valid session exists to prevent 401s on StrictMode double-invoke
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
+      load();
+
+      // Register ALL handlers before calling subscribe() — supabase-js requires this order
+      channel = supabase
+        .channel('dashboard-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'maintenance_records' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => { if (!cancelled) load(); })
+        .subscribe();
+    }
+
+    init();
+
+    return () => {
+      cancelled = true;
+      channel?.unsubscribe();
+    };
   }, []);
 
-  const mappedVehicles = vehicles.length > 0 ? vehicles.map(v => ({
+  const mappedVehicles = vehicles.map(v => ({
     id: v.id,
     number: v.number,
     type: v.type,
@@ -84,9 +113,9 @@ function DashboardPage() {
     driver: v.driver_name || '',
     driverId: v.driver_id || '',
     lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago'
-  })) : VEHICLES;
+  }));
 
-  const mappedAlerts = alerts.length > 0 ? alerts.map(a => {
+  const mappedAlerts = alerts.map(a => {
     const vObj = vehicles.find(x => x.id === a.vehicle_id);
     return {
       id: a.id,
@@ -97,7 +126,7 @@ function DashboardPage() {
       time: a.time ? new Date(a.time).toLocaleTimeString() : '1h ago',
       resolved: a.resolved
     };
-  }) : ALERTS;
+  });
 
   const recentAlerts = mappedAlerts.filter((a) => !a.resolved).slice(0, 6);
 
@@ -109,7 +138,7 @@ function DashboardPage() {
     offline: mappedVehicles.filter(v => v.status === 'Offline').length,
     fuelAlerts: mappedAlerts.filter(a => a.type === 'Fuel' && !a.resolved).length,
     tempAlerts: mappedAlerts.filter(a => a.type === 'Temperature' && !a.resolved).length,
-    maintenanceDue: maintenance.length > 0 ? maintenance.filter(m => m.status !== 'Completed').length : KPI.maintenanceDue,
+    maintenanceDue: maintenance.filter(m => m.status !== 'Completed').length,
   };
 
   const statusData = [
@@ -118,8 +147,6 @@ function DashboardPage() {
     { name: "Parked", value: kpiData.parked },
     { name: "Offline", value: kpiData.offline },
   ];
-  const finalFuelData = fuelData.length > 0 ? fuelData : dailyFuel();
-  const finalEffData = eff.length > 0 ? eff : fuelEfficiencyByVehicle();
 
   return (
     <div>
@@ -135,7 +162,7 @@ function DashboardPage() {
 
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3">
         <Kpi label="Total Vehicles" value={kpiData.totalVehicles} icon={<Truck className="h-5 w-5" />} hint="Fleet size" />
-        <Kpi label="Currently Moving" value={kpiData.moving} accent="success" icon={<Activity className="h-5 w-5" />} hint={`${Math.round((kpiData.moving/kpiData.totalVehicles)*100)}% of fleet`} />
+        <Kpi label="Currently Moving" value={kpiData.moving} accent="success" icon={<Activity className="h-5 w-5" />} hint={`${kpiData.totalVehicles > 0 ? Math.round((kpiData.moving/kpiData.totalVehicles)*100) : 0}% of fleet`} />
         <Kpi label="Idle Vehicles" value={kpiData.idle} accent="warning" icon={<Pause className="h-5 w-5" />} hint="Engine on, no motion" />
         <Kpi label="Parked Vehicles" value={kpiData.parked} icon={<ParkingSquare className="h-5 w-5" />} hint="Engine off" />
         <Kpi label="Fuel Alerts" value={kpiData.fuelAlerts} accent="destructive" icon={<Fuel className="h-5 w-5" />} hint="Open issues" />
@@ -146,7 +173,7 @@ function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-5">
         <div className="lg:col-span-2">
           <Card>
-            <CardHeader title="Live Vehicle Map" subtitle="Kanyakumari district · 40 vehicles tracked"
+            <CardHeader title="Live Vehicle Map" subtitle={`Kanyakumari district · ${mappedVehicles.length} vehicles tracked`}
               action={<Link to="/tracking" className="text-xs font-medium text-primary hover:underline">View full map →</Link>} />
             <div className="p-3">
               <VehicleMap vehicles={mappedVehicles} height={420} />
@@ -164,9 +191,9 @@ function DashboardPage() {
               <div className="font-medium">AI Fleet Summary</div>
             </div>
             <p className="mt-3 text-sm leading-relaxed">
-              <span className="font-semibold">3 vehicles</span> are consuming higher fuel than average.
-              {" "}<span className="font-semibold">2 drivers</span> require safety improvement.
-              All cold chain vehicles are within temperature limits.
+              <span className="font-semibold">{mappedVehicles.filter(v => v.fuel < 30).length} vehicles</span> are consuming higher fuel than average.
+              {" "}<span className="font-semibold">{mappedAlerts.filter(a => a.type === 'Safety' && !a.resolved).length} safety alerts</span> require driver attention.
+              All cold chain vehicles are monitored within compliance thresholds.
             </p>
             <Link to="/ai" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
               Ask Nanjil AI <ArrowUpRight className="h-3 w-3" />
@@ -195,7 +222,7 @@ function DashboardPage() {
           <CardHeader title="Daily Fuel Consumption" subtitle="Litres consumed across the fleet" />
           <div className="p-3" style={{ height: 260 }}>
             <ResponsiveContainer>
-              <BarChart data={finalFuelData}>
+              <BarChart data={fuelData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
                 <XAxis dataKey="day" fontSize={12} />
                 <YAxis fontSize={12} />
@@ -218,6 +245,11 @@ function DashboardPage() {
                 </div>
               </div>
             ))}
+            {recentAlerts.length === 0 && (
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                No active alerts.
+              </div>
+            )}
           </div>
         </Card>
       </div>
@@ -226,7 +258,7 @@ function DashboardPage() {
         <CardHeader title="Fuel Efficiency by Vehicle" subtitle="km/L · top 10 vehicles" />
         <div className="p-3" style={{ height: 260 }}>
           <ResponsiveContainer>
-            <BarChart data={finalEffData}>
+            <BarChart data={eff}>
               <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
               <XAxis dataKey="vehicle" fontSize={12} />
               <YAxis fontSize={12} />

@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import Map, { Marker, Popup, NavigationControl, ScaleControl } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { Vehicle } from "@/lib/mock-data";
+import type { Vehicle } from "@/lib/types";
 import { Truck } from "lucide-react";
 import { Badge } from "./ui-kit";
 import { Link } from "react-router-dom";
@@ -19,18 +19,22 @@ export default function VehicleMapImpl({ vehicles, height = 520, selectedId }: P
     selectedId ? vehicles.find((v) => v.id === selectedId) ?? null : null
   );
 
+  // Only show vehicles that have actual GPS coordinates
+  const mappedVehicles = vehicles.filter(v => v.lat != null && v.lng != null && (v.lat !== 0 || v.lng !== 0));
+
   const initial = useMemo(() => {
     if (selectedId) {
-      const v = vehicles.find((x) => x.id === selectedId);
+      const v = mappedVehicles.find((x) => x.id === selectedId);
       if (v) return { longitude: v.lng, latitude: v.lat, zoom: 12 };
     }
-    if (vehicles.length) {
-      const lat = vehicles.reduce((s, v) => s + v.lat, 0) / vehicles.length;
-      const lng = vehicles.reduce((s, v) => s + v.lng, 0) / vehicles.length;
+    if (mappedVehicles.length) {
+      const lat = mappedVehicles.reduce((s, v) => s + v.lat, 0) / mappedVehicles.length;
+      const lng = mappedVehicles.reduce((s, v) => s + v.lng, 0) / mappedVehicles.length;
       return { longitude: lng, latitude: lat, zoom: 10.2 };
     }
+    // Default center: Nagercoil, Tamil Nadu
     return { longitude: 77.45, latitude: 8.25, zoom: 10 };
-  }, [vehicles, selectedId]);
+  }, [mappedVehicles, selectedId]);
 
   const color = (s: Vehicle["status"]) =>
     s === "Moving" ? "var(--color-success)" :
@@ -47,11 +51,12 @@ export default function VehicleMapImpl({ vehicles, height = 520, selectedId }: P
         mapStyle={MAP_STYLE}
         attributionControl={{ compact: true }}
         style={{ width: "100%", height: "100%" }}
+        reuseMaps
       >
         <NavigationControl position="top-left" />
         <ScaleControl position="bottom-right" />
 
-        {vehicles.map((v) => (
+        {mappedVehicles.map((v) => (
           <Marker
             key={v.id}
             longitude={v.lng}
