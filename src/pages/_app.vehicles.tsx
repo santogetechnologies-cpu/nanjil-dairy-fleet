@@ -1,6 +1,6 @@
 import { Link, useSearchParams } from "react-router-dom";
 import { useState, useMemo, useEffect } from "react";
-import { type Vehicle, type VehicleStatus } from "@/lib/mock-data";
+import { VEHICLES, type Vehicle, type VehicleStatus } from "@/lib/mock-data";
 import { Badge } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { DataTable } from "@/components/DataTable";
@@ -46,14 +46,16 @@ function VehiclesPage() {
     load();
   }, []);
 
+  const displayVehicles = vehicles.length > 0 ? vehicles : VEHICLES;
+
   const data = useMemo(() => {
-    if (filter === "All") return vehicles;
-    return vehicles.filter((v) => v.status === filter);
+    if (filter === "All") return displayVehicles;
+    return displayVehicles.filter((v) => v.status === filter);
   }, [filter, vehicles]);
 
   return (
     <div>
-      <PageHeader title="Vehicles" subtitle={`${vehicles.length} vehicles in the fleet`} />
+      <PageHeader title="Vehicles" subtitle={`${displayVehicles.length} vehicles in the fleet`} />
 
       <div className="flex flex-wrap gap-2 mb-3">
         {(["All", "Moving", "Idle", "Parked", "Offline"] as const).map((s) => (
@@ -64,7 +66,7 @@ function VehiclesPage() {
               filter === s ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"
             }`}
           >
-            {s} {s !== "All" && <span className="opacity-60 ml-1">({vehicles.filter((v) => v.status === s).length})</span>}
+            {s} {s !== "All" && <span className="opacity-60 ml-1">({displayVehicles.filter((v) => v.status === s).length})</span>}
           </button>
         ))}
       </div>

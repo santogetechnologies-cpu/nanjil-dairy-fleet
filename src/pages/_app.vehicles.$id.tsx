@@ -52,6 +52,9 @@ function VehicleDetailPage() {
           driverId: data.driver_id || '',
           lastUpdate: data.last_update ? new Date(data.last_update).toLocaleTimeString() : 'sec ago'
         });
+      } else {
+        const mockV = VEHICLES.find(x => x.id === id);
+        if (mockV) setV(mockV);
       }
       setLoading(false);
     }

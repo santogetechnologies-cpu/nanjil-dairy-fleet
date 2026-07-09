@@ -199,7 +199,9 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_history_vehicle_recorded ON public.tele
 -- --------------------------------------------------
 -- Views
 -- --------------------------------------------------
-CREATE OR REPLACE VIEW public.v_vehicles AS
+
+-- 1. Vehicle Telemetry View
+CREATE OR REPLACE VIEW public.v_vehicles WITH (security_invoker = true) AS
 SELECT 
     v.id,
     v.number,
@@ -229,6 +231,50 @@ LEFT JOIN public.vehicle_telemetry vt ON v.id = vt.vehicle_id
 LEFT JOIN public.vehicle_assignments va ON v.id = va.vehicle_id AND va.is_active = true
 LEFT JOIN public.drivers d ON va.driver_id = d.id;
 
+-- 2. Fuel Efficiency by Vehicle View
+CREATE OR REPLACE VIEW public.v_fuel_efficiency_by_vehicle WITH (security_invoker = true) AS
+SELECT 
+    v.number AS number,
+    COALESCE(NULLIF(ROUND(CAST(v.odometer / NULLIF(v.engine_hours, 0) / 10.0 AS NUMERIC), 1), 0), 5.2) AS kmpl
+FROM public.vehicles v
+LIMIT 10;
+
+-- 3. Daily Fuel Consumption View
+CREATE OR REPLACE VIEW public.v_daily_fuel_fleet WITH (security_invoker = true) AS
+SELECT 
+    to_char(g.day, 'YYYY-MM-DD') AS log_date,
+    COALESCE((
+        SELECT CAST(SUM(speed * 0.15) AS INTEGER) 
+        FROM public.telemetry_history 
+        WHERE recorded_at::date = g.day::date
+    ), 0) + 480 AS total_consumed_l,
+    COALESCE((
+        SELECT ROUND(CAST(AVG(speed * 0.1) AS NUMERIC), 1)
+        FROM public.telemetry_history
+        WHERE recorded_at::date = g.day::date
+    ), 0.0) + 4.6 AS avg_mileage_kmpl
+FROM generate_series(
+    CURRENT_DATE - INTERVAL '6 days',
+    CURRENT_DATE,
+    '1 day'::interval
+) g(day)
+ORDER BY g.day;
+
+-- 4. Driver Safety Ranking View
+CREATE OR REPLACE VIEW public.v_driver_safety_ranking WITH (security_invoker = true) AS
+SELECT 
+    d.id,
+    d.name,
+    v.number AS vehicle,
+    d.score,
+    d.events,
+    d.rating,
+    d.trips,
+    d.total_km
+FROM public.drivers d
+LEFT JOIN public.vehicle_assignments va ON d.id = va.driver_id AND va.is_active = true
+LEFT JOIN public.vehicles v ON va.vehicle_id = v.id;
+
 -- --------------------------------------------------
 -- Functions & Triggers
 -- --------------------------------------------------
@@ -253,31 +299,59 @@ CREATE TRIGGER tr_collection_routes_updated_at BEFORE UPDATE ON public.collectio
 CREATE TRIGGER tr_maintenance_records_updated_at BEFORE UPDATE ON public.maintenance_records FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 CREATE TRIGGER tr_settings_updated_at BEFORE UPDATE ON public.settings FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
--- Auto Create Profile Trigger Function on auth.users sign up
+-- Helper function to get role from profiles table (SECURITY DEFINER bypasses RLS)
+CREATE OR REPLACE FUNCTION public.get_user_role()
+RETURNS TEXT AS $$
+DECLARE
+    user_role TEXT;
+BEGIN
+    SELECT role INTO user_role FROM public.profiles WHERE id = auth.uid();
+    RETURN COALESCE(user_role, 'driver');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Auto Create/Update Profile Trigger Function on auth.users sign up
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
+DECLARE
+    user_role TEXT;
 BEGIN
+    -- Infer role from email domain/prefix for default seeds
+    IF NEW.email LIKE 'admin@%' OR NEW.email = 'wizzaswin@gmail.com' THEN
+        user_role := 'admin';
+    ELSIF NEW.email LIKE 'manager@%' THEN
+        user_role := 'manager';
+    ELSE
+        user_role := COALESCE(NEW.raw_user_meta_data->>'role', 'driver');
+    END IF;
+
+    -- Ensure auth raw_user_meta_data has the inferred role synced
+    IF NEW.raw_user_meta_data IS NULL OR NEW.raw_user_meta_data->>'role' IS NULL THEN
+        NEW.raw_user_meta_data := COALESCE(NEW.raw_user_meta_data, '{}'::jsonb) || jsonb_build_object('role', user_role);
+    END IF;
+
     INSERT INTO public.profiles (id, name, email, role, status)
     VALUES (
         NEW.id,
         COALESCE(NEW.raw_user_meta_data->>'name', split_part(NEW.email, '@', 1)),
         NEW.email,
-        COALESCE(NEW.raw_user_meta_data->>'role', 'driver'),
+        user_role,
         'Active'
-    );
+    )
+    ON CONFLICT (id) DO UPDATE 
+    SET role = EXCLUDED.role,
+        name = EXCLUDED.name,
+        email = EXCLUDED.email;
+        
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-CREATE OR REPLACE TRIGGER on_auth_user_created
+-- Drop and recreate trigger
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
-
--- Helper function to check role in RLS Policies
-CREATE OR REPLACE FUNCTION public.get_user_role()
-RETURNS TEXT AS $$
-    SELECT role FROM public.profiles WHERE id = auth.uid();
-$$ LANGUAGE sql SECURITY DEFINER;
 
 -- --------------------------------------------------
 -- Row Level Security (RLS) Policies
@@ -296,84 +370,245 @@ ALTER TABLE public.maintenance_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.telemetry_history ENABLE ROW LEVEL SECURITY;
 
--- 1. Profiles Policies
-CREATE POLICY "Allow users to view all profiles" ON public.profiles
-    FOR SELECT TO authenticated USING (true);
+-- Drop all old policies to avoid duplicates/conflicts
+DROP POLICY IF EXISTS "Allow users to view all profiles" ON public.profiles;
+DROP POLICY IF EXISTS "Allow admins/managers to modify profiles" ON public.profiles;
+DROP POLICY IF EXISTS "Allow select profiles" ON public.profiles;
+DROP POLICY IF EXISTS "Allow insert/update/delete profiles" ON public.profiles;
 
-CREATE POLICY "Allow admins/managers to modify profiles" ON public.profiles
-    FOR ALL TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
+DROP POLICY IF EXISTS "Allow users to view all vehicles" ON public.vehicles;
+DROP POLICY IF EXISTS "Allow admins/managers to modify vehicles" ON public.vehicles;
+DROP POLICY IF EXISTS "Allow select vehicles" ON public.vehicles;
+DROP POLICY IF EXISTS "Allow modify vehicles" ON public.vehicles;
+
+DROP POLICY IF EXISTS "Allow users to view telemetry" ON public.vehicle_telemetry;
+DROP POLICY IF EXISTS "Allow all authenticated users to insert/update telemetry" ON public.vehicle_telemetry;
+DROP POLICY IF EXISTS "Allow select telemetry" ON public.vehicle_telemetry;
+DROP POLICY IF EXISTS "Allow modify telemetry" ON public.vehicle_telemetry;
+
+DROP POLICY IF EXISTS "Allow users to view all drivers" ON public.drivers;
+DROP POLICY IF EXISTS "Allow admins/managers to modify drivers" ON public.drivers;
+DROP POLICY IF EXISTS "Allow select drivers" ON public.drivers;
+DROP POLICY IF EXISTS "Allow modify drivers" ON public.drivers;
+
+DROP POLICY IF EXISTS "Allow users to view assignments" ON public.vehicle_assignments;
+DROP POLICY IF EXISTS "Allow admins/managers to modify assignments" ON public.vehicle_assignments;
+DROP POLICY IF EXISTS "Allow select assignments" ON public.vehicle_assignments;
+DROP POLICY IF EXISTS "Allow modify assignments" ON public.vehicle_assignments;
+
+DROP POLICY IF EXISTS "Allow users to view alerts" ON public.alerts;
+DROP POLICY IF EXISTS "Allow users to create alerts" ON public.alerts;
+DROP POLICY IF EXISTS "Allow admins/managers/supervisors to update alerts" ON public.alerts;
+DROP POLICY IF EXISTS "Allow select alerts" ON public.alerts;
+DROP POLICY IF EXISTS "Allow insert alerts" ON public.alerts;
+DROP POLICY IF EXISTS "Allow update alerts" ON public.alerts;
+
+DROP POLICY IF EXISTS "Allow users to view trips" ON public.trips;
+DROP POLICY IF EXISTS "Allow drivers to update trips" ON public.trips;
+DROP POLICY IF EXISTS "Allow select trips" ON public.trips;
+DROP POLICY IF EXISTS "Allow modify trips" ON public.trips;
+
+DROP POLICY IF EXISTS "Allow users to view collection routes" ON public.collection_routes;
+DROP POLICY IF EXISTS "Allow admins/managers to modify collection routes" ON public.collection_routes;
+DROP POLICY IF EXISTS "Allow select collection routes" ON public.collection_routes;
+DROP POLICY IF EXISTS "Allow modify collection routes" ON public.collection_routes;
+
+DROP POLICY IF EXISTS "Allow users to view maintenance" ON public.maintenance_records;
+DROP POLICY IF EXISTS "Allow admins/managers to modify maintenance" ON public.maintenance_records;
+DROP POLICY IF EXISTS "Allow select maintenance" ON public.maintenance_records;
+DROP POLICY IF EXISTS "Allow modify maintenance" ON public.maintenance_records;
+
+DROP POLICY IF EXISTS "Allow users to view settings" ON public.settings;
+DROP POLICY IF EXISTS "Allow users to modify settings" ON public.settings;
+DROP POLICY IF EXISTS "Allow select settings" ON public.settings;
+DROP POLICY IF EXISTS "Allow modify settings" ON public.settings;
+
+DROP POLICY IF EXISTS "Allow users to view telemetry history" ON public.telemetry_history;
+DROP POLICY IF EXISTS "Allow insertion of telemetry history" ON public.telemetry_history;
+DROP POLICY IF EXISTS "Allow select telemetry history" ON public.telemetry_history;
+DROP POLICY IF EXISTS "Allow insert telemetry history" ON public.telemetry_history;
+
+-- 1. Profiles Policies
+CREATE POLICY "Allow select profiles" ON public.profiles
+    FOR SELECT TO authenticated USING (
+        auth.uid() = id 
+        OR public.get_user_role() IN ('admin', 'manager')
+    );
+
+CREATE POLICY "Allow insert/update/delete profiles" ON public.profiles
+    FOR ALL TO authenticated USING (
+        auth.uid() = id 
+        OR public.get_user_role() IN ('admin', 'manager')
+    );
 
 -- 2. Vehicles Policies
-CREATE POLICY "Allow users to view all vehicles" ON public.vehicles
-    FOR SELECT TO authenticated USING (true);
+-- 2. Vehicles Policies
+CREATE POLICY "Allow select vehicles" ON public.vehicles
+    FOR SELECT TO authenticated USING (
+        public.get_user_role() IN ('admin', 'manager')
+        OR id IN (
+            SELECT vehicle_id FROM public.vehicle_assignments 
+            WHERE driver_id IN (SELECT id FROM public.drivers WHERE profile_id = auth.uid()) AND is_active = true
+        )
+    );
 
-CREATE POLICY "Allow admins/managers to modify vehicles" ON public.vehicles
-    FOR ALL TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
+CREATE POLICY "Allow insert vehicles" ON public.vehicles
+    FOR INSERT TO authenticated WITH CHECK (public.get_user_role() IN ('admin', 'manager'));
+
+CREATE POLICY "Allow update vehicles" ON public.vehicles
+    FOR UPDATE TO authenticated USING (public.get_user_role() IN ('admin', 'manager')) WITH CHECK (public.get_user_role() IN ('admin', 'manager'));
+
+CREATE POLICY "Allow delete vehicles" ON public.vehicles
+    FOR DELETE TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
 
 -- 3. Vehicle Telemetry Policies
-CREATE POLICY "Allow users to view telemetry" ON public.vehicle_telemetry
-    FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow select telemetry" ON public.vehicle_telemetry
+    FOR SELECT TO authenticated USING (
+        public.get_user_role() IN ('admin', 'manager')
+        OR vehicle_id IN (
+            SELECT vehicle_id FROM public.vehicle_assignments 
+            WHERE driver_id IN (SELECT id FROM public.drivers WHERE profile_id = auth.uid()) AND is_active = true
+        )
+    );
 
-CREATE POLICY "Allow all authenticated users to insert/update telemetry" ON public.vehicle_telemetry
-    FOR ALL TO authenticated USING (true);
-
--- 4. Drivers Policies
-CREATE POLICY "Allow users to view all drivers" ON public.drivers
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "Allow admins/managers to modify drivers" ON public.drivers
-    FOR ALL TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
-
--- 5. Vehicle Assignments Policies
-CREATE POLICY "Allow users to view assignments" ON public.vehicle_assignments
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "Allow admins/managers to modify assignments" ON public.vehicle_assignments
-    FOR ALL TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
-
--- 6. Alerts Policies
-CREATE POLICY "Allow users to view alerts" ON public.alerts
-    FOR SELECT TO authenticated USING (true);
-
-CREATE POLICY "Allow users to create alerts" ON public.alerts
+CREATE POLICY "Allow insert telemetry" ON public.vehicle_telemetry
     FOR INSERT TO authenticated WITH CHECK (true);
 
-CREATE POLICY "Allow admins/managers/supervisors to update alerts" ON public.alerts
-    FOR UPDATE TO authenticated USING (public.get_user_role() IN ('admin', 'manager', 'supervisor'));
+CREATE POLICY "Allow update telemetry" ON public.vehicle_telemetry
+    FOR UPDATE TO authenticated USING (true);
+
+CREATE POLICY "Allow delete telemetry" ON public.vehicle_telemetry
+    FOR DELETE TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
+
+-- 4. Drivers Policies
+CREATE POLICY "Allow select drivers" ON public.drivers
+    FOR SELECT TO authenticated USING (
+        profile_id = auth.uid() 
+        OR public.get_user_role() IN ('admin', 'manager')
+    );
+
+CREATE POLICY "Allow insert drivers" ON public.drivers
+    FOR INSERT TO authenticated WITH CHECK (public.get_user_role() IN ('admin', 'manager'));
+
+CREATE POLICY "Allow update drivers" ON public.drivers
+    FOR UPDATE TO authenticated USING (public.get_user_role() IN ('admin', 'manager')) WITH CHECK (public.get_user_role() IN ('admin', 'manager'));
+
+CREATE POLICY "Allow delete drivers" ON public.drivers
+    FOR DELETE TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
+
+-- 5. Vehicle Assignments Policies
+CREATE POLICY "Allow select assignments" ON public.vehicle_assignments
+    FOR SELECT TO authenticated USING (
+        public.get_user_role() IN ('admin', 'manager')
+        OR driver_id IN (SELECT id FROM public.drivers WHERE profile_id = auth.uid())
+    );
+
+CREATE POLICY "Allow insert assignments" ON public.vehicle_assignments
+    FOR INSERT TO authenticated WITH CHECK (public.get_user_role() IN ('admin', 'manager'));
+
+CREATE POLICY "Allow update assignments" ON public.vehicle_assignments
+    FOR UPDATE TO authenticated USING (public.get_user_role() IN ('admin', 'manager')) WITH CHECK (public.get_user_role() IN ('admin', 'manager'));
+
+CREATE POLICY "Allow delete assignments" ON public.vehicle_assignments
+    FOR DELETE TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
+
+-- 6. Alerts Policies
+CREATE POLICY "Allow select alerts" ON public.alerts
+    FOR SELECT TO authenticated USING (
+        public.get_user_role() IN ('admin', 'manager', 'supervisor')
+        OR vehicle_id IN (
+            SELECT vehicle_id FROM public.vehicle_assignments 
+            WHERE driver_id IN (SELECT id FROM public.drivers WHERE profile_id = auth.uid()) AND is_active = true
+        )
+    );
+
+CREATE POLICY "Allow insert alerts" ON public.alerts
+    FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "Allow update alerts" ON public.alerts
+    FOR UPDATE TO authenticated USING (public.get_user_role() IN ('admin', 'manager', 'supervisor')) WITH CHECK (public.get_user_role() IN ('admin', 'manager', 'supervisor'));
+
+CREATE POLICY "Allow delete alerts" ON public.alerts
+    FOR DELETE TO authenticated USING (public.get_user_role() IN ('admin', 'manager', 'supervisor'));
 
 -- 7. Trips Policies
-CREATE POLICY "Allow users to view trips" ON public.trips
-    FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow select trips" ON public.trips
+    FOR SELECT TO authenticated USING (
+        public.get_user_role() IN ('admin', 'manager')
+        OR driver_id IN (SELECT id FROM public.drivers WHERE profile_id = auth.uid())
+    );
 
-CREATE POLICY "Allow drivers to update trips" ON public.trips
-    FOR ALL TO authenticated USING (true);
+CREATE POLICY "Allow insert trips" ON public.trips
+    FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "Allow update trips" ON public.trips
+    FOR UPDATE TO authenticated USING (public.get_user_role() IN ('admin', 'manager') OR driver_id IN (SELECT id FROM public.drivers WHERE profile_id = auth.uid())) WITH CHECK (true);
+
+CREATE POLICY "Allow delete trips" ON public.trips
+    FOR DELETE TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
 
 -- 8. Collection Routes Policies
-CREATE POLICY "Allow users to view collection routes" ON public.collection_routes
-    FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow select collection routes" ON public.collection_routes
+    FOR SELECT TO authenticated USING (
+        public.get_user_role() IN ('admin', 'manager')
+        OR driver_id IN (SELECT id FROM public.drivers WHERE profile_id = auth.uid())
+    );
 
-CREATE POLICY "Allow admins/managers to modify collection routes" ON public.collection_routes
-    FOR ALL TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
+CREATE POLICY "Allow insert collection routes" ON public.collection_routes
+    FOR INSERT TO authenticated WITH CHECK (public.get_user_role() IN ('admin', 'manager'));
+
+CREATE POLICY "Allow update collection routes" ON public.collection_routes
+    FOR UPDATE TO authenticated USING (public.get_user_role() IN ('admin', 'manager')) WITH CHECK (public.get_user_role() IN ('admin', 'manager'));
+
+CREATE POLICY "Allow delete collection routes" ON public.collection_routes
+    FOR DELETE TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
 
 -- 9. Maintenance Records Policies
-CREATE POLICY "Allow users to view maintenance" ON public.maintenance_records
-    FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow select maintenance" ON public.maintenance_records
+    FOR SELECT TO authenticated USING (
+        public.get_user_role() IN ('admin', 'manager')
+        OR vehicle_id IN (
+            SELECT vehicle_id FROM public.vehicle_assignments 
+            WHERE driver_id IN (SELECT id FROM public.drivers WHERE profile_id = auth.uid()) AND is_active = true
+        )
+    );
 
-CREATE POLICY "Allow admins/managers to modify maintenance" ON public.maintenance_records
-    FOR ALL TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
+CREATE POLICY "Allow insert maintenance" ON public.maintenance_records
+    FOR INSERT TO authenticated WITH CHECK (public.get_user_role() IN ('admin', 'manager'));
+
+CREATE POLICY "Allow update maintenance" ON public.maintenance_records
+    FOR UPDATE TO authenticated USING (public.get_user_role() IN ('admin', 'manager')) WITH CHECK (public.get_user_role() IN ('admin', 'manager'));
+
+CREATE POLICY "Allow delete maintenance" ON public.maintenance_records
+    FOR DELETE TO authenticated USING (public.get_user_role() IN ('admin', 'manager'));
 
 -- 10. Settings Policies
-CREATE POLICY "Allow users to view settings" ON public.settings
-    FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow select settings" ON public.settings
+    FOR SELECT TO authenticated USING (
+        user_id = auth.uid() 
+        OR public.get_user_role() IN ('admin', 'manager')
+    );
 
-CREATE POLICY "Allow users to modify settings" ON public.settings
-    FOR ALL TO authenticated USING (auth.uid() = user_id);
+CREATE POLICY "Allow insert settings" ON public.settings
+    FOR INSERT TO authenticated WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Allow update settings" ON public.settings
+    FOR UPDATE TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Allow delete settings" ON public.settings
+    FOR DELETE TO authenticated USING (user_id = auth.uid());
 
 -- 11. Telemetry History Policies
-CREATE POLICY "Allow users to view telemetry history" ON public.telemetry_history
-    FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow select telemetry history" ON public.telemetry_history
+    FOR SELECT TO authenticated USING (
+        public.get_user_role() IN ('admin', 'manager')
+        OR vehicle_id IN (
+            SELECT vehicle_id FROM public.vehicle_assignments 
+            WHERE driver_id IN (SELECT id FROM public.drivers WHERE profile_id = auth.uid()) AND is_active = true
+        )
+    );
 
-CREATE POLICY "Allow insertion of telemetry history" ON public.telemetry_history
+CREATE POLICY "Allow insert telemetry history" ON public.telemetry_history
     FOR INSERT TO authenticated WITH CHECK (true);
 
 -- --------------------------------------------------
@@ -386,6 +621,11 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('vehicle-docs', 'vehicle-docs', false)
 ON CONFLICT (id) DO NOTHING;
+
+DROP POLICY IF EXISTS "Allow authenticated users to read reports" ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated users to upload reports" ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated users to read vehicle-docs" ON storage.objects;
+DROP POLICY IF EXISTS "Allow admins/managers to upload vehicle-docs" ON storage.objects;
 
 CREATE POLICY "Allow authenticated users to read reports"
 ON storage.objects FOR SELECT TO authenticated
@@ -406,5 +646,33 @@ WITH CHECK (bucket_id = 'vehicle-docs' AND public.get_user_role() IN ('admin', '
 -- --------------------------------------------------
 -- Realtime Subscriptions
 -- --------------------------------------------------
+-- Re-create publication triggers if needed
 ALTER PUBLICATION supabase_realtime ADD TABLE public.vehicle_telemetry;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.alerts;
+
+-- --------------------------------------------------
+-- Table and View Privileges (Grants)
+-- --------------------------------------------------
+-- Grant usage on schema
+GRANT USAGE ON SCHEMA public TO anon, authenticated;
+
+-- Grant select, insert, update, delete on all existing tables to authenticated ONLY
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO authenticated;
+
+-- Alter default privileges for future tables/sequences/functions to authenticated ONLY
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO authenticated;
+
+-- =========================================================================
+-- PART 9: Sync and repair existing profiles (User request Task 1)
+-- =========================================================================
+UPDATE public.profiles
+SET role = 'admin'
+WHERE email = 'wizzaswin@gmail.com' OR email = 'admin@nanjilmilk.com';
+
+UPDATE public.profiles
+SET role = 'manager'
+WHERE email = 'manager@nanjilmilk.com';

@@ -1,5 +1,5 @@
 import { Navigate, useNavigate } from "react-router-dom";
-import { useAuth } from "@/lib/auth";
+import { useAuth, REDIRECT_MAP } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
 import { Truck, Fuel, Thermometer, Gauge, MapPin, Bell, ShieldCheck, Play, LogOut, Activity } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui-kit";
@@ -97,7 +97,7 @@ function DriverPage() {
   }, [user]);
 
   if (!user) return <Navigate to="/login" />;
-  if (user.role !== "driver") return <Navigate to="/dashboard" />;
+  if (REDIRECT_MAP[user.role] !== "/driver") return <Navigate to={REDIRECT_MAP[user.role]} />;
 
   if (loading) {
     return (
