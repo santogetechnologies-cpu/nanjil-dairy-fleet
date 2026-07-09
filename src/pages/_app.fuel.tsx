@@ -180,7 +180,7 @@ function Page() {
               </div>
             )},
             { key: "odometer", label: "Odometer", render: (r: any) => `${r.odometer.toLocaleString()} km` },
-            { key: "mileage", label: "Mileage", render: (r: any) => mileage > 0 ? `${r.mileage} km/L` : '—' },
+            { key: "mileage", label: "Mileage", render: (r: any) => r.mileage > 0 ? `${r.mileage} km/L` : '—' },
             { key: "status", label: "Status", render: (r: any) => (
               <Badge status={r.status === "Low Fuel" ? "High" : r.status === "Half Tank" ? "Medium" : "Low"}>{r.status}</Badge>
             )},

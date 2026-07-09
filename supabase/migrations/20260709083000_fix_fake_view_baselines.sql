@@ -40,14 +40,10 @@ FROM generate_series(
 ORDER BY g.day;
 
 -- 3. Fix v_vehicles:
---    Must DROP and recreate because changing lat/lng from COALESCE(x, default)
---    which returns plain NUMERIC to a direct column reference NUMERIC(9,6)
---    is a type change that CREATE OR REPLACE VIEW does not allow.
---    Drop dependent views first, then recreate them all.
-
-DROP VIEW IF EXISTS public.v_vehicles CASCADE;
-
-CREATE VIEW public.v_vehicles WITH (security_invoker = true) AS
+--    Explicitly CAST lat and lng to NUMERIC (unconstrained) to match the existing 
+--    datatype from the original COALESCE(vt.lat, 8.25) view definition.
+--    This prevents the data type change error and allows CREATE OR REPLACE VIEW to succeed.
+CREATE OR REPLACE VIEW public.v_vehicles WITH (security_invoker = true) AS
 SELECT 
     v.id,
     v.number,
@@ -61,8 +57,8 @@ SELECT
     v.engine_hours,
     COALESCE(vt.status, 'Offline'::text) AS status,
     COALESCE(vt.location, 'Unknown'::text) AS location,
-    CAST(vt.lat AS NUMERIC) AS lat,
-    CAST(vt.lng AS NUMERIC) AS lng,
+    CAST(vt.lat AS numeric) AS lat,
+    CAST(vt.lng AS numeric) AS lng,
     COALESCE(vt.speed, 0) AS speed,
     COALESCE(vt.fuel, 0) AS fuel,
     COALESCE(vt.temperature, 0::numeric) AS temperature,
