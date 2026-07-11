@@ -1,19 +1,32 @@
 import { type MaintenanceRecord } from "@/lib/types";
 import { PageHeader } from "@/components/AppLayout";
 import { Kpi, Card, Badge, Button } from "@/components/ui-kit";
-import { Wrench, AlertCircle, CheckCircle2, Calendar } from "lucide-react";
+import { Wrench, AlertCircle, CheckCircle2, Calendar, Plus, X, Loader2 } from "lucide-react";
 import { DataTable } from "@/components/DataTable";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 
 function Page() {
+  const { user } = useAuth();
   const [records, setRecords] = useState<MaintenanceRecord[]>([]);
+  const [vehicles, setVehicles] = useState<any[]>([]);
+  const [showNew, setShowNew] = useState(false);
+  const [form, setForm] = useState({ vehicleId: "", service: "", cost: 0, dueDate: "" });
+  const [loading, setLoading] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+
+  const canManage = user?.role === "admin" || user?.role === "manager";
 
   async function loadMaintenance() {
     const [mRes, vRes] = await Promise.all([
       supabase.from('maintenance_records').select('*'),
       supabase.from('vehicles').select('*')
     ]);
+
+    if (vRes.data) {
+      setVehicles(vRes.data);
+    }
 
     if (mRes.data) {
       setRecords(mRes.data.map(m => {
@@ -66,6 +79,45 @@ function Page() {
     }
   }
 
+  async function handleAdd(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitError("");
+    setLoading(true);
+
+    if (!form.vehicleId) {
+      setSubmitError("Please select a vehicle.");
+      setLoading(false);
+      return;
+    }
+
+    if (!form.service.trim()) {
+      setSubmitError("Service description is required.");
+      setLoading(false);
+      return;
+    }
+
+    const { error } = await supabase
+      .from('maintenance_records')
+      .insert({
+        vehicle_id: form.vehicleId,
+        service: form.service.trim(),
+        cost: Number(form.cost) || 0,
+        due_date: form.dueDate || new Date().toISOString().split('T')[0],
+        status: 'Upcoming'
+      });
+
+    if (error) {
+      setSubmitError(error.message || "Failed to log maintenance record.");
+      setLoading(false);
+      return;
+    }
+
+    setLoading(false);
+    setShowNew(false);
+    setForm({ vehicleId: "", service: "", cost: 0, dueDate: "" });
+    loadMaintenance();
+  }
+
   const overdue = records.filter((r) => r.status === "Overdue").length;
   const upcoming = records.filter((r) => r.status === "Upcoming").length;
   const completed = records.filter((r) => r.status === "Completed").length;
@@ -73,7 +125,17 @@ function Page() {
 
   return (
     <div>
-      <PageHeader title="Maintenance Management" subtitle={`Service reminders · ${records.length} logs`} />
+      <PageHeader 
+        title="Maintenance Management" 
+        subtitle={`Service reminders · ${records.length} logs`} 
+        actions={
+          canManage && (
+            <Button onClick={() => setShowNew(true)}>
+              <Plus className="h-4 w-4" /> Log Service
+            </Button>
+          )
+        }
+      />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Kpi label="Overdue" value={overdue} accent="destructive" icon={<AlertCircle className="h-5 w-5" />} />
@@ -101,6 +163,90 @@ function Page() {
           ]}
         />
       </div>
+
+      {showNew && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowNew(false)}>
+          <div className="bg-card rounded-lg shadow-xl max-w-md w-full p-5 border border-border" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between pb-3 border-b border-border">
+              <h3 className="font-semibold text-lg">Log Maintenance Service</h3>
+              <button onClick={() => setShowNew(false)} className="p-1 hover:bg-muted rounded text-muted-foreground"><X className="h-4 w-4" /></button>
+            </div>
+
+            <form onSubmit={handleAdd} className="mt-4 space-y-4">
+              {submitError && (
+                <div className="bg-destructive/10 text-destructive text-xs p-2.5 rounded border border-destructive/20 font-medium">
+                  {submitError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Select Vehicle *</label>
+                <select 
+                  value={form.vehicleId} 
+                  onChange={(e) => setForm({ ...form, vehicleId: e.target.value })} 
+                  className="h-9 px-3 w-full rounded-md border border-border bg-card text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  required
+                >
+                  <option value="">-- Choose a Vehicle --</option>
+                  {vehicles.map(v => (
+                    <option key={v.id} value={v.id}>{v.number} ({v.type})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Service / Maintenance Description *</label>
+                <input 
+                  type="text" 
+                  value={form.service} 
+                  onChange={(e) => setForm({ ...form, service: e.target.value })} 
+                  placeholder="e.g. Engine Oil & Filter Replacement"
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Estimated Cost (₹) *</label>
+                <input 
+                  type="number" 
+                  value={form.cost} 
+                  onChange={(e) => setForm({ ...form, cost: Number(e.target.value) })} 
+                  placeholder="e.g. 4500"
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Scheduled Due Date *</label>
+                <input 
+                  type="date" 
+                  value={form.dueDate} 
+                  onChange={(e) => setForm({ ...form, dueDate: e.target.value })} 
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  required
+                />
+              </div>
+
+              <div className="pt-3 border-t border-border flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setShowNew(false)} disabled={loading}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={loading}>
+                  {loading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" /> Logging…
+                    </>
+                  ) : (
+                    "Schedule Service"
+                  )}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

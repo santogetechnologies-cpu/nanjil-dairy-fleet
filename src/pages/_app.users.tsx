@@ -7,25 +7,27 @@ import { Plus, X, Eye, EyeOff, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { createClient } from "@supabase/supabase-js";
 
-// Isolated client for creating new users without affecting the admin session.
-// Uses a unique storageKey + no-op storage to prevent any shared state with the main client.
-const tempClient = createClient(
-  import.meta.env.VITE_SUPABASE_URL || "",
-  import.meta.env.VITE_SUPABASE_ANON_KEY || "",
-  {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-      storageKey: "nanjil-user-creation-temp",
-      storage: {
-        getItem: () => null,
-        setItem: () => {},
-        removeItem: () => {}
+const tempClient = (globalThis as any)._tempSupabaseClient || (() => {
+  const client = createClient(
+    import.meta.env.VITE_SUPABASE_URL || "",
+    import.meta.env.VITE_SUPABASE_ANON_KEY || "",
+    {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+        storageKey: "nanjil-user-creation-temp",
+        storage: {
+          getItem: () => null,
+          setItem: () => {},
+          removeItem: () => {}
+        }
       }
     }
-  }
-);
+  );
+  (globalThis as any)._tempSupabaseClient = client;
+  return client;
+})();
 
 interface UserRow {
   id: string;
@@ -73,9 +75,31 @@ function Page() {
   }
 
   useEffect(() => {
-    if (user?.role === "admin") {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    async function init() {
+      if (user?.role !== "admin") return;
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
       loadUsers();
+
+      channel = supabase
+        .channel('profiles-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+          if (!cancelled) loadUsers();
+        })
+        .subscribe();
     }
+
+    init();
+
+    return () => {
+      cancelled = true;
+      channel?.unsubscribe();
+    };
   }, [user]);
 
   if (user?.role !== "admin") {
@@ -192,6 +216,27 @@ function Page() {
     loadUsers();
   }
 
+  async function deleteUser(id: string) {
+    if (id === user?.id) {
+      alert("You cannot delete your own administrator account.");
+      return;
+    }
+    if (!confirm("Are you sure you want to delete this user profile? This action is permanent.")) return;
+
+    const { error } = await supabase
+      .from('profiles')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      alert("Failed to delete user: " + error.message);
+    } else {
+      setToast({ show: true, message: "User deleted successfully." });
+      loadUsers();
+      setTimeout(() => setToast({ show: false, message: "" }), 3000);
+    }
+  }
+
   return (
     <div>
       <PageHeader
@@ -212,12 +257,20 @@ function Page() {
           )},
           { key: "lastLogin", label: "Last Login" },
           { key: "actions", label: "", render: (u) => (
-            <Button size="sm" variant="outline" onClick={() => toggle(u.id)}>
-              {u.status === "Active" ? "Deactivate" : "Activate"}
-            </Button>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => toggle(u.id)}>
+                {u.status === "Active" ? "Deactivate" : "Activate"}
+              </Button>
+              {u.id !== user?.id && (
+                <Button size="sm" variant="destructive" onClick={() => deleteUser(u.id)}>
+                  Delete
+                </Button>
+              )}
+            </div>
           )},
         ]}
       />
+
 
       {/* Success Toast Popup */}
       {toast.show && (

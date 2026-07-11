@@ -6,11 +6,12 @@ import {
   ResponsiveContainer, LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
 } from "recharts";
 import {
-  ChevronLeft, Fuel, Thermometer, Gauge, Activity,
+  ChevronLeft, Fuel, Thermometer, Gauge, Activity, Loader2, X,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { type Vehicle } from "@/lib/types";
+import { useAuth } from "@/lib/auth";
 
 interface HistoryPoint {
   t: string;
@@ -22,9 +23,29 @@ interface HistoryPoint {
 
 function VehicleDetailPage() {
   const { id } = useParams();
+  const { user } = useAuth();
   const [v, setV] = useState<Vehicle | null>(null);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Assignment states
+  const [drivers, setDrivers] = useState<any[]>([]);
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [selectedDriverId, setSelectedDriverId] = useState("");
+  const [assigning, setAssigning] = useState(false);
+  const [showRegisterForm, setShowRegisterForm] = useState(false);
+  const [newDriver, setNewDriver] = useState({ name: "", license: "", phone: "" });
+
+  const canManage = user?.role === "admin" || user?.role === "manager";
+
+  async function loadDrivers() {
+    const { data } = await supabase
+      .from('drivers')
+      .select('id, name');
+    if (data) {
+      setDrivers(data);
+    }
+  }
 
   async function load() {
     // 1. Fetch vehicle view details
@@ -112,6 +133,120 @@ function VehicleDetailPage() {
     };
   }, [id]);
 
+  async function handleAssignDriver(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedDriverId || !v) return;
+    setAssigning(true);
+
+    try {
+      // 1. Deactivate any existing active assignment for this vehicle
+      await supabase
+        .from('vehicle_assignments')
+        .update({ is_active: false, unassigned_at: new Date().toISOString() })
+        .eq('vehicle_id', v.id)
+        .eq('is_active', true);
+
+      // 2. Deactivate any existing active assignment for this driver (to prevent double assignment)
+      await supabase
+        .from('vehicle_assignments')
+        .update({ is_active: false, unassigned_at: new Date().toISOString() })
+        .eq('driver_id', selectedDriverId)
+        .eq('is_active', true);
+
+      // 3. Create the new assignment
+      const { error } = await supabase
+        .from('vehicle_assignments')
+        .insert({
+          vehicle_id: v.id,
+          driver_id: selectedDriverId,
+          is_active: true
+        });
+
+      if (error) throw error;
+      
+      setShowAssignModal(false);
+      setSelectedDriverId("");
+      load();
+    } catch (err: any) {
+      alert("Failed to assign driver: " + err.message);
+    } finally {
+      setAssigning(false);
+    }
+  }
+
+  async function handleUnassignDriver() {
+    if (!v) return;
+    if (!confirm("Are you sure you want to unassign the current driver?")) return;
+    setAssigning(true);
+
+    try {
+      const { error } = await supabase
+        .from('vehicle_assignments')
+        .update({ is_active: false, unassigned_at: new Date().toISOString() })
+        .eq('vehicle_id', v.id)
+        .eq('is_active', true);
+
+      if (error) throw error;
+      load();
+    } catch (err: any) {
+      alert("Failed to unassign driver: " + err.message);
+    } finally {
+      setAssigning(false);
+    }
+  }
+
+  async function handleRegisterAndAssign(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newDriver.name.trim() || !newDriver.license.trim() || !newDriver.phone.trim() || !v) return;
+    setAssigning(true);
+
+    try {
+      // 1. Insert driver
+      const { data: driverData, error: driverError } = await supabase
+        .from('drivers')
+        .insert({
+          name: newDriver.name.trim(),
+          license: newDriver.license.trim().toUpperCase(),
+          phone: newDriver.phone.trim(),
+          score: 100,
+          rating: 'Good'
+        })
+        .select()
+        .maybeSingle();
+
+      if (driverError) throw driverError;
+
+      if (driverData) {
+        // 2. Deactivate any existing active assignment for this vehicle
+        await supabase
+          .from('vehicle_assignments')
+          .update({ is_active: false, unassigned_at: new Date().toISOString() })
+          .eq('vehicle_id', v.id)
+          .eq('is_active', true);
+
+        // 3. Create the new assignment
+        const { error: assignError } = await supabase
+          .from('vehicle_assignments')
+          .insert({
+            vehicle_id: v.id,
+            driver_id: driverData.id,
+            is_active: true
+          });
+
+        if (assignError) throw assignError;
+      }
+
+      setShowAssignModal(false);
+      setShowRegisterForm(false);
+      setNewDriver({ name: "", license: "", phone: "" });
+      load();
+    } catch (err: any) {
+      alert("Failed to register and assign driver: " + err.message);
+    } finally {
+      setAssigning(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-8 text-center">
@@ -139,12 +274,125 @@ function VehicleDetailPage() {
         title={v.number}
         subtitle={`${v.type} · ${v.model}`}
         actions={
-          <>
+          <div className="flex items-center gap-2">
             <Badge status={v.status}>{v.status}</Badge>
+            {canManage && (
+              <>
+                <Button variant="primary" size="sm" onClick={() => { loadDrivers(); setShowAssignModal(true); }}>
+                  Assign Driver
+                </Button>
+                {v.driverId && (
+                  <Button variant="destructive" size="sm" onClick={handleUnassignDriver} disabled={assigning}>
+                    Unassign
+                  </Button>
+                )}
+              </>
+            )}
             <Button variant="outline" size="sm">Export profile</Button>
-          </>
+          </div>
         }
       />
+
+      {showAssignModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <Card className="w-full max-w-sm">
+            <CardHeader title={showRegisterForm ? "Register New Driver" : "Assign Driver"} />
+            
+            {!showRegisterForm ? (
+              <form onSubmit={handleAssignDriver} className="p-4 space-y-4">
+                {drivers.length === 0 ? (
+                  <div className="text-sm text-muted-foreground text-center py-2">
+                    No registered drivers found in the database.
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Choose Driver</label>
+                    <select 
+                      className="w-full p-2 border border-border bg-card rounded-md text-sm"
+                      value={selectedDriverId}
+                      onChange={(e) => setSelectedDriverId(e.target.value)}
+                      required
+                    >
+                      <option value="">Select a driver...</option>
+                      {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                  </div>
+                )}
+                
+                <div className="text-center">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowRegisterForm(true)}
+                    className="text-xs text-primary hover:underline font-medium"
+                  >
+                    + Register a new driver instead
+                  </button>
+                </div>
+
+                <div className="flex gap-2 pt-2 border-t border-border">
+                  <Button type="button" variant="outline" onClick={() => { setShowAssignModal(false); setSelectedDriverId(""); }} className="flex-1">Cancel</Button>
+                  <Button type="submit" className="flex-1" disabled={assigning || drivers.length === 0}>
+                    {assigning ? <Loader2 className="animate-spin h-4 w-4" /> : "Confirm"}
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleRegisterAndAssign} className="p-4 space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Driver Name *</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2 border border-border bg-transparent rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={newDriver.name}
+                    onChange={(e) => setNewDriver({ ...newDriver, name: e.target.value })}
+                    placeholder="e.g. Aswin Kumar"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">License Number *</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2 border border-border bg-transparent rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={newDriver.license}
+                    onChange={(e) => setNewDriver({ ...newDriver, license: e.target.value })}
+                    placeholder="e.g. DL-142023000567"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Phone Number *</label>
+                  <input 
+                    type="text"
+                    className="w-full p-2 border border-border bg-transparent rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={newDriver.phone}
+                    onChange={(e) => setNewDriver({ ...newDriver, phone: e.target.value })}
+                    placeholder="e.g. +919876543210"
+                    required
+                  />
+                </div>
+
+                <div className="text-center">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowRegisterForm(false)}
+                    className="text-xs text-primary hover:underline font-medium"
+                  >
+                    ← Select from existing drivers
+                  </button>
+                </div>
+
+                <div className="flex gap-2 pt-2 border-t border-border">
+                  <Button type="button" variant="outline" onClick={() => { setShowAssignModal(false); setShowRegisterForm(false); setNewDriver({ name: "", license: "", phone: "" }); }} className="flex-1">Cancel</Button>
+                  <Button type="submit" className="flex-1" disabled={assigning}>
+                    {assigning ? <Loader2 className="animate-spin h-4 w-4" /> : "Register & Assign"}
+                  </Button>
+                </div>
+              </form>
+            )}
+          </Card>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat icon={<Gauge className="h-4 w-4" />} label="Current Speed" value={`${v.speed} km/h`} />
