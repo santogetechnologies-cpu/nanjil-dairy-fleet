@@ -13,103 +13,166 @@ function DriverPage() {
   const [vehicle, setVehicle] = useState<any>(null);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tripStarted, setTripStarted] = useState(false);
+  const [activeShift, setActiveShift] = useState<any>(null);
+  const [activeSeconds, setActiveSeconds] = useState(0);
+  const [shiftHistory, setShiftHistory] = useState<any[]>([]);
+
+  async function load() {
+    if (!user) return;
+    
+    // Guard: only query if a valid session exists to prevent 401s during HMR/load race conditions
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    
+    // Get driver record mapping to current login session ID
+    const { data: dData } = await supabase
+      .from('drivers')
+      .select('*')
+      .eq('profile_id', session.user.id)
+      .maybeSingle();
+
+    const resolvedDriver = dData || { id: null, name: user.name, score: 0, rating: "Poor", trips: 0, total_km: 0, events: 0 };
+    setDriver(resolvedDriver);
+
+    // Get assigned vehicle via view
+    const { data: vData } = await supabase
+      .from('v_vehicles')
+      .select('*')
+      .eq('driver_name', resolvedDriver.name)
+      .maybeSingle();
+
+    const resolvedVehicle = vData ? {
+      id: vData.id,
+      number: vData.number,
+      type: vData.type,
+      model: vData.model,
+      route: vData.route || '',
+      insuranceExpiry: vData.insurance_expiry || '',
+      lastService: vData.last_service || '',
+      nextServiceKm: vData.next_service_km || 0,
+      odometer: vData.odometer || 0,
+      engineHours: Number(vData.engine_hours || 0),
+      status: vData.status,
+      location: vData.location || '',
+      lat: Number(vData.lat || 0),
+      lng: Number(vData.lng || 0),
+      speed: vData.speed || 0,
+      fuel: vData.fuel || 0,
+      temperature: Number(vData.temperature || 0),
+      humidity: vData.humidity || 0,
+      engineOn: vData.engine_on || false,
+      ignition: vData.ignition || false,
+      driver: vData.driver_name || '',
+      driverId: vData.driver_id || '',
+      lastUpdate: vData.last_update ? new Date(vData.last_update).toLocaleTimeString() : 'sec ago'
+    } : { 
+      id: null,
+      number: "Unassigned", 
+      type: "No Assigned Vehicle", 
+      status: "Offline", 
+      fuel: 0, 
+      speed: 0, 
+      temperature: 0, 
+      engineOn: false, 
+      route: "No route assigned" 
+    };
+    setVehicle(resolvedVehicle);
+
+    // Get alerts
+    if (vData?.id) {
+      const { data: aData } = await supabase
+        .from('alerts')
+        .select('*')
+        .eq('vehicle_id', vData.id)
+        .limit(4);
+
+      if (aData) {
+        setAlerts(aData.map(a => ({
+          id: a.id,
+          severity: a.severity,
+          message: a.message,
+          type: a.type,
+          time: a.time ? new Date(a.time).toLocaleTimeString() : '1h ago',
+          resolved: a.resolved
+        })));
+      }
+    }
+
+    // Get active shift
+    if (resolvedDriver.id) {
+      const { data: activeShiftData } = await supabase
+        .from('driver_shifts')
+        .select('*')
+        .eq('driver_id', resolvedDriver.id)
+        .is('ended_at', null)
+        .maybeSingle();
+
+      if (activeShiftData) {
+        setActiveShift(activeShiftData);
+      }
+
+      // Get shift history
+      const { data: history } = await supabase
+        .from('driver_shifts')
+        .select('*')
+        .eq('driver_id', resolvedDriver.id)
+        .is('ended_at', null)
+        .order('started_at', { ascending: false })
+        .limit(5);
+
+      if (history) {
+        setShiftHistory(history);
+      }
+    }
+
+    setLoading(false);
+  }
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      if (!user) return;
-      
-      // Get driver record
-      const { data: dData } = await supabase
-        .from('drivers')
-        .select('*')
-        .eq('name', user.name)
-        .maybeSingle();
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
-      if (!active) return;
-
-      const resolvedDriver = dData || { name: user.name, score: 85, rating: "Good", trips: 0, total_km: 0, events: 0 };
-      setDriver(resolvedDriver);
-
-      // Check current session validity
+    async function init() {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session || !active) return;
+      if (cancelled || !session) return;
 
-      // Get assigned vehicle via view
-      const { data: vData } = await supabase
-        .from('v_vehicles')
-        .select('*')
-        .eq('driver_name', resolvedDriver.name)
-        .maybeSingle();
+      load();
 
-      if (!active) return;
-
-      const resolvedVehicle = vData ? {
-        id: vData.id,
-        number: vData.number,
-        type: vData.type,
-        model: vData.model,
-        route: vData.route || '',
-        insuranceExpiry: vData.insurance_expiry || '',
-        lastService: vData.last_service || '',
-        nextServiceKm: vData.next_service_km || 0,
-        odometer: vData.odometer || 0,
-        engineHours: Number(vData.engine_hours || 0),
-        status: vData.status,
-        location: vData.location || '',
-        lat: Number(vData.lat || 0),
-        lng: Number(vData.lng || 0),
-        speed: vData.speed || 0,
-        fuel: vData.fuel || 0,
-        temperature: Number(vData.temperature || 0),
-        humidity: vData.humidity || 0,
-        engineOn: vData.engine_on || false,
-        ignition: vData.ignition || false,
-        driver: vData.driver_name || '',
-        driverId: vData.driver_id || '',
-        lastUpdate: vData.last_update ? new Date(vData.last_update).toLocaleTimeString() : 'sec ago'
-      } : { 
-        number: "TN-01-AB-1234", 
-        type: "Milk Tanker 3000L", 
-        status: "Offline", 
-        fuel: 75, 
-        speed: 0, 
-        temperature: 4, 
-        engineOn: false, 
-        route: "Aralvaimozhi - Nagercoil" 
-      };
-      setVehicle(resolvedVehicle);
-
-      // Get alerts
-      if (vData?.id) {
-        const { data: { session: alertSession } } = await supabase.auth.getSession();
-        if (!alertSession || !active) return;
-
-        const { data: aData } = await supabase
-          .from('alerts')
-          .select('*')
-          .eq('vehicle_id', vData.id)
-          .limit(4);
-
-        if (aData && active) {
-          setAlerts(aData.map(a => ({
-            id: a.id,
-            severity: a.severity,
-            message: a.message,
-            type: a.type,
-            time: a.time ? new Date(a.time).toLocaleTimeString() : '1h ago',
-            resolved: a.resolved
-          })));
-        }
-      }
-      if (active) setLoading(false);
+      // Subscribe to changes on assignments, telemetry, and shifts in real-time
+      channel = supabase
+        .channel('driver-portal-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => {
+          if (!cancelled) load();
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => {
+          if (!cancelled) load();
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_shifts' }, () => {
+          if (!cancelled) load();
+        })
+        .subscribe();
     }
-    load();
+
+    init();
+
     return () => {
-      active = false;
+      cancelled = true;
+      channel?.unsubscribe();
     };
   }, [user]);
+
+  // Live timer tick
+  useEffect(() => {
+    if (!activeShift) {
+      setActiveSeconds(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - new Date(activeShift.started_at).getTime()) / 1000);
+      setActiveSeconds(elapsed > 0 ? elapsed : 0);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [activeShift]);
 
   if (!user) return <Navigate to="/login" />;
   if (REDIRECT_MAP[user.role] !== "/driver") return <Navigate to={REDIRECT_MAP[user.role]} />;
@@ -121,6 +184,57 @@ function DriverPage() {
       </div>
     );
   }
+
+  async function handleToggleShift() {
+    if (!driver?.id) {
+      alert("Error: Your driver account has not been registered in the fleet database yet. Please ask your Admin to assign you to a vehicle first.");
+      return;
+    }
+
+    if (activeShift) {
+      // End current shift
+      const nowStr = new Date().toISOString();
+      const elapsedHours = activeSeconds / 3600;
+      
+      const { error } = await supabase
+        .from('driver_shifts')
+        .update({
+          ended_at: nowStr,
+          active_hours: Number(elapsedHours.toFixed(2))
+        })
+        .eq('id', activeShift.id);
+
+      if (error) {
+        alert("Failed to end shift: " + error.message);
+      } else {
+        setActiveShift(null);
+        load();
+      }
+    } else {
+      // Start a new shift
+      const { data, error } = await supabase
+        .from('driver_shifts')
+        .insert({
+          driver_id: driver.id,
+          vehicle_id: vehicle.id
+        })
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        alert("Failed to start shift: " + error.message);
+      } else if (data) {
+        setActiveShift(data);
+      }
+    }
+  }
+
+  const formatTime = (secs: number) => {
+    const h = Math.floor(secs / 3600).toString().padStart(2, '0');
+    const m = Math.floor((secs % 3600) / 60).toString().padStart(2, '0');
+    const s = (secs % 60).toString().padStart(2, '0');
+    return `${h}h ${m}m ${s}s`;
+  };
 
   return (
     <div className="min-h-screen bg-background pb-12">
@@ -156,15 +270,17 @@ function DriverPage() {
         </div>
 
         <Card className="mt-4 p-4">
-          <div className="flex items-center gap-2"><MapPin className="h-4 w-4 text-primary" /><div className="font-medium text-sm">Today's Route</div></div>
-          <div className="mt-2 text-sm">{vehicle.route}</div>
-          <div className="text-xs text-muted-foreground mt-1">14 collection centres · target completion 11:30</div>
+          <div className="flex items-center gap-2"><MapPin className="h-4 w-4 text-primary" /><div className="font-medium text-sm">Active Shift Tracker</div></div>
+          <div className="mt-2 text-sm">{vehicle.route || "Ready to log active hours"}</div>
+          <div className="text-xs text-muted-foreground mt-1">
+            {activeShift ? `Shift running: ${formatTime(activeSeconds)}` : "Start a shift to log your active driving hours."}
+          </div>
           <div className="mt-3 h-2 bg-muted rounded-full overflow-hidden">
-            <div className="h-full bg-primary" style={{ width: tripStarted ? "62%" : "0%", transition: "width 0.6s" }} />
+            <div className="h-full bg-primary" style={{ width: activeShift ? "100%" : "0%", transition: "width 0.6s" }} />
           </div>
           <div className="mt-3 flex gap-2">
-            <Button className="flex-1" onClick={() => setTripStarted((v) => !v)}>
-              <Play className="h-4 w-4" /> {tripStarted ? "Pause Trip" : "Start Trip"}
+            <Button className="flex-1" onClick={handleToggleShift}>
+              <Play className="h-4 w-4" /> {activeShift ? "End Active Shift" : "Start Shift"}
             </Button>
             <Button variant="outline" className="flex-1">View Route</Button>
           </div>
@@ -207,7 +323,7 @@ function DriverPage() {
               <div className="text-xs text-muted-foreground">Trips</div>
             </div>
             <div>
-              <div className="text-2xl font-semibold">{(driver.totalKm / 1000).toFixed(1)}k</div>
+              <div className="text-2xl font-semibold">{(driver.total_km / 1000).toFixed(1)}k</div>
               <div className="text-xs text-muted-foreground">km driven</div>
             </div>
             <div>
@@ -215,6 +331,20 @@ function DriverPage() {
               <div className="text-xs text-muted-foreground">events</div>
             </div>
           </div>
+
+          {shiftHistory.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-border">
+              <div className="text-xs font-semibold text-muted-foreground mb-2">Recent shifts logged</div>
+              <div className="space-y-1.5 text-xs">
+                {shiftHistory.map(s => (
+                  <div key={s.id} className="flex justify-between text-muted-foreground">
+                    <span>{new Date(s.started_at).toLocaleDateString()}</span>
+                    <span className="font-semibold text-foreground">{s.active_hours} active hours</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </Card>
       </div>
     </div>

@@ -1,6 +1,5 @@
-
 import { useState, useEffect } from "react";
-import { COLLECTION_ROUTES, type CollectionRoute } from "@/lib/mock-data";
+import { type CollectionRoute } from "@/lib/types";
 import { PageHeader } from "@/components/AppLayout";
 import { Badge } from "@/components/ui-kit";
 import { DataTable } from "@/components/DataTable";
@@ -9,39 +8,67 @@ import { supabase } from "@/lib/supabase";
 function Page() {
   const [routes, setRoutes] = useState<CollectionRoute[]>([]);
 
-  useEffect(() => {
-    async function load() {
-      const [rRes, vRes] = await Promise.all([
-        supabase.from('collection_routes').select('*'),
-        supabase.from('vehicles').select('*')
-      ]);
+  async function load() {
+    const [rRes, vRes, dRes] = await Promise.all([
+      supabase.from('collection_routes').select('*'),
+      supabase.from('vehicles').select('*'),
+      supabase.from('drivers').select('*')
+    ]);
 
-      if (rRes.data) {
-        setRoutes(rRes.data.map(r => {
-          const vObj = vRes.data?.find(x => x.id === r.vehicle_id);
-          return {
-            id: r.id,
-            name: r.name,
-            vehicle: vObj ? vObj.number : 'Unknown',
-            driver: 'Assigned Driver', // can be fetched or resolved
-            centres: r.centres,
-            startTime: r.start_time || '',
-            endTime: r.end_time || '',
-            status: r.status,
-            litres: r.litres,
-            completion: r.completion
-          };
-        }));
-      }
+    if (rRes.data) {
+      setRoutes(rRes.data.map(r => {
+        const vObj = vRes.data?.find(x => x.id === r.vehicle_id);
+        // Find driver assigned to vehicle
+        let dName = 'Unassigned';
+        if (vObj) {
+          const dObj = dRes.data?.find(d => d.id === r.driver_id);
+          if (dObj) dName = dObj.name;
+        }
+        return {
+          id: r.id,
+          name: r.name,
+          vehicle: vObj ? vObj.number : 'Unknown',
+          driver: dName,
+          centres: r.centres,
+          startTime: r.start_time || '',
+          endTime: r.end_time || '',
+          status: r.status,
+          litres: r.litres,
+          completion: r.completion
+        };
+      }));
     }
-    load();
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
+      load();
+
+      channel = supabase
+        .channel('routes-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'collection_routes' }, () => { if (!cancelled) load(); })
+        .subscribe();
+    }
+
+    init();
+
+    return () => {
+      cancelled = true;
+      channel?.unsubscribe();
+    };
   }, []);
 
   return (
     <div>
-      <PageHeader title="Dairy Collection Routes" subtitle="Milk collection loops, centres and delivery points" />
+      <PageHeader title="Dairy Collection Routes" subtitle={`Milk collection loops · ${routes.length} active routes`} />
       <DataTable<CollectionRoute>
-        data={routes.length > 0 ? routes : COLLECTION_ROUTES}
+        data={routes}
         searchKeys={["name", "vehicle", "driver"]}
         columns={[
           { key: "name", label: "Route" },

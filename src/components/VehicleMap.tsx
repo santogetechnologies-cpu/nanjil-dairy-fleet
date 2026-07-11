@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import type { Vehicle } from "@/lib/mock-data";
+import type { Vehicle } from "@/lib/types";
 import { Loader2 } from "lucide-react";
 
 interface Props {

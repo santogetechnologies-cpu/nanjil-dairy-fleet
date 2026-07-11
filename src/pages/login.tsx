@@ -41,7 +41,7 @@ function LoginPage() {
   }
 
   const features = [
-    { icon: MapPin, label: "Live GPS tracking", desc: "40+ vehicles", accent: "from-sky-500/15 to-blue-500/5", ring: "ring-sky-500/20", text: "text-sky-600", span: "col-span-2 row-span-2" },
+    { icon: MapPin, label: "Live GPS tracking", desc: "Active fleet", accent: "from-sky-500/15 to-blue-500/5", ring: "ring-sky-500/20", text: "text-sky-600", span: "col-span-2 row-span-2" },
     { icon: Fuel, label: "Fuel intelligence", desc: "Theft alerts", accent: "from-amber-500/15 to-orange-500/5", ring: "ring-amber-500/20", text: "text-amber-600", span: "col-span-2" },
     { icon: Shield, label: "Driver safety", desc: "AI scoring", accent: "from-emerald-500/15 to-teal-500/5", ring: "ring-emerald-500/20", text: "text-emerald-600", span: "" },
     { icon: Snowflake, label: "Cold-chain", desc: "2°C – 6°C", accent: "from-cyan-500/15 to-indigo-500/5", ring: "ring-cyan-500/20", text: "text-cyan-600", span: "" },

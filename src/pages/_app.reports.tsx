@@ -1,25 +1,62 @@
-
 import { useState } from "react";
 import { PageHeader } from "@/components/AppLayout";
 import { Card, Button } from "@/components/ui-kit";
-import { FileText, Download, FileSpreadsheet } from "lucide-react";
+import { FileText, Download } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 const REPORTS = [
-  { id: "vehicle", name: "Vehicle Report", desc: "Status, odometer, location and assignments for all 40 vehicles." },
-  { id: "fuel", name: "Fuel Report", desc: "Daily consumption, mileage and theft alerts across the fleet." },
+  { id: "vehicle", name: "Vehicle Report", desc: "Status, odometer, location and assignments for all fleet vehicles." },
+  { id: "fuel", name: "Fuel Report", desc: "Daily consumption, mileage and alerts across the fleet." },
   { id: "safety", name: "Driver Safety Report", desc: "Driver scores, ranking and event breakdown." },
   { id: "trip", name: "Trip Report", desc: "Trip log including start/destination, distance and duration." },
   { id: "cold-chain", name: "Cold Chain Report", desc: "Temperature & humidity compliance for milk transport." },
   { id: "maintenance", name: "Maintenance Report", desc: "Service history, upcoming services and cost summary." },
 ];
 
-function generate(format: "pdf" | "xlsx", id: string) {
-  const content = `Nanjil Vehicle Intelligence Platform\n${id.toUpperCase()} REPORT\nGenerated: ${new Date().toISOString()}\n\nThis is a generated demo report containing aggregated fleet data.`;
-  const blob = new Blob([content], { type: format === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+async function generateReport(id: string) {
+  let records: any[] = [];
+  
+  if (id === 'vehicle') {
+    const { data } = await supabase.from('vehicles').select('*');
+    records = data || [];
+  } else if (id === 'fuel') {
+    const { data } = await supabase.from('v_daily_fuel_fleet').select('*');
+    records = data || [];
+  } else if (id === 'safety') {
+    const { data } = await supabase.from('drivers').select('*');
+    records = data || [];
+  } else if (id === 'trip') {
+    const { data } = await supabase.from('trips').select('*');
+    records = data || [];
+  } else if (id === 'cold-chain') {
+    const { data } = await supabase.from('v_vehicles').select('number, temperature, humidity');
+    records = data || [];
+  } else if (id === 'maintenance') {
+    const { data } = await supabase.from('maintenance_records').select('*');
+    records = data || [];
+  }
+
+  // Convert database records to CSV format
+  let csvContent = "";
+  if (records.length > 0) {
+    const headers = Object.keys(records[0]).join(",");
+    const rows = records.map(r => 
+      Object.values(r).map(v => {
+        if (v === null || v === undefined) return '""';
+        return typeof v === 'string' ? `"${v.replace(/"/g, '""')}"` : String(v);
+      }).join(",")
+    );
+    csvContent = [headers, ...rows].join("\n");
+  } else {
+    csvContent = "No records found in database.";
+  }
+
+  const content = `Nanjil Vehicle Intelligence Platform\n${id.toUpperCase()} REPORT\nGenerated: ${new Date().toLocaleString()}\n\n${csvContent}`;
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `nanjil-${id}-report.${format}`;
+  a.download = `nanjil-${id}-report.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -27,17 +64,20 @@ function generate(format: "pdf" | "xlsx", id: string) {
 function Page() {
   const [busy, setBusy] = useState<string | null>(null);
 
-  function run(id: string, format: "pdf" | "xlsx") {
-    setBusy(`${id}-${format}`);
-    setTimeout(() => {
-      generate(format, id);
+  async function run(id: string) {
+    setBusy(id);
+    try {
+      await generateReport(id);
+    } catch (e) {
+      console.error(e);
+    } finally {
       setBusy(null);
-    }, 600);
+    }
   }
 
   return (
     <div>
-      <PageHeader title="Reports" subtitle="Generate operational reports for management review" />
+      <PageHeader title="Reports" subtitle="Generate live CSV operational reports for management review" />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {REPORTS.map((r) => (
@@ -50,11 +90,8 @@ function Page() {
                 <div className="font-semibold">{r.name}</div>
                 <div className="text-sm text-muted-foreground mt-0.5">{r.desc}</div>
                 <div className="mt-3 flex gap-2">
-                  <Button size="sm" variant="primary" disabled={busy === `${r.id}-pdf`} onClick={() => run(r.id, "pdf")}>
-                    <Download className="h-3 w-3" /> {busy === `${r.id}-pdf` ? "Preparing…" : "Export PDF"}
-                  </Button>
-                  <Button size="sm" variant="outline" disabled={busy === `${r.id}-xlsx`} onClick={() => run(r.id, "xlsx")}>
-                    <FileSpreadsheet className="h-3 w-3" /> Export Excel
+                  <Button size="sm" variant="primary" disabled={busy === r.id} onClick={() => run(r.id)}>
+                    <Download className="h-3 w-3" /> {busy === r.id ? "Generating…" : "Export Live CSV"}
                   </Button>
                 </div>
               </div>

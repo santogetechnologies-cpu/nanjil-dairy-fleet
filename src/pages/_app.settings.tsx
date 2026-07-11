@@ -104,6 +104,68 @@ function Page() {
               onChange={(v) => setPrefs({ ...prefs, fuelAlert: v })} />
           </div>
         </Card>
+
+        {user?.role === "admin" && (
+          <Card className="lg:col-span-2">
+            <CardHeader title="ESP32 IoT Hardware Integration" subtitle="Configure microcontroller telemetry ingest" />
+            <div className="p-4 space-y-4 text-sm">
+              <div className="bg-muted/40 rounded-lg p-3 border border-border">
+                <div className="font-semibold text-primary">Microcontroller Telemetry Ingest Guidelines</div>
+                <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                  Your ESP32 IoT boards can publish telemetry logs directly to the Supabase REST endpoint.
+                  Map each ESP32 board to a specific vehicle using its unique <strong>vehicle_id</strong>.
+                </p>
+              </div>
+
+              <div>
+                <span className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Ingest API Endpoint (HTTP PATCH)</span>
+                <div className="p-2.5 bg-muted rounded border border-border font-mono text-xs overflow-x-auto whitespace-nowrap">
+                  https://lorxcxmwmxsesuqyzxih.supabase.co/rest/v1/vehicle_telemetry?vehicle_id=eq.&lt;vehicle_uuid&gt;
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <span className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">JSON Payload Structure</span>
+                  <pre className="p-3 bg-muted rounded border border-border font-mono text-xs text-foreground overflow-x-auto h-48">
+{`{
+  "status": "Moving",
+  "lat": 8.252300,
+  "lng": 77.453200,
+  "speed": 42,
+  "fuel": 85,
+  "temperature": 4.2,
+  "humidity": 65,
+  "engine_on": true,
+  "ignition": true
+}`}
+                  </pre>
+                </div>
+                <div>
+                  <span className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Arduino C++ Code Snippet (HTTPClient)</span>
+                  <pre className="p-3 bg-muted rounded border border-border font-mono text-xs text-foreground overflow-x-auto h-48">
+{`#include <WiFi.h>
+#include <HTTPClient.h>
+
+void postTelemetry() {
+  HTTPClient http;
+  String url = "https://lorxcxmwmxsesuqyzxih.supabase.co/rest/v1/vehicle_telemetry?vehicle_id=eq.VEHICLE_UUID";
+  
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("apikey", "YOUR_SUPABASE_ANON_KEY");
+  http.addHeader("Authorization", "Bearer YOUR_SUPABASE_ANON_KEY");
+  
+  String payload = "{\\"status\\":\\"Moving\\",\\"lat\\":8.2523,\\"lng\\":77.4532,\\"speed\\":45,\\"fuel\\":80,\\"temperature\\":3.8,\\"humidity\\":62}";
+  int httpResponseCode = http.PATCH(payload);
+  http.end();
+}`}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          </Card>
+        )}
       </div>
 
       <div className="mt-4 flex items-center gap-3">

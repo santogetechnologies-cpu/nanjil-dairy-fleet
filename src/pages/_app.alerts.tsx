@@ -1,6 +1,5 @@
-
 import { useState, useEffect } from "react";
-import { ALERTS, type AlertItem } from "@/lib/mock-data";
+import { type AlertItem } from "@/lib/types";
 import { PageHeader } from "@/components/AppLayout";
 import { Card, Badge, Button } from "@/components/ui-kit";
 import { DataTable } from "@/components/DataTable";
@@ -36,7 +35,27 @@ function Page() {
   }
 
   useEffect(() => {
-    loadAlerts();
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
+      loadAlerts();
+
+      channel = supabase
+        .channel('alerts-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => { if (!cancelled) loadAlerts(); })
+        .subscribe();
+    }
+
+    init();
+
+    return () => {
+      cancelled = true;
+      channel?.unsubscribe();
+    };
   }, []);
 
   async function resolve(id: string) {
@@ -50,9 +69,7 @@ function Page() {
     }
   }
 
-  const displayAlerts = alerts.length > 0 ? alerts : ALERTS;
-
-  const data = displayAlerts.filter((a) => {
+  const data = alerts.filter((a) => {
     if (type !== "All" && a.type !== type) return false;
     if (severity !== "All" && a.severity !== severity) return false;
     if (resolved === "Open" && a.resolved) return false;
@@ -62,7 +79,7 @@ function Page() {
 
   return (
     <div>
-      <PageHeader title="Alerts Center" subtitle={`${displayAlerts.filter((a) => !a.resolved).length} open · ${displayAlerts.length} total`} />
+      <PageHeader title="Alerts Center" subtitle={`${alerts.filter((a) => !a.resolved).length} open · ${alerts.length} total`} />
 
       <div className="flex flex-wrap gap-2 mb-3">
         {["All", "Fuel", "Safety", "Temperature", "Vehicle", "Maintenance"].map((t) => (

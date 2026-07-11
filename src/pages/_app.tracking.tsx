@@ -1,6 +1,5 @@
-
 import { useState, useEffect } from "react";
-import { type Vehicle, type VehicleStatus } from "@/lib/mock-data";
+import { type Vehicle, type VehicleStatus } from "@/lib/types";
 import { Card } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { VehicleMap } from "@/components/VehicleMap";
@@ -12,38 +11,61 @@ function TrackingPage() {
   const [q, setQ] = useState("");
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
 
-  useEffect(() => {
-    async function load() {
-      const { data } = await supabase.from('v_vehicles').select('*');
-      if (data) {
-        setVehicles(data.map(v => ({
-          id: v.id,
-          number: v.number,
-          type: v.type,
-          model: v.model,
-          route: v.route || '',
-          insuranceExpiry: v.insurance_expiry || '',
-          lastService: v.last_service || '',
-          nextServiceKm: v.next_service_km || 0,
-          odometer: v.odometer || 0,
-          engineHours: Number(v.engine_hours || 0),
-          status: v.status,
-          location: v.location || '',
-          lat: Number(v.lat || 0),
-          lng: Number(v.lng || 0),
-          speed: v.speed || 0,
-          fuel: v.fuel || 0,
-          temperature: Number(v.temperature || 0),
-          humidity: v.humidity || 0,
-          engineOn: v.engine_on || false,
-          ignition: v.ignition || false,
-          driver: v.driver_name || '',
-          driverId: v.driver_id || '',
-          lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago'
-        })));
-      }
+  async function load() {
+    const { data } = await supabase.from('v_vehicles').select('*');
+    if (data) {
+      setVehicles(data.map(v => ({
+        id: v.id,
+        number: v.number,
+        type: v.type,
+        model: v.model,
+        route: v.route || '',
+        insuranceExpiry: v.insurance_expiry || '',
+        lastService: v.last_service || '',
+        nextServiceKm: v.next_service_km || 0,
+        odometer: v.odometer || 0,
+        engineHours: Number(v.engine_hours || 0),
+        status: v.status,
+        location: v.location || '',
+        lat: Number(v.lat || 0),
+        lng: Number(v.lng || 0),
+        speed: v.speed || 0,
+        fuel: v.fuel || 0,
+        temperature: Number(v.temperature || 0),
+        humidity: v.humidity || 0,
+        engineOn: v.engine_on || false,
+        ignition: v.ignition || false,
+        driver: v.driver_name || '',
+        driverId: v.driver_id || '',
+        lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago'
+      })));
     }
-    load();
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) return;
+
+      load();
+
+      channel = supabase
+        .channel('tracking-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => { if (!cancelled) load(); })
+        .subscribe();
+    }
+
+    init();
+
+    return () => {
+      cancelled = true;
+      channel?.unsubscribe();
+    };
   }, []);
 
   const data = vehicles.filter((v) => {
@@ -54,7 +76,7 @@ function TrackingPage() {
 
   return (
     <div>
-      <PageHeader title="Live Vehicle Tracking" subtitle="Real-time positions across Kanyakumari district" />
+      <PageHeader title="Live Vehicle Tracking" subtitle={`Real-time positions · ${vehicles.length} active`} />
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         <div className="lg:col-span-3 space-y-3">
@@ -100,13 +122,21 @@ function TrackingPage() {
                       v.status === "Idle" ? "bg-warning/15 text-warning-foreground" :
                       v.status === "Parked" ? "bg-muted text-muted-foreground" :
                       "bg-destructive/10 text-destructive"
-                    }`}>{v.status}</span>
+                    }`}>
+                      {v.status}
+                    </span>
                   </div>
-                  <div className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                    <MapPin className="h-3 w-3" /> {v.location} · {v.speed} km/h · {v.fuel}%
+                  <div className="flex items-center justify-between text-xs text-muted-foreground mt-1">
+                    <span>{v.driver || 'No Driver'}</span>
+                    <span className="flex items-center gap-0.5"><MapPin className="h-3 w-3" /> {v.location || 'Unknown'}</span>
                   </div>
                 </div>
               ))}
+              {data.length === 0 && (
+                <div className="p-4 text-center text-xs text-muted-foreground">
+                  No matching vehicles found.
+                </div>
+              )}
             </div>
           </Card>
         </div>

@@ -1,29 +1,91 @@
-
 import { useState, useRef, useEffect } from "react";
 import { PageHeader } from "@/components/AppLayout";
 import { Card, Button } from "@/components/ui-kit";
 import { Sparkles, Send, User, Bot } from "lucide-react";
 import { motion } from "framer-motion";
+import { supabase } from "@/lib/supabase";
 
 interface Msg { role: "user" | "ai"; text: string; time: string }
 
-const RESPONSES: { match: RegExp; reply: string }[] = [
-  { match: /highest fuel|most fuel|fuel consum/i,
-    reply: "Vehicle TN-05-AC-1037 consumed 18% more fuel this month compared to fleet average — most likely due to AC overuse and idling on the Marthandam–Parassala route. Estimated extra spend: ₹ 6,400." },
-  { match: /safety|driver score|risky driver/i,
-    reply: "Drivers Suresh Babu and Vijay Anand have safety scores below 78%. Top events: harsh braking (31 incidents) and overspeed (42 incidents). Recommend a refresher session and route review." },
-  { match: /cold chain|temperature/i,
-    reply: "All cold chain vehicles are within the 2°C – 6°C compliance window. Two minor breaches detected on TN-02-BD-1185 between 14:20 and 14:32 — sensor self-recovered. Compliance rate this week: 96%." },
-  { match: /route|delay/i,
-    reply: "Route Marthandam–Parassala Loop has shown 12-minute average delay over the last 5 days, mostly due to extended stop time at Centre #4. Suggest swapping with Aralvaimozhi vehicle." },
-  { match: /performance|summary|today/i,
-    reply: "Today: 28 vehicles moving, 7 idle, 5 parked. 3 fuel alerts and 2 temperature alerts open. Average safety score 86%. Cold-chain compliance 96%. Maintenance: 4 services due within 30 days." },
-];
+async function getAIResponse(q: string): Promise<string> {
+  const query = q.toLowerCase();
 
-function answer(q: string) {
-  const m = RESPONSES.find((r) => r.match.test(q));
-  if (m) return m.reply;
-  return "I analysed the latest fleet telemetry. Based on current data, no critical anomalies detected. Try asking about fuel consumption, driver safety, cold-chain compliance, route delays or a fleet summary.";
+  try {
+    if (/highest fuel|most fuel|fuel consum/i.test(query)) {
+      const { data: v } = await supabase
+        .from('v_vehicles')
+        .select('number, fuel, route')
+        .order('fuel', { ascending: false })
+        .limit(1);
+
+      if (v && v.length > 0) {
+        return `Based on telemetry, vehicle ${v[0].number} on route "${v[0].route || 'Unassigned'}" currently has the highest fuel level of ${v[0].fuel}%.`;
+      }
+      return "Unable to retrieve fuel records from the database.";
+    }
+
+    if (/safety|driver score|risky driver/i.test(query)) {
+      const { data: d } = await supabase
+        .from('drivers')
+        .select('name, score, rating')
+        .order('score', { ascending: true })
+        .limit(1);
+
+      if (d && d.length > 0) {
+        return `Driver ${d[0].name} has the lowest safety score of ${d[0].score}% (Rating: ${d[0].rating}). Suggest reviewing safety events and guidelines.`;
+      }
+      return "No driver safety records registered in the database.";
+    }
+
+    if (/cold chain|temperature/i.test(query)) {
+      const { data: v } = await supabase
+        .from('v_vehicles')
+        .select('number, temperature')
+        .order('temperature', { ascending: false });
+
+      if (v && v.length > 0) {
+        const violations = v.filter(x => Number(x.temperature) < 2 || Number(x.temperature) > 6);
+        if (violations.length > 0) {
+          return `${violations.length} cold chain vehicles are currently outside the compliant 2°C – 6°C window. Example: ${violations[0].number} (${violations[0].temperature}°C).`;
+        }
+        return "All active cold chain vehicles are within target temperature limits (2°C – 6°C).";
+      }
+      return "No temperature telemetry records found.";
+    }
+
+    if (/route|delay/i.test(query)) {
+      const { data: r } = await supabase
+        .from('collection_routes')
+        .select('name, status')
+        .eq('status', 'Delayed')
+        .limit(2);
+
+      if (r && r.length > 0) {
+        return `Delayed collection routes: ${r.map(x => `"${x.name}"`).join(', ')}. Recommend checking with dispatchers.`;
+      }
+      return "All routes are currently running on time or completed.";
+    }
+
+    if (/performance|summary|today/i.test(query)) {
+      const { data: v } = await supabase.from('v_vehicles').select('status');
+      const { data: a } = await supabase.from('alerts').select('id').eq('resolved', false);
+
+      if (v) {
+        const moving = v.filter(x => x.status === 'Moving').length;
+        const idle = v.filter(x => x.status === 'Idle').length;
+        const parked = v.filter(x => x.status === 'Parked').length;
+        const offline = v.filter(x => x.status === 'Offline').length;
+        const openAlerts = a ? a.length : 0;
+
+        return `Today's Summary: ${moving} moving, ${idle} idle, ${parked} parked, ${offline} offline. There are ${openAlerts} unresolved alerts in the database.`;
+      }
+      return "No active vehicle summaries could be compiled.";
+    }
+
+    return "I analysed the latest database telemetry. No critical anomalies detected. Try asking about 'fuel consumption', 'driver safety', 'cold-chain compliance', 'route delays' or a 'fleet summary'.";
+  } catch (err: any) {
+    return `An error occurred while compiling AI response: ${err?.message || err}`;
+  }
 }
 
 function Page() {
@@ -38,16 +100,17 @@ function Page() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs, thinking]);
 
-  function send(text: string) {
+  async function send(text: string) {
     if (!text.trim()) return;
     const time = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
     setMsgs((m) => [...m, { role: "user", text, time }]);
     setInput("");
     setThinking(true);
-    setTimeout(() => {
-      setMsgs((m) => [...m, { role: "ai", text: answer(text), time }]);
-      setThinking(false);
-    }, 900);
+    
+    const reply = await getAIResponse(text);
+    
+    setMsgs((m) => [...m, { role: "ai", text: reply, time }]);
+    setThinking(false);
   }
 
   const suggestions = [
@@ -98,21 +161,19 @@ function Page() {
           <div className="px-4 pb-2 flex flex-wrap gap-2">
             {suggestions.map((s) => (
               <button key={s} onClick={() => send(s)}
-                className="text-xs px-2.5 py-1.5 rounded-full border border-border hover:bg-muted">
-                <Sparkles className="h-3 w-3 inline mr-1" />{s}
+                className="px-3 py-1.5 text-xs rounded-full border border-border bg-card hover:bg-muted transition-colors">
+                {s}
               </button>
             ))}
           </div>
         )}
 
         <form onSubmit={(e) => { e.preventDefault(); send(input); }}
-          className="border-t border-border p-3 flex gap-2">
+          className="p-3 border-t border-border flex gap-2">
           <input value={input} onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask Nanjil AI…"
-            className="flex-1 h-10 px-3 bg-muted rounded-md outline-none text-sm" />
-          <Button type="submit" disabled={!input.trim() || thinking}>
-            <Send className="h-4 w-4" /> Send
-          </Button>
+            placeholder="Type your question..."
+            className="flex-1 px-3 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring" />
+          <Button><Send className="h-4 w-4" /></Button>
         </form>
       </Card>
     </div>
