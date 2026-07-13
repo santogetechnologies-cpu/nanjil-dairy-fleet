@@ -140,7 +140,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               }}
             />
           </div>
-          <div className="flex-1 md:hidden" />
+          <div className="flex-1" />
           <Link to="/alerts" className="relative p-2 rounded hover:bg-muted" aria-label="Alerts">
             <Bell className="h-5 w-5" />
             {unread > 0 && (
