@@ -2,7 +2,7 @@ import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth, REDIRECT_MAP } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
 import { Truck, Fuel, Thermometer, Gauge, MapPin, Bell, ShieldCheck, Play, LogOut, Activity, Loader2, Calendar, Route } from "lucide-react";
-import { Badge, Button, Card } from "@/components/ui-kit";
+import { Badge, Button, Card, CardHeader } from "@/components/ui-kit";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 
