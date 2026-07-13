@@ -6,7 +6,7 @@ import {
   ResponsiveContainer, LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
 } from "recharts";
 import {
-  ChevronLeft, Fuel, Thermometer, Gauge, Activity, Loader2, X,
+  ChevronLeft, Fuel, Thermometer, Gauge, Activity, Loader2, X, Plus,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
@@ -36,6 +36,12 @@ function VehicleDetailPage() {
   const [showRegisterForm, setShowRegisterForm] = useState(false);
   const [newDriver, setNewDriver] = useState({ name: "", license: "", phone: "" });
 
+  // Document states
+  const [documents, setDocuments] = useState<any[]>([]);
+  const [showAddDoc, setShowAddDoc] = useState(false);
+  const [docForm, setDocForm] = useState({ type: "Insurance", number: "", expiryDate: "" });
+  const [savingDoc, setSavingDoc] = useState(false);
+
   const canManage = user?.role === "admin" || user?.role === "manager";
 
   async function loadDrivers() {
@@ -44,6 +50,47 @@ function VehicleDetailPage() {
       .select('id, name');
     if (data) {
       setDrivers(data);
+    }
+  }
+
+  async function handleAddDocument(e: React.FormEvent) {
+    e.preventDefault();
+    if (!docForm.number.trim() || !docForm.expiryDate || !v) return;
+    setSavingDoc(true);
+
+    try {
+      const { error } = await supabase
+        .from('vehicle_documents')
+        .insert({
+          vehicle_id: v.id,
+          document_type: docForm.type,
+          document_number: docForm.number.trim(),
+          expiry_date: docForm.expiryDate
+        });
+
+      if (error) throw error;
+
+      // Check if expiring in <= 30 days, insert alert
+      const expiryTime = new Date(docForm.expiryDate).getTime();
+      const diffTime = expiryTime - Date.now();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      if (diffDays <= 30) {
+        await supabase.from('alerts').insert({
+          vehicle_id: v.id,
+          type: 'Vehicle',
+          severity: diffDays <= 7 ? 'High' : 'Medium',
+          message: `${docForm.type} (${docForm.number}) is expiring in ${diffDays} days on ${docForm.expiryDate}`,
+          resolved: false
+        });
+      }
+
+      setShowAddDoc(false);
+      setDocForm({ type: "Insurance", number: "", expiryDate: "" });
+      load();
+    } catch (err: any) {
+      alert("Failed to add document: " + err.message);
+    } finally {
+      setSavingDoc(false);
     }
   }
 
@@ -102,6 +149,15 @@ function VehicleDetailPage() {
           };
         }));
       }
+      // 3. Fetch vehicle documents
+      const { data: docData } = await supabase
+        .from('vehicle_documents')
+        .select('*')
+        .eq('vehicle_id', id)
+        .order('expiry_date', { ascending: true });
+      if (docData) {
+        setDocuments(docData);
+      }
     } else {
       setV(null);
     }
@@ -122,6 +178,7 @@ function VehicleDetailPage() {
         .channel(`vehicle-detail-${id}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry', filter: `vehicle_id=eq.${id}` }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'telemetry_history', filter: `vehicle_id=eq.${id}` }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_documents', filter: `vehicle_id=eq.${id}` }, () => { if (!cancelled) load(); })
         .subscribe();
     }
 
@@ -146,14 +203,7 @@ function VehicleDetailPage() {
         .eq('vehicle_id', v.id)
         .eq('is_active', true);
 
-      // 2. Deactivate any existing active assignment for this driver (to prevent double assignment)
-      await supabase
-        .from('vehicle_assignments')
-        .update({ is_active: false, unassigned_at: new Date().toISOString() })
-        .eq('driver_id', selectedDriverId)
-        .eq('is_active', true);
-
-      // 3. Create the new assignment
+      // 2. Create the new assignment
       const { error } = await supabase
         .from('vehicle_assignments')
         .insert({
@@ -394,6 +444,57 @@ function VehicleDetailPage() {
         </div>
       )}
 
+      {showAddDoc && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <Card className="w-full max-w-sm">
+            <CardHeader title="Add Compliance Document" subtitle="Log document without photo upload" />
+            <form onSubmit={handleAddDocument} className="p-4 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Document Type</label>
+                <select 
+                  className="w-full p-2 border border-border bg-card rounded-md text-sm"
+                  value={docForm.type}
+                  onChange={(e) => setDocForm({ ...docForm, type: e.target.value })}
+                  required
+                >
+                  <option value="Insurance">Insurance</option>
+                  <option value="Pollution Certificate">Pollution Certificate (PUC)</option>
+                  <option value="Road Tax">Road Tax</option>
+                  <option value="Fitness Certificate">Fitness Certificate</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Document Number *</label>
+                <input 
+                  type="text"
+                  className="w-full p-2 border border-border bg-transparent rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={docForm.number}
+                  onChange={(e) => setDocForm({ ...docForm, number: e.target.value })}
+                  placeholder="e.g. INS-482023"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Expiry Date *</label>
+                <input 
+                  type="date"
+                  className="w-full p-2 border border-border bg-transparent rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={docForm.expiryDate}
+                  onChange={(e) => setDocForm({ ...docForm, expiryDate: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="outline" onClick={() => { setShowAddDoc(false); setDocForm({ type: "Insurance", number: "", expiryDate: "" }); }} className="flex-1">Cancel</Button>
+                <Button type="submit" className="flex-1" disabled={savingDoc}>
+                  {savingDoc ? <Loader2 className="animate-spin h-4 w-4" /> : "Save"}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat icon={<Gauge className="h-4 w-4" />} label="Current Speed" value={`${v.speed} km/h`} />
         <Stat icon={<Fuel className="h-4 w-4" />} label="Fuel" value={`${v.fuel}%`} />
@@ -409,21 +510,65 @@ function VehicleDetailPage() {
           </div>
         </Card>
 
-        <Card>
-          <CardHeader title="Vehicle Information" />
-          <dl className="px-4 py-3 text-sm grid grid-cols-2 gap-y-3">
-            <Field label="Registration" value={v.number} />
-            <Field label="Model" value={v.model} />
-            <Field label="Driver" value={v.driver || 'No Driver'} />
-            <Field label="Route" value={v.route || 'Unassigned'} />
-            <Field label="Insurance" value={v.insuranceExpiry || 'N/A'} />
-            <Field label="Last Service" value={v.lastService || 'N/A'} />
-            <Field label="Odometer" value={`${v.odometer.toLocaleString()} km`} />
-            <Field label="Engine Hours" value={`${v.engineHours.toLocaleString()} h`} />
-            <Field label="Ignition" value={v.ignition ? "ON" : "OFF"} />
-            <Field label="Next Service" value={`${v.nextServiceKm} km`} />
-          </dl>
-        </Card>
+        <div className="space-y-4">
+          <Card>
+            <CardHeader title="Vehicle Information" />
+            <dl className="px-4 py-3 text-sm grid grid-cols-2 gap-y-3">
+              <Field label="Registration" value={v.number} />
+              <Field label="Model" value={v.model} />
+              <Field label="Driver" value={v.driver || 'No Driver'} />
+              <Field label="Route" value={v.route || 'Unassigned'} />
+              <Field label="Insurance" value={v.insuranceExpiry || 'N/A'} />
+              <Field label="Last Service" value={v.lastService || 'N/A'} />
+              <Field label="Odometer" value={`${v.odometer.toLocaleString()} km`} />
+              <Field label="Engine Hours" value={`${v.engineHours.toLocaleString()} h`} />
+              <Field label="Ignition" value={v.ignition ? "ON" : "OFF"} />
+              <Field label="Next Service" value={`${v.nextServiceKm} km`} />
+            </dl>
+          </Card>
+
+          <Card>
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-sm">Compliance Documents</h3>
+                <p className="text-xs text-muted-foreground">Manual verification logs</p>
+              </div>
+              {canManage && (
+                <Button size="xs" onClick={() => setShowAddDoc(true)} className="flex items-center gap-1">
+                  <Plus className="h-3 w-3" /> Log Document
+                </Button>
+              )}
+            </div>
+            <div className="px-4 py-2 divide-y divide-border">
+              {documents.length === 0 ? (
+                <div className="text-xs text-muted-foreground py-4 text-center">No documents registered.</div>
+              ) : (
+                documents.map((doc) => {
+                  const daysLeft = Math.ceil((new Date(doc.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+                  const isExpiring = daysLeft <= 30;
+                  const isExpired = daysLeft <= 0;
+                  return (
+                    <div key={doc.id} className="py-2.5 flex items-center justify-between text-sm">
+                      <div>
+                        <div className="font-medium text-foreground">{doc.document_type}</div>
+                        <div className="text-[10px] text-muted-foreground font-mono">No: {doc.document_number}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xs text-muted-foreground">{doc.expiry_date}</div>
+                        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full inline-block mt-1 ${
+                          isExpired ? "bg-red-500/10 text-red-500" :
+                          isExpiring ? "bg-amber-500/10 text-amber-500" : "bg-green-500/10 text-green-500"
+                        }`}>
+                          {isExpired ? "Expired" : isExpiring ? `${daysLeft}d left` : "Active"}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </Card>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">

@@ -1,7 +1,7 @@
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth, REDIRECT_MAP } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
-import { Truck, Fuel, Thermometer, Gauge, MapPin, Bell, ShieldCheck, Play, LogOut, Activity } from "lucide-react";
+import { Truck, Fuel, Thermometer, Gauge, MapPin, Bell, ShieldCheck, Play, LogOut, Activity, Loader2, Calendar, Route } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui-kit";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
@@ -16,6 +16,107 @@ function DriverPage() {
   const [activeShift, setActiveShift] = useState<any>(null);
   const [activeSeconds, setActiveSeconds] = useState(0);
   const [shiftHistory, setShiftHistory] = useState<any[]>([]);
+
+  // Fuel logging states
+  const [fuelForm, setFuelForm] = useState({ liters: 0, cost: 0, odometer: 0 });
+  const [submittingFuel, setSubmittingFuel] = useState(false);
+
+  // Pre-Trip Inspection states
+  const [showInspectionModal, setShowInspectionModal] = useState(false);
+  const [inspectionForm, setInspectionForm] = useState({ tyres: false, brakes: false, lights: false, cleanliness: false });
+  const [submittingInspection, setSubmittingInspection] = useState(false);
+
+  // Scheduling & Dispatch states
+  const [schedules, setSchedules] = useState<any[]>([]);
+  const [ongoingTrip, setOngoingTrip] = useState<any>(null);
+  const [endTripForm, setEndTripForm] = useState({ endKm: 0, totalMilk: 0 });
+  const [submittingTrip, setSubmittingTrip] = useState(false);
+  const [assignedVehicles, setAssignedVehicles] = useState<any[]>([]);
+
+  async function handleEndManualTrip(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ongoingTrip || !driver?.id || endTripForm.endKm < (ongoingTrip.start_km || 0) || endTripForm.totalMilk < 0) {
+      alert("Invalid trip logging entries. Ending odometer must be greater than or equal to starting odometer.");
+      return;
+    }
+    setSubmittingTrip(true);
+
+    try {
+      const elapsedMs = Date.now() - new Date(ongoingTrip.created_at || ongoingTrip.date).getTime();
+      const elapsedMins = Math.round(elapsedMs / (1000 * 60));
+      const durationStr = elapsedMins > 60 ? `${Math.floor(elapsedMins / 60)}h ${elapsedMins % 60}m` : `${elapsedMins}m`;
+
+      const startKm = ongoingTrip.start_km || 0;
+      const endKm = endTripForm.endKm;
+      const distance = endKm - startKm;
+
+      // 1. Update trip status
+      const { error: tripErr } = await supabase
+        .from('trips')
+        .update({
+          status: 'Completed',
+          end_km: endKm,
+          total_milk_collected: endTripForm.totalMilk,
+          distance: distance,
+          duration: durationStr
+        })
+        .eq('id', ongoingTrip.id);
+
+      if (tripErr) throw tripErr;
+
+      // 2. Update vehicle odometer
+      if (ongoingTrip.vehicle_id) {
+        await supabase
+          .from('vehicles')
+          .update({ odometer: endKm })
+          .eq('id', ongoingTrip.vehicle_id);
+
+        await supabase
+          .from('vehicle_telemetry')
+          .update({ odometer: endKm })
+          .eq('vehicle_id', ongoingTrip.vehicle_id);
+      }
+
+      alert("Trip completed and logged successfully!");
+      setOngoingTrip(null);
+      load();
+    } catch (err: any) {
+      alert("Failed to complete trip: " + err.message);
+    } finally {
+      setSubmittingTrip(false);
+    }
+  }
+
+  async function handleLogFuelDriver(e: React.FormEvent) {
+    e.preventDefault();
+    if (!vehicle?.id || !driver?.id || fuelForm.liters <= 0 || fuelForm.cost <= 0 || fuelForm.odometer < 0) return;
+    setSubmittingFuel(true);
+
+    try {
+      const { error } = await supabase
+        .from('fuel_purchase_logs')
+        .insert({
+          vehicle_id: vehicle.id,
+          driver_id: driver.id,
+          liters: fuelForm.liters,
+          cost: fuelForm.cost,
+          odometer: fuelForm.odometer
+        });
+
+      if (error) throw error;
+      alert("Fuel refill logged successfully!");
+      setFuelForm({ liters: 0, cost: 0, odometer: 0 });
+    } catch (err: any) {
+      alert("Failed to log fuel: " + err.message);
+    } finally {
+      setSubmittingFuel(false);
+    }
+  }
+
+  function handleSwitchVehicle(vehicleId: string) {
+    localStorage.setItem("activeVehicleId", vehicleId);
+    load();
+  }
 
   async function load() {
     if (!user) return;
@@ -34,37 +135,42 @@ function DriverPage() {
     const resolvedDriver = dData || { id: null, name: user.name, score: 0, rating: "Poor", trips: 0, total_km: 0, events: 0 };
     setDriver(resolvedDriver);
 
-    // Get assigned vehicle via view
-    const { data: vData } = await supabase
+    // Get assigned vehicles via view
+    const { data: vList } = await supabase
       .from('v_vehicles')
       .select('*')
-      .eq('driver_name', resolvedDriver.name)
-      .maybeSingle();
+      .eq('driver_name', resolvedDriver.name);
 
-    const resolvedVehicle = vData ? {
-      id: vData.id,
-      number: vData.number,
-      type: vData.type,
-      model: vData.model,
-      route: vData.route || '',
-      insuranceExpiry: vData.insurance_expiry || '',
-      lastService: vData.last_service || '',
-      nextServiceKm: vData.next_service_km || 0,
-      odometer: vData.odometer || 0,
-      engineHours: Number(vData.engine_hours || 0),
-      status: vData.status,
-      location: vData.location || '',
-      lat: Number(vData.lat || 0),
-      lng: Number(vData.lng || 0),
-      speed: vData.speed || 0,
-      fuel: vData.fuel || 0,
-      temperature: Number(vData.temperature || 0),
-      humidity: vData.humidity || 0,
-      engineOn: vData.engine_on || false,
-      ignition: vData.ignition || false,
-      driver: vData.driver_name || '',
-      driverId: vData.driver_id || '',
-      lastUpdate: vData.last_update ? new Date(vData.last_update).toLocaleTimeString() : 'sec ago'
+    const vehiclesArray = vList || [];
+    setAssignedVehicles(vehiclesArray);
+
+    const savedActiveId = localStorage.getItem("activeVehicleId");
+    const activeV = vehiclesArray.find(x => x.id === savedActiveId) || vehiclesArray[0];
+
+    const resolvedVehicle = activeV ? {
+      id: activeV.id,
+      number: activeV.number,
+      type: activeV.type,
+      model: activeV.model,
+      route: activeV.route || '',
+      insuranceExpiry: activeV.insurance_expiry || '',
+      lastService: activeV.last_service || '',
+      nextServiceKm: activeV.next_service_km || 0,
+      odometer: activeV.odometer || 0,
+      engineHours: Number(activeV.engine_hours || 0),
+      status: activeV.status,
+      location: activeV.location || '',
+      lat: Number(activeV.lat || 0),
+      lng: Number(activeV.lng || 0),
+      speed: activeV.speed || 0,
+      fuel: activeV.fuel || 0,
+      temperature: Number(activeV.temperature || 0),
+      humidity: activeV.humidity || 0,
+      engineOn: activeV.engine_on || false,
+      ignition: activeV.ignition || false,
+      driver: activeV.driver_name || '',
+      driverId: activeV.driver_id || '',
+      lastUpdate: activeV.last_update ? new Date(activeV.last_update).toLocaleTimeString() : 'sec ago'
     } : { 
       id: null,
       number: "Unassigned", 
@@ -79,11 +185,11 @@ function DriverPage() {
     setVehicle(resolvedVehicle);
 
     // Get alerts
-    if (vData?.id) {
+    if (resolvedVehicle.id) {
       const { data: aData } = await supabase
         .from('alerts')
         .select('*')
-        .eq('vehicle_id', vData.id)
+        .eq('vehicle_id', resolvedVehicle.id)
         .limit(4);
 
       if (aData) {
@@ -95,7 +201,11 @@ function DriverPage() {
           time: a.time ? new Date(a.time).toLocaleTimeString() : '1h ago',
           resolved: a.resolved
         })));
+      } else {
+        setAlerts([]);
       }
+    } else {
+      setAlerts([]);
     }
 
     // Get active shift
@@ -123,6 +233,32 @@ function DriverPage() {
       if (history) {
         setShiftHistory(history);
       }
+
+      // Fetch driver schedules
+      const { data: scheds } = await supabase
+        .from('driver_schedules')
+        .select('*, vehicles(number)')
+        .eq('driver_id', resolvedDriver.id)
+        .gte('date', new Date().toISOString().split('T')[0])
+        .order('date', { ascending: true })
+        .limit(10);
+      if (scheds) {
+        setSchedules(scheds);
+      }
+
+      // Fetch ongoing manual trip
+      const { data: activeTrip } = await supabase
+        .from('trips')
+        .select('*, vehicles(number)')
+        .eq('driver_id', resolvedDriver.id)
+        .eq('status', 'Ongoing')
+        .maybeSingle();
+      if (activeTrip) {
+        setOngoingTrip(activeTrip);
+        setEndTripForm({ endKm: (activeTrip.start_km || 0) + 1, totalMilk: 0 });
+      } else {
+        setOngoingTrip(null);
+      }
     }
 
     setLoading(false);
@@ -138,18 +274,14 @@ function DriverPage() {
 
       load();
 
-      // Subscribe to changes on assignments, telemetry, and shifts in real-time
+      // Subscribe to changes on assignments, telemetry, shifts, schedules, and trips in real-time
       channel = supabase
         .channel('driver-portal-realtime')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => {
-          if (!cancelled) load();
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => {
-          if (!cancelled) load();
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_shifts' }, () => {
-          if (!cancelled) load();
-        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_shifts' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_schedules' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => { if (!cancelled) load(); })
         .subscribe();
     }
 
@@ -185,6 +317,54 @@ function DriverPage() {
     );
   }
 
+  async function handleStartShiftWithInspection(e: React.FormEvent) {
+    e.preventDefault();
+    if (!driver?.id) return;
+    setSubmittingInspection(true);
+
+    try {
+      const passed = inspectionForm.tyres && inspectionForm.brakes && inspectionForm.lights && inspectionForm.cleanliness;
+
+      // 1. Log pre-trip inspection
+      const { error: inspError } = await supabase
+        .from('pre_trip_inspections')
+        .insert({
+          driver_id: driver.id,
+          vehicle_id: vehicle?.id || null,
+          tyres_ok: inspectionForm.tyres,
+          brakes_ok: inspectionForm.brakes,
+          lights_ok: inspectionForm.lights,
+          cleanliness_ok: inspectionForm.cleanliness,
+          passed: passed
+        });
+
+      if (inspError) throw inspError;
+
+      // 2. Start shift
+      const { data, error: shiftError } = await supabase
+        .from('driver_shifts')
+        .insert({
+          driver_id: driver.id,
+          vehicle_id: vehicle?.id || null
+        })
+        .select()
+        .maybeSingle();
+
+      if (shiftError) throw shiftError;
+
+      if (data) {
+        setActiveShift(data);
+      }
+      setShowInspectionModal(false);
+      setInspectionForm({ tyres: false, brakes: false, lights: false, cleanliness: false });
+      load();
+    } catch (err: any) {
+      alert("Failed to start shift: " + err.message);
+    } finally {
+      setSubmittingInspection(false);
+    }
+  }
+
   async function handleToggleShift() {
     if (!driver?.id) {
       alert("Error: Your driver account has not been registered in the fleet database yet. Please ask your Admin to assign you to a vehicle first.");
@@ -211,21 +391,8 @@ function DriverPage() {
         load();
       }
     } else {
-      // Start a new shift
-      const { data, error } = await supabase
-        .from('driver_shifts')
-        .insert({
-          driver_id: driver.id,
-          vehicle_id: vehicle.id
-        })
-        .select()
-        .maybeSingle();
-
-      if (error) {
-        alert("Failed to start shift: " + error.message);
-      } else if (data) {
-        setActiveShift(data);
-      }
+      // Show pre-trip checklist modal
+      setShowInspectionModal(true);
     }
   }
 
@@ -248,13 +415,95 @@ function DriverPage() {
           className="p-2 rounded hover:bg-white/10"><LogOut className="h-5 w-5" /></button>
       </header>
 
+      {showInspectionModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <Card className="w-full max-w-sm">
+            <CardHeader title="Pre-Trip Safety Inspection" subtitle="Verify vehicle condition before starting shift" />
+            <form onSubmit={handleStartShiftWithInspection} className="p-4 space-y-4 text-left">
+              <div className="space-y-3">
+                <label className="flex items-center gap-3 p-2.5 bg-card border border-border rounded hover:bg-muted/40 cursor-pointer">
+                  <input 
+                    type="checkbox"
+                    checked={inspectionForm.tyres}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, tyres: e.target.checked })}
+                    className="h-4 w-4 rounded text-primary border-border focus:ring-primary focus:ring-opacity-25"
+                  />
+                  <div>
+                    <div className="text-xs font-semibold">Tyres Condition OK</div>
+                    <div className="text-[10px] text-muted-foreground">Pressure, tread depth, and no visible damage</div>
+                  </div>
+                </label>
+                <label className="flex items-center gap-3 p-2.5 bg-card border border-border rounded hover:bg-muted/40 cursor-pointer">
+                  <input 
+                    type="checkbox"
+                    checked={inspectionForm.brakes}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, brakes: e.target.checked })}
+                    className="h-4 w-4 rounded text-primary border-border focus:ring-primary focus:ring-opacity-25"
+                  />
+                  <div>
+                    <div className="text-xs font-semibold">Brakes Working OK</div>
+                    <div className="text-[10px] text-muted-foreground">Brake pads, responsiveness, and fluid levels</div>
+                  </div>
+                </label>
+                <label className="flex items-center gap-3 p-2.5 bg-card border border-border rounded hover:bg-muted/40 cursor-pointer">
+                  <input 
+                    type="checkbox"
+                    checked={inspectionForm.lights}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, lights: e.target.checked })}
+                    className="h-4 w-4 rounded text-primary border-border focus:ring-primary focus:ring-opacity-25"
+                  />
+                  <div>
+                    <div className="text-xs font-semibold">Lights & Indicators working</div>
+                    <div className="text-[10px] text-muted-foreground">Headlights, indicators, brake lights, and hazards</div>
+                  </div>
+                </label>
+                <label className="flex items-center gap-3 p-2.5 bg-card border border-border rounded hover:bg-muted/40 cursor-pointer">
+                  <input 
+                    type="checkbox"
+                    checked={inspectionForm.cleanliness}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, cleanliness: e.target.checked })}
+                    className="h-4 w-4 rounded text-primary border-border focus:ring-primary focus:ring-opacity-25"
+                  />
+                  <div>
+                    <div className="text-xs font-semibold">Cabin & Cargo Clean</div>
+                    <div className="text-[10px] text-muted-foreground">Free of waste and properly sanitised</div>
+                  </div>
+                </label>
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-border">
+                <Button type="button" variant="outline" onClick={() => { setShowInspectionModal(false); setInspectionForm({ tyres: false, brakes: false, lights: false, cleanliness: false }); }} className="flex-1">Cancel</Button>
+                <Button type="submit" className="flex-1" disabled={submittingInspection}>
+                  {submittingInspection ? <Loader2 className="animate-spin h-4 w-4" /> : "Certify & Start"}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
+
       <div className="px-4 max-w-md mx-auto md:max-w-3xl">
         <div className="mt-4">
           <Card className="overflow-hidden">
             <div className="bg-gradient-to-br from-primary to-[oklch(0.22_0.08_240)] text-primary-foreground p-5">
-              <div className="flex items-center gap-2">
-                <Truck className="h-5 w-5" />
-                <div className="text-xs opacity-80">My Vehicle</div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Truck className="h-5 w-5" />
+                  <div className="text-xs opacity-80">My Vehicle</div>
+                </div>
+                {assignedVehicles.length > 1 && (
+                  <select 
+                    value={vehicle?.id || ""}
+                    onChange={(e) => handleSwitchVehicle(e.target.value)}
+                    className="bg-white/10 text-white border border-white/20 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-white/50"
+                  >
+                    {assignedVehicles.map(v => (
+                      <option key={v.id} value={v.id} className="text-foreground bg-card">
+                        {v.number}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
               <div className="text-2xl font-semibold mt-1">{vehicle.number}</div>
               <div className="text-sm opacity-90">{vehicle.type}</div>
@@ -286,6 +535,63 @@ function DriverPage() {
           </div>
         </Card>
 
+        {ongoingTrip ? (
+          <Card className="mt-4 p-4 border border-primary/30 bg-gradient-to-br from-primary/5 to-card text-left">
+            <div className="flex items-center gap-2 text-primary font-semibold text-sm">
+              <Route className="h-4 w-4" />
+              <span>Active Dispatch Trip</span>
+            </div>
+            <div className="mt-2 text-sm">
+              <span className="font-semibold text-muted-foreground uppercase text-[10px] block">Route Details</span>
+              <span className="font-medium">{ongoingTrip.start} → {ongoingTrip.destination}</span>
+            </div>
+            <div className="mt-2 text-xs text-muted-foreground flex gap-4">
+              <div><strong className="text-foreground">Vehicle:</strong> {ongoingTrip.vehicles?.number || 'Assigned'}</div>
+              <div><strong className="text-foreground">Start Odo:</strong> {ongoingTrip.start_km} km</div>
+            </div>
+            <form onSubmit={handleEndManualTrip} className="mt-4 pt-3 border-t border-border/60 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1">Ending Odometer (km) *</label>
+                  <input 
+                    type="number" 
+                    required
+                    min={ongoingTrip.start_km || 0}
+                    className="w-full p-2 border border-border bg-background rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={endTripForm.endKm || ""}
+                    onChange={(e) => setEndTripForm({ ...endTripForm, endKm: Number(e.target.value) })}
+                    placeholder="e.g. 10300"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1">Milk Collected (Liters) *</label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    required
+                    min={0}
+                    className="w-full p-2 border border-border bg-background rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={endTripForm.totalMilk || ""}
+                    onChange={(e) => setEndTripForm({ ...endTripForm, totalMilk: Number(e.target.value) })}
+                    placeholder="e.g. 1500"
+                  />
+                </div>
+              </div>
+              <Button type="submit" size="sm" className="w-full bg-primary text-primary-foreground font-semibold" disabled={submittingTrip}>
+                {submittingTrip ? <Loader2 className="animate-spin h-3.5 w-3.5 mx-auto" /> : "Complete Trip & Log Data"}
+              </Button>
+            </form>
+          </Card>
+        ) : (
+          <Card className="mt-4 p-4 text-center">
+            <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm font-medium">
+              <Route className="h-4 w-4" />
+              <span>No active dispatches</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Main office will assign routes/dispatches dynamically to your profile.</p>
+          </Card>
+        )}
+
         <div className="grid grid-cols-2 gap-3 mt-4">
           <Card className="p-4">
             <div className="flex items-center gap-2 text-xs text-muted-foreground"><ShieldCheck className="h-4 w-4" /> Safety Score</div>
@@ -298,6 +604,55 @@ function DriverPage() {
             <div className="text-xs text-muted-foreground">{alerts.length} total</div>
           </Card>
         </div>
+
+        <Card className="mt-4 p-4">
+          <div className="flex items-center gap-2">
+            <Fuel className="h-4 w-4 text-primary" />
+            <div className="font-medium text-sm">Log Fuel Refill</div>
+          </div>
+          <form onSubmit={handleLogFuelDriver} className="mt-3 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1 font-sans">Liters *</label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  required
+                  className="w-full p-2 border border-border bg-transparent rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={fuelForm.liters || ""}
+                  onChange={(e) => setFuelForm({ ...fuelForm, liters: Number(e.target.value) })}
+                  placeholder="e.g. 50"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1 font-sans">Cost (INR) *</label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  required
+                  className="w-full p-2 border border-border bg-transparent rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={fuelForm.cost || ""}
+                  onChange={(e) => setFuelForm({ ...fuelForm, cost: Number(e.target.value) })}
+                  placeholder="e.g. 4800"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1 font-sans">Odometer (km) *</label>
+              <input 
+                type="number" 
+                required
+                className="w-full p-2 border border-border bg-transparent rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                value={fuelForm.odometer || ""}
+                onChange={(e) => setFuelForm({ ...fuelForm, odometer: Number(e.target.value) })}
+                placeholder="e.g. 10250"
+              />
+            </div>
+            <Button type="submit" size="sm" className="w-full" disabled={submittingFuel || !vehicle?.id}>
+              {submittingFuel ? <Loader2 className="animate-spin h-3.5 w-3.5 mx-auto" /> : "Save Refuel Log"}
+            </Button>
+          </form>
+        </Card>
 
         <Card className="mt-4">
           <div className="px-4 py-3 border-b border-border font-medium text-sm">Recent Alerts</div>
@@ -345,6 +700,32 @@ function DriverPage() {
               </div>
             </div>
           )}
+        </Card>
+
+        <Card className="mt-4 p-4 text-left">
+          <div className="flex items-center gap-2">
+            <Calendar className="h-4 w-4 text-primary" />
+            <div className="font-medium text-sm">Duty Schedule Calendar</div>
+          </div>
+          <div className="mt-3 divide-y divide-border">
+            {schedules.length === 0 ? (
+              <div className="text-xs text-muted-foreground py-3 text-center">No upcoming scheduled shifts.</div>
+            ) : (
+              schedules.map((s) => (
+                <div key={s.id} className="py-2.5 flex items-center justify-between text-xs">
+                  <div>
+                    <div className="font-semibold text-foreground">{new Date(s.date).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+                    <div className="text-[10px] text-muted-foreground font-mono">Vehicle: {s.vehicles?.number || 'Unassigned'}</div>
+                  </div>
+                  <div>
+                    <span className="px-2 py-0.5 rounded-full font-medium bg-primary/10 text-primary text-[10px]">
+                      {s.shift_type}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </Card>
       </div>
     </div>
