@@ -543,7 +543,9 @@ function DriverPage() {
             </div>
             <div className="mt-2 text-sm">
               <span className="font-semibold text-muted-foreground uppercase text-[10px] block">Route Details</span>
-              <span className="font-medium">{ongoingTrip.start} → {ongoingTrip.destination}</span>
+              <span className="font-medium">
+                {ongoingTrip.destination ? `${ongoingTrip.start} → ${ongoingTrip.destination}` : ongoingTrip.start}
+              </span>
             </div>
             <div className="mt-2 text-xs text-muted-foreground flex gap-4">
               <div><strong className="text-foreground">Vehicle:</strong> {ongoingTrip.vehicles?.number || 'Assigned'}</div>
