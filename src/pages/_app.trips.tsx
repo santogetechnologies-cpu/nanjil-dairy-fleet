@@ -254,7 +254,6 @@ function TripsPage() {
               { key: "destination", label: "To" },
               { key: "startKm", label: "Start Odo", render: (t) => t.startKm !== null ? `${t.startKm} km` : '—' },
               { key: "endKm", label: "End Odo", render: (t) => t.endKm !== null ? `${t.endKm} km` : '—' },
-              { key: "totalMilk", label: "Milk Collected", render: (t) => t.totalMilk > 0 ? `${t.totalMilk} L` : '—' },
               { key: "status", label: "Status", render: (t) => <Badge status={t.status}>{t.status}</Badge> },
               { key: "actions", label: "", render: (t) => (
                 <button onClick={() => setPlayback(t)} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
@@ -275,8 +274,14 @@ function TripsPage() {
             { key: "shift", label: "Shift Type" },
             { key: "actions", label: "", render: (s) => (
               canManage && (
-                <Button size="xs" variant="destructive" onClick={() => handleDeleteSchedule(s.id)}>
-                  <Trash2 className="h-3 w-3" /> Delete
+                <Button 
+                  size="xs" 
+                  variant="destructive" 
+                  onClick={() => handleDeleteSchedule(s.id)}
+                  className="p-1.5 rounded-full"
+                  title="Delete schedule"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               )
             )},
@@ -454,11 +459,7 @@ function TripsPage() {
                 <span className="text-muted-foreground font-medium">Ending Odometer</span>
                 <span>{playback.endKm !== null ? `${playback.endKm} km` : '—'}</span>
               </div>
-              <div className="flex justify-between border-b border-border/60 pb-1.5">
-                <span className="text-muted-foreground font-medium">Milk Collected</span>
-                <span>{playback.totalMilk > 0 ? `${playback.totalMilk} L` : '—'}</span>
-              </div>
-              <div className="flex justify-between border-b border-border/60 pb-1.5">
+               <div className="flex justify-between border-b border-border/60 pb-1.5">
                 <span className="text-muted-foreground font-medium">Distance Traveled</span>
                 <span>{playback.startKm !== null && playback.endKm !== null ? `${playback.endKm - playback.startKm} km` : `${playback.distance} km`}</span>
               </div>
