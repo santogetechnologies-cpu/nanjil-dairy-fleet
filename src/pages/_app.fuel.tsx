@@ -124,6 +124,7 @@ function Page() {
   const totalLitersManual = purchaseLogs.reduce((s, p) => s + p.liters, 0);
   const totalCostManual = purchaseLogs.reduce((s, p) => s + p.cost, 0);
   const avgPricePerLiter = totalLitersManual > 0 ? (totalCostManual / totalLitersManual) : 0;
+  const fuelAlerts = alerts.filter((a) => a.type === 'Fuel');
 
   return (
     <div>
