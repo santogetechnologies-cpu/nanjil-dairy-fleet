@@ -2,7 +2,7 @@ import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth, REDIRECT_MAP } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
 import { Truck, Fuel, Thermometer, Gauge, MapPin, Bell, ShieldCheck, Play, LogOut, Activity, Loader2, Calendar, Route } from "lucide-react";
-import { Badge, Button, Card } from "@/components/ui-kit";
+import { Badge, Button, Card, CardHeader } from "@/components/ui-kit";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 
@@ -543,7 +543,9 @@ function DriverPage() {
             </div>
             <div className="mt-2 text-sm">
               <span className="font-semibold text-muted-foreground uppercase text-[10px] block">Route Details</span>
-              <span className="font-medium">{ongoingTrip.start} → {ongoingTrip.destination}</span>
+              <span className="font-medium">
+                {ongoingTrip.destination ? `${ongoingTrip.start} → ${ongoingTrip.destination}` : ongoingTrip.start}
+              </span>
             </div>
             <div className="mt-2 text-xs text-muted-foreground flex gap-4">
               <div><strong className="text-foreground">Vehicle:</strong> {ongoingTrip.vehicles?.number || 'Assigned'}</div>

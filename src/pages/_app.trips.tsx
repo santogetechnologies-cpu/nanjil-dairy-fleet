@@ -29,51 +29,46 @@ function TripsPage() {
 
   // Dispatch states
   const [showDispatchModal, setShowDispatchModal] = useState(false);
-  const [dispForm, setDispForm] = useState({ driverId: "", vehicleId: "", routeId: "", start: "Main Yard", destination: "Center Point" });
+  const [dispForm, setDispForm] = useState({ driverId: "", vehicleId: "", routeId: "", routeName: "", start: "", destination: "" });
   const [savingDisp, setSavingDisp] = useState(false);
 
   const canManage = user?.role === "admin" || user?.role === "manager";
 
   async function load() {
     const [tRes, vRes, dRes, rRes, sRes] = await Promise.all([
-      supabase.from('trips').select('*').order('date', { ascending: false }),
+      supabase.from('trips').select('*, vehicles(number), drivers(name)').order('date', { ascending: false }),
       supabase.from('vehicles').select('*'),
       supabase.from('drivers').select('*'),
       supabase.from('collection_routes').select('*'),
       supabase.from('driver_schedules').select('*, drivers(name), vehicles(number)').order('date', { ascending: false })
     ]);
 
+    if (tRes.data) {
+      setTrips(tRes.data.map(t => ({
+        id: t.id,
+        vehicle: t.vehicles?.number || 'Unknown',
+        vehicleId: t.vehicle_id,
+        driver: t.drivers?.name || 'Unassigned',
+        driverId: t.driver_id,
+        date: t.date,
+        start: t.start,
+        destination: t.destination,
+        startKm: t.start_km,
+        endKm: t.end_km,
+        totalMilk: Number(t.total_milk_collected || 0),
+        status: t.status
+      })));
+    }
     if (vRes.data) setVehicles(vRes.data);
     if (dRes.data) setDrivers(dRes.data);
     if (rRes.data) setRoutes(rRes.data);
-
-    if (tRes.data) {
-      setTrips(tRes.data.map(t => {
-        const vObj = vRes.data?.find(x => x.id === t.vehicle_id);
-        const dObj = dRes.data?.find(x => x.id === t.driver_id);
-        return {
-          id: t.id,
-          vehicle: vObj ? vObj.number : 'Unknown',
-          driver: dObj ? dObj.name : 'Unassigned',
-          date: t.date,
-          start: t.start,
-          destination: t.destination,
-          distance: Number(t.distance || 0),
-          duration: t.duration || 'N/A',
-          status: t.status,
-          startKm: t.start_km,
-          endKm: t.end_km,
-          totalMilk: Number(t.total_milk_collected || 0)
-        };
-      }));
-    }
-
+    
     if (sRes.data) {
       setSchedules(sRes.data.map(s => ({
         id: s.id,
-        driver: s.drivers?.name || 'Unknown',
-        vehicle: s.vehicles?.number || 'No Vehicle',
         date: s.date,
+        driver: s.drivers?.name || 'Unassigned',
+        vehicle: s.vehicles?.number || 'No Vehicle',
         shift: s.shift_type
       })));
     }
@@ -81,7 +76,8 @@ function TripsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let channelTrips: ReturnType<typeof supabase.channel> | null = null;
+    let channelSchedules: ReturnType<typeof supabase.channel> | null = null;
 
     async function init() {
       const { data: { session } } = await supabase.auth.getSession();
@@ -89,9 +85,13 @@ function TripsPage() {
 
       load();
 
-      channel = supabase
+      channelTrips = supabase
         .channel('trips-realtime')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => { if (!cancelled) load(); })
+        .subscribe();
+
+      channelSchedules = supabase
+        .channel('schedules-realtime')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_schedules' }, () => { if (!cancelled) load(); })
         .subscribe();
     }
@@ -100,7 +100,8 @@ function TripsPage() {
 
     return () => {
       cancelled = true;
-      channel?.unsubscribe();
+      if (channelTrips) supabase.removeChannel(channelTrips);
+      if (channelSchedules) supabase.removeChannel(channelSchedules);
     };
   }, []);
 
@@ -148,7 +149,7 @@ function TripsPage() {
 
   async function handleDispatchTrip(e: React.FormEvent) {
     e.preventDefault();
-    if (!dispForm.driverId || !dispForm.vehicleId || !dispForm.routeId || !dispForm.start.trim() || !dispForm.destination.trim()) return;
+    if (!dispForm.driverId || !dispForm.vehicleId || !dispForm.routeName.trim() || !dispForm.start.trim() || !dispForm.destination.trim()) return;
     setSavingDisp(true);
 
     try {
@@ -156,17 +157,16 @@ function TripsPage() {
       const vObj = vehicles.find(x => x.id === dispForm.vehicleId);
       const startingOdo = vObj ? (vObj.odometer || 0) : 0;
       
-      const selectedRoute = routes.find(x => x.id === dispForm.routeId);
-      const startLoc = selectedRoute ? (selectedRoute.name || dispForm.start) : dispForm.start;
+      const fullStart = `${dispForm.routeName.trim()} · ${dispForm.start.trim()}`;
 
       const { error } = await supabase
         .from('trips')
         .insert({
           vehicle_id: dispForm.vehicleId,
           driver_id: dispForm.driverId,
-          route_id: dispForm.routeId,
+          route_id: null,
           date: new Date().toISOString().split('T')[0],
-          start: startLoc,
+          start: fullStart,
           destination: dispForm.destination.trim(),
           start_km: startingOdo,
           status: 'Ongoing',
@@ -176,7 +176,7 @@ function TripsPage() {
 
       if (error) throw error;
       setShowDispatchModal(false);
-      setDispForm({ driverId: "", vehicleId: "", routeId: "", start: "Main Yard", destination: "Center Point" });
+      setDispForm({ driverId: "", vehicleId: "", routeId: "", routeName: "", start: "", destination: "" });
       load();
     } catch (err: any) {
       alert("Failed to dispatch trip: " + err.message);
@@ -250,8 +250,8 @@ function TripsPage() {
               { key: "vehicle", label: "Vehicle" },
               { key: "driver", label: "Driver" },
               { key: "date", label: "Date" },
-              { key: "start", label: "Start Location" },
-              { key: "destination", label: "Destination" },
+              { key: "start", label: "Route & From" },
+              { key: "destination", label: "To" },
               { key: "startKm", label: "Start Odo", render: (t) => t.startKm !== null ? `${t.startKm} km` : '—' },
               { key: "endKm", label: "End Odo", render: (t) => t.endKm !== null ? `${t.endKm} km` : '—' },
               { key: "totalMilk", label: "Milk Collected", render: (t) => t.totalMilk > 0 ? `${t.totalMilk} L` : '—' },
@@ -315,41 +315,42 @@ function TripsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Select Route *</label>
-                <select 
-                  className="w-full p-2 border border-border bg-card rounded-md text-sm"
-                  value={dispForm.routeId}
-                  onChange={(e) => setDispForm({ ...dispForm, routeId: e.target.value })}
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Route Name *</label>
+                <input 
+                  type="text" 
+                  className="w-full p-2 border border-border bg-transparent rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={dispForm.routeName}
+                  onChange={(e) => setDispForm({ ...dispForm, routeName: e.target.value })}
+                  placeholder="e.g. Route 1"
                   required
-                >
-                  <option value="">Choose route...</option>
-                  {routes.map(r => <option key={r.id} value={r.id}>{r.name} ({r.centres} centres)</option>)}
-                </select>
+                />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Start Location *</label>
+                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">From *</label>
                   <input 
                     type="text" 
                     className="w-full p-2 border border-border bg-transparent rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                     value={dispForm.start}
                     onChange={(e) => setDispForm({ ...dispForm, start: e.target.value })}
+                    placeholder="e.g. Main Yard"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Destination *</label>
+                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">To *</label>
                   <input 
                     type="text" 
                     className="w-full p-2 border border-border bg-transparent rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                     value={dispForm.destination}
                     onChange={(e) => setDispForm({ ...dispForm, destination: e.target.value })}
+                    placeholder="e.g. Center Point"
                     required
                   />
                 </div>
               </div>
               <div className="flex gap-2 pt-2 border-t border-border">
-                <Button type="button" variant="outline" onClick={() => { setShowDispatchModal(false); setDispForm({ driverId: "", vehicleId: "", routeId: "", start: "Main Yard", destination: "Center Point" }); }} className="flex-1">Cancel</Button>
+                <Button type="button" variant="outline" onClick={() => { setShowDispatchModal(false); setDispForm({ driverId: "", vehicleId: "", routeId: "", start: "", destination: "" }); }} className="flex-1">Cancel</Button>
                 <Button type="submit" className="flex-1" disabled={savingDisp}>
                   {savingDisp ? <Loader2 className="animate-spin h-4 w-4" /> : "Dispatch"}
                 </Button>
