@@ -29,13 +29,13 @@ function DriverPage() {
   // Scheduling & Dispatch states
   const [schedules, setSchedules] = useState<any[]>([]);
   const [ongoingTrip, setOngoingTrip] = useState<any>(null);
-  const [endTripForm, setEndTripForm] = useState({ endKm: 0, totalMilk: 0 });
+  const [endTripForm, setEndTripForm] = useState({ endKm: 0 });
   const [submittingTrip, setSubmittingTrip] = useState(false);
   const [assignedVehicles, setAssignedVehicles] = useState<any[]>([]);
 
   async function handleEndManualTrip(e: React.FormEvent) {
     e.preventDefault();
-    if (!ongoingTrip || !driver?.id || endTripForm.endKm < (ongoingTrip.start_km || 0) || endTripForm.totalMilk < 0) {
+    if (!ongoingTrip || !driver?.id || endTripForm.endKm < (ongoingTrip.start_km || 0)) {
       alert("Invalid trip logging entries. Ending odometer must be greater than or equal to starting odometer.");
       return;
     }
@@ -56,7 +56,6 @@ function DriverPage() {
         .update({
           status: 'Completed',
           end_km: endKm,
-          total_milk_collected: endTripForm.totalMilk,
           distance: distance,
           duration: durationStr
         })
@@ -552,32 +551,17 @@ function DriverPage() {
               <div><strong className="text-foreground">Start Odo:</strong> {ongoingTrip.start_km} km</div>
             </div>
             <form onSubmit={handleEndManualTrip} className="mt-4 pt-3 border-t border-border/60 space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1">Ending Odometer (km) *</label>
-                  <input 
-                    type="number" 
-                    required
-                    min={ongoingTrip.start_km || 0}
-                    className="w-full p-2 border border-border bg-background rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-                    value={endTripForm.endKm || ""}
-                    onChange={(e) => setEndTripForm({ ...endTripForm, endKm: Number(e.target.value) })}
-                    placeholder="e.g. 10300"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1">Milk Collected (Liters) *</label>
-                  <input 
-                    type="number" 
-                    step="0.01"
-                    required
-                    min={0}
-                    className="w-full p-2 border border-border bg-background rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-                    value={endTripForm.totalMilk || ""}
-                    onChange={(e) => setEndTripForm({ ...endTripForm, totalMilk: Number(e.target.value) })}
-                    placeholder="e.g. 1500"
-                  />
-                </div>
+              <div>
+                <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1">Ending Odometer (km) *</label>
+                <input 
+                  type="number" 
+                  required
+                  min={ongoingTrip.start_km || 0}
+                  className="w-full p-2 border border-border bg-background rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={endTripForm.endKm || ""}
+                  onChange={(e) => setEndTripForm({ ...endTripForm, endKm: Number(e.target.value) })}
+                  placeholder="e.g. 10300"
+                />
               </div>
               <Button type="submit" size="sm" className="w-full bg-primary text-primary-foreground font-semibold" disabled={submittingTrip}>
                 {submittingTrip ? <Loader2 className="animate-spin h-3.5 w-3.5 mx-auto" /> : "Complete Trip & Log Data"}

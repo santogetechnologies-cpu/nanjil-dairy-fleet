@@ -14,7 +14,6 @@ const NAV = [
   { to: "/tracking", label: "Live Vehicle Tracking", icon: MapPin },
   { to: "/vehicles", label: "Vehicles", icon: Truck },
   { to: "/trips", label: "Trips & Routes", icon: RouteIcon },
-  { to: "/collection-routes", label: "Dairy Collection Routes", icon: MilkOff },
   { to: "/fuel", label: "Fuel Intelligence", icon: Fuel },
   { to: "/safety", label: "Driver Safety", icon: ShieldCheck },
   { to: "/engine", label: "Engine & Ignition", icon: Cog },
