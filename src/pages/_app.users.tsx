@@ -49,6 +49,16 @@ function Page() {
   const [submitError, setSubmitError] = useState("");
   const [toast, setToast] = useState({ show: false, message: "" });
 
+  // Reset password states
+  const [selectedUser, setSelectedUser] = useState<UserRow | null>(null);
+  const [showResetPwd, setShowResetPwd] = useState(false);
+  const [newPwd, setNewPwd] = useState("");
+  const [confirmPwd, setConfirmPwd] = useState("");
+  const [showNewPwd, setShowNewPwd] = useState(false);
+  const [showConfirmPwd, setShowConfirmPwd] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState("");
+
   async function loadUsers() {
     const { data } = await supabase.from('profiles').select('*');
     if (data) {
@@ -216,6 +226,43 @@ function Page() {
     loadUsers();
   }
 
+  async function handleResetPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedUser) return;
+    if (newPwd.length < 8) {
+      setResetError("Password must be at least 8 characters.");
+      return;
+    }
+    if (newPwd !== confirmPwd) {
+      setResetError("Passwords do not match.");
+      return;
+    }
+    setResetting(true);
+    setResetError("");
+
+    try {
+      const { error } = await supabase.rpc("admin_reset_user_password", {
+        user_id: selectedUser.id,
+        new_password: newPwd
+      });
+
+      if (error) throw error;
+
+      setToast({ show: true, message: `Password for ${selectedUser.name} reset successfully.` });
+      setShowResetPwd(false);
+      setNewPwd("");
+      setConfirmPwd("");
+      setShowNewPwd(false);
+      setShowConfirmPwd(false);
+      setSelectedUser(null);
+      setTimeout(() => setToast({ show: false, message: "" }), 3000);
+    } catch (err: any) {
+      setResetError(err.message || "Failed to reset password.");
+    } finally {
+      setResetting(false);
+    }
+  }
+
   async function deleteUser(id: string) {
     if (id === user?.id) {
       alert("You cannot delete your own administrator account.");
@@ -260,6 +307,9 @@ function Page() {
             <div className="flex gap-2">
               <Button size="sm" variant="outline" onClick={() => toggle(u.id)}>
                 {u.status === "Active" ? "Deactivate" : "Activate"}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => { setSelectedUser(u); setShowResetPwd(true); }}>
+                Reset Pwd
               </Button>
               {u.id !== user?.id && (
                 <Button size="sm" variant="destructive" onClick={() => deleteUser(u.id)}>
@@ -374,6 +424,82 @@ function Page() {
                   "Create User"
                 )}
               </Button>
+            </form>
+          </Card>
+        </div>
+      )}
+      {showResetPwd && selectedUser && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => { setShowResetPwd(false); setNewPwd(""); setConfirmPwd(""); setShowNewPwd(false); setShowConfirmPwd(false); }}>
+          <Card className="w-full max-w-sm p-5" onClick={(e: any) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-semibold text-lg">Reset Password</div>
+                <p className="text-xs text-muted-foreground mt-0.5">Resetting password for {selectedUser.name}</p>
+              </div>
+              <button onClick={() => { setShowResetPwd(false); setNewPwd(""); setConfirmPwd(""); setShowNewPwd(false); setShowConfirmPwd(false); }} className="p-1 hover:bg-muted rounded"><X className="h-4 w-4" /></button>
+            </div>
+
+            {resetError && (
+              <div className="mt-3 p-3 bg-destructive/15 text-destructive rounded-md text-xs font-medium border border-destructive/20">
+                {resetError}
+              </div>
+            )}
+
+            <form onSubmit={handleResetPassword} className="mt-4 space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">New Password</label>
+                <div className="relative mt-1">
+                  <input 
+                    required 
+                    type={showNewPwd ? "text" : "password"} 
+                    disabled={resetting}
+                    value={newPwd} 
+                    onChange={(e) => setNewPwd(e.target.value)}
+                    placeholder="Minimum 8 characters"
+                    className="h-10 w-full pl-3 pr-10 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" 
+                  />
+                  <button 
+                    type="button" 
+                    disabled={resetting}
+                    onClick={() => setShowNewPwd(!showNewPwd)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showNewPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Confirm Password</label>
+                <div className="relative mt-1">
+                  <input 
+                    required 
+                    type={showConfirmPwd ? "text" : "password"} 
+                    disabled={resetting}
+                    value={confirmPwd} 
+                    onChange={(e) => setConfirmPwd(e.target.value)}
+                    placeholder="Re-type new password"
+                    className="h-10 w-full pl-3 pr-10 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" 
+                  />
+                  <button 
+                    type="button" 
+                    disabled={resetting}
+                    onClick={() => setShowConfirmPwd(!showConfirmPwd)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showConfirmPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2 border-t border-border">
+                <Button type="button" variant="outline" onClick={() => { setShowResetPwd(false); setNewPwd(""); setConfirmPwd(""); setShowNewPwd(false); setShowConfirmPwd(false); }} disabled={resetting} className="flex-1">
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={resetting || newPwd.length < 8 || newPwd !== confirmPwd} className="flex-1">
+                  {resetting ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : "Reset"}
+                </Button>
+              </div>
             </form>
           </Card>
         </div>
