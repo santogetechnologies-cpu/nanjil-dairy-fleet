@@ -71,7 +71,7 @@ function Page() {
   async function markCompleted(id: string) {
     const { error } = await supabase
       .from('maintenance_records')
-      .update({ status: 'Completed', completed_at: new Date().toISOString() })
+      .update({ status: 'Completed' })
       .eq('id', id);
 
     if (!error) {
