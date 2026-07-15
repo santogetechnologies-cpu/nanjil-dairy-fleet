@@ -60,7 +60,16 @@ function TripsPage() {
       })));
     }
     if (vRes.data) setVehicles(vRes.data);
-    if (dRes.data) setDrivers(dRes.data);
+    if (dRes.data) {
+      const map = new Map<string, any>();
+      for (const d of dRes.data) {
+        const existing = map.get(d.name);
+        if (!existing || (d.profile_id && !existing.profile_id)) {
+          map.set(d.name, d);
+        }
+      }
+      setDrivers(Array.from(map.values()));
+    }
     if (rRes.data) setRoutes(rRes.data);
     
     if (sRes.data) {
