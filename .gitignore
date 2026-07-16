@@ -30,3 +30,18 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Capacitor – Android build artifacts (source is committed, build output is not)
+android/.gradle
+android/app/build
+android/build
+android/local.properties
+
+# Capacitor – iOS Pods & derived data (reinstalled via pod install)
+ios/App/Pods
+ios/App/DerivedData
+ios/.DS_Store
+
+# Environment files with secrets
+.env.production
+.env.local

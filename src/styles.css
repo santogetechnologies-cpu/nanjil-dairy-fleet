@@ -111,3 +111,61 @@
     box-shadow: 0 8px 20px -10px color-mix(in oklab, var(--color-primary) 30%, transparent);
   }
 }
+
+/* ============================================================
+   Mobile / Capacitor – Safe Area & Touch Optimizations
+   ============================================================ */
+
+/* Safe area CSS variables — maps to iOS notch/Dynamic Island/home bar */
+:root {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+}
+
+/* Prevent rubber-band overscroll on iOS WebView */
+html, body {
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Remove 300ms tap delay on mobile browsers */
+* {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Smooth native-feeling scrolling within scroll containers */
+.overflow-auto,
+.overflow-y-auto,
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Minimum touch targets (44x44 per Apple HIG / Material Design) */
+button, a, [role="button"] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Padding for home indicator (iPhone X+) at the bottom of full-height views */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 16px);
+}
+
+/* Safe top area for status bar on Capacitor */
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* Prevent text zoom on input focus in iOS Safari */
+input, select, textarea {
+  font-size: 16px;
+}
+
+/* Disable user-select on UI chrome for native feel */
+nav, header, aside {
+  user-select: none;
+  -webkit-user-select: none;
+}
