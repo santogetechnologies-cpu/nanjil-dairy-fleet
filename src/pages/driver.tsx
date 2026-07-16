@@ -1,14 +1,30 @@
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth, REDIRECT_MAP } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
-import { Truck, Fuel, Thermometer, Gauge, MapPin, Bell, ShieldCheck, Play, LogOut, Activity, Loader2, Calendar, Route } from "lucide-react";
-import { Badge, Button, Card, CardHeader } from "@/components/ui-kit";
+import {
+  Truck, Fuel, Thermometer, Gauge, MapPin, Bell, ShieldCheck, Play,
+  LogOut, Activity, Loader2, Calendar, Route, Home, StopCircle,
+  CheckCircle2, ChevronRight, Droplets,
+} from "lucide-react";
+import { Badge } from "@/components/ui-kit";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
+
+/* ─── Types ─── */
+type TabId = "home" | "trip" | "fuel" | "alerts" | "schedule";
+
+const TABS: { id: TabId; label: string; icon: typeof Home }[] = [
+  { id: "home",     label: "Home",     icon: Home },
+  { id: "trip",     label: "Trip",     icon: Route },
+  { id: "fuel",     label: "Fuel",     icon: Fuel },
+  { id: "alerts",   label: "Alerts",   icon: Bell },
+  { id: "schedule", label: "Schedule", icon: Calendar },
+];
 
 function DriverPage() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
+  const [activeTab, setActiveTab] = useState<TabId>("home");
   const [driver, setDriver] = useState<any>(null);
   const [vehicle, setVehicle] = useState<any>(null);
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -23,7 +39,9 @@ function DriverPage() {
 
   // Pre-Trip Inspection states
   const [showInspectionModal, setShowInspectionModal] = useState(false);
-  const [inspectionForm, setInspectionForm] = useState({ tyres: false, brakes: false, lights: false, cleanliness: false });
+  const [inspectionForm, setInspectionForm] = useState({
+    tyres: false, brakes: false, lights: false, cleanliness: false,
+  });
   const [submittingInspection, setSubmittingInspection] = useState(false);
 
   // Scheduling & Dispatch states
@@ -36,41 +54,27 @@ function DriverPage() {
   async function handleEndManualTrip(e: React.FormEvent) {
     e.preventDefault();
     if (!ongoingTrip || !driver?.id || endTripForm.endKm < (ongoingTrip.start_km || 0)) {
-      alert("Invalid trip logging entries. Ending odometer must be greater than or equal to starting odometer.");
+      alert("Invalid trip logging entries. Ending odometer must be >= starting odometer.");
       return;
     }
     setSubmittingTrip(true);
-
     try {
       const elapsedMs = Date.now() - new Date(ongoingTrip.created_at || ongoingTrip.date).getTime();
       const elapsedMins = Math.round(elapsedMs / (1000 * 60));
       const durationStr = elapsedMins > 60 ? `${Math.floor(elapsedMins / 60)}h ${elapsedMins % 60}m` : `${elapsedMins}m`;
-
       const startKm = ongoingTrip.start_km || 0;
       const endKm = endTripForm.endKm;
       const distance = endKm - startKm;
 
-      // 1. Update trip status
       const { error: tripErr } = await supabase
         .from('trips')
-        .update({
-          status: 'Completed',
-          end_km: endKm,
-          distance: distance,
-          duration: durationStr
-        })
+        .update({ status: 'Completed', end_km: endKm, distance, duration: durationStr })
         .eq('id', ongoingTrip.id);
-
       if (tripErr) throw tripErr;
 
-      // 2. Update vehicle odometer
       if (ongoingTrip.vehicle_id) {
-        await supabase
-          .from('vehicles')
-          .update({ odometer: endKm })
-          .eq('id', ongoingTrip.vehicle_id);
+        await supabase.from('vehicles').update({ odometer: endKm }).eq('id', ongoingTrip.vehicle_id);
       }
-
       alert("Trip completed and logged successfully!");
       setOngoingTrip(null);
       load();
@@ -85,18 +89,14 @@ function DriverPage() {
     e.preventDefault();
     if (!vehicle?.id || !driver?.id || fuelForm.liters <= 0 || fuelForm.cost <= 0 || fuelForm.odometer < 0) return;
     setSubmittingFuel(true);
-
     try {
-      const { error } = await supabase
-        .from('fuel_purchase_logs')
-        .insert({
-          vehicle_id: vehicle.id,
-          driver_id: driver.id,
-          liters: fuelForm.liters,
-          cost: fuelForm.cost,
-          odometer: fuelForm.odometer
-        });
-
+      const { error } = await supabase.from('fuel_purchase_logs').insert({
+        vehicle_id: vehicle.id,
+        driver_id: driver.id,
+        liters: fuelForm.liters,
+        cost: fuelForm.cost,
+        odometer: fuelForm.odometer,
+      });
       if (error) throw error;
       alert("Fuel refill logged successfully!");
       setFuelForm({ liters: 0, cost: 0, odometer: 0 });
@@ -116,185 +116,99 @@ function DriverPage() {
     let origin = "";
     let destination = "";
     let query = "";
-
     if (ongoingTrip) {
-      // If we saved routeName · From in start, let's extract the "From" part (after the '·')
       const startParts = (ongoingTrip.start || "").split(" · ");
       origin = startParts.length > 1 ? startParts[1] : startParts[0];
       destination = ongoingTrip.destination || "";
     } else if (vehicle?.route && vehicle.route !== "No route assigned") {
-      // Try to parse route, e.g. "Nagercoil to Kanyakumari" or "Nagercoil → Kanyakumari"
       const routeStr = vehicle.route;
-      const separators = [" to ", " TO ", " -> ", " → ", " · "];
-      let foundSplit = false;
-      
-      for (const sep of separators) {
+      for (const sep of [" to ", " TO ", " -> ", " → ", " · "]) {
         if (routeStr.includes(sep)) {
           const parts = routeStr.split(sep);
           origin = parts[0].trim();
           destination = parts[1].trim();
-          foundSplit = true;
           break;
         }
       }
-      
-      if (!foundSplit) {
-        query = routeStr;
-      }
+      if (!origin) query = routeStr;
     }
-
     let url = "";
     if (origin && destination) {
       url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}`;
     } else if (query || vehicle?.route) {
       url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query || vehicle.route)}`;
     }
-
-    if (url) {
-      window.open(url, "_blank");
-    } else {
-      alert("No route details available to view.");
-    }
+    if (url) window.open(url, "_blank");
+    else alert("No route details available to view.");
   }
 
   async function load() {
     if (!user) return;
-    
-    // Guard: only query if a valid session exists to prevent 401s during HMR/load race conditions
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
-    
-    // Get driver record mapping to current login session ID
-    const { data: dData } = await supabase
-      .from('drivers')
-      .select('*')
-      .eq('profile_id', session.user.id)
-      .maybeSingle();
 
+    const { data: dData } = await supabase
+      .from('drivers').select('*').eq('profile_id', session.user.id).maybeSingle();
     const resolvedDriver = dData || { id: null, name: user.name, score: 0, rating: "Poor", trips: 0, total_km: 0, events: 0 };
     setDriver(resolvedDriver);
 
-    // Get assigned vehicles via view
-    const { data: vList } = await supabase
-      .from('v_vehicles')
-      .select('*')
-      .eq('driver_name', resolvedDriver.name);
-
+    const { data: vList } = await supabase.from('v_vehicles').select('*').eq('driver_name', resolvedDriver.name);
     const vehiclesArray = vList || [];
     setAssignedVehicles(vehiclesArray);
 
     const savedActiveId = localStorage.getItem("activeVehicleId");
-    const activeV = vehiclesArray.find(x => x.id === savedActiveId) || vehiclesArray[0];
+    const activeV = vehiclesArray.find((x: any) => x.id === savedActiveId) || vehiclesArray[0];
 
     const resolvedVehicle = activeV ? {
-      id: activeV.id,
-      number: activeV.number,
-      type: activeV.type,
-      model: activeV.model,
-      route: activeV.route || '',
-      insuranceExpiry: activeV.insurance_expiry || '',
-      lastService: activeV.last_service || '',
-      nextServiceKm: activeV.next_service_km || 0,
-      odometer: activeV.odometer || 0,
-      engineHours: Number(activeV.engine_hours || 0),
-      status: activeV.status,
-      location: activeV.location || '',
-      lat: Number(activeV.lat || 0),
-      lng: Number(activeV.lng || 0),
-      speed: activeV.speed || 0,
-      fuel: activeV.fuel || 0,
-      temperature: Number(activeV.temperature || 0),
-      humidity: activeV.humidity || 0,
-      engineOn: activeV.engine_on || false,
-      ignition: activeV.ignition || false,
-      driver: activeV.driver_name || '',
-      driverId: activeV.driver_id || '',
-      lastUpdate: activeV.last_update ? new Date(activeV.last_update).toLocaleTimeString() : 'sec ago'
-    } : { 
-      id: null,
-      number: "Unassigned", 
-      type: "No Assigned Vehicle", 
-      status: "Offline", 
-      fuel: 0, 
-      speed: 0, 
-      temperature: 0, 
-      engineOn: false, 
-      route: "No route assigned" 
+      id: activeV.id, number: activeV.number, type: activeV.type, model: activeV.model,
+      route: activeV.route || '', insuranceExpiry: activeV.insurance_expiry || '',
+      lastService: activeV.last_service || '', nextServiceKm: activeV.next_service_km || 0,
+      odometer: activeV.odometer || 0, engineHours: Number(activeV.engine_hours || 0),
+      status: activeV.status, location: activeV.location || '',
+      lat: Number(activeV.lat || 0), lng: Number(activeV.lng || 0),
+      speed: activeV.speed || 0, fuel: activeV.fuel || 0,
+      temperature: Number(activeV.temperature || 0), humidity: activeV.humidity || 0,
+      engineOn: activeV.engine_on || false, ignition: activeV.ignition || false,
+      driver: activeV.driver_name || '', driverId: activeV.driver_id || '',
+      lastUpdate: activeV.last_update ? new Date(activeV.last_update).toLocaleTimeString() : 'sec ago',
+    } : {
+      id: null, number: "Unassigned", type: "No Assigned Vehicle",
+      status: "Offline", fuel: 0, speed: 0, temperature: 0, engineOn: false, route: "No route assigned",
     };
     setVehicle(resolvedVehicle);
 
-    // Get alerts
     if (resolvedVehicle.id) {
       const { data: aData } = await supabase
-        .from('alerts')
-        .select('*')
-        .eq('vehicle_id', resolvedVehicle.id)
-        .limit(4);
-
-      if (aData) {
-        setAlerts(aData.map(a => ({
-          id: a.id,
-          severity: a.severity,
-          message: a.message,
-          type: a.type,
-          time: a.time ? new Date(a.time).toLocaleTimeString() : '1h ago',
-          resolved: a.resolved
-        })));
-      } else {
-        setAlerts([]);
-      }
+        .from('alerts').select('*').eq('vehicle_id', resolvedVehicle.id).limit(4);
+      setAlerts(aData ? aData.map((a: any) => ({
+        id: a.id, severity: a.severity, message: a.message, type: a.type,
+        time: a.time ? new Date(a.time).toLocaleTimeString() : '1h ago', resolved: a.resolved,
+      })) : []);
     } else {
       setAlerts([]);
     }
 
-    // Get active shift
     if (resolvedDriver.id) {
       const { data: activeShiftData } = await supabase
-        .from('driver_shifts')
-        .select('*')
-        .eq('driver_id', resolvedDriver.id)
-        .is('ended_at', null)
-        .maybeSingle();
+        .from('driver_shifts').select('*').eq('driver_id', resolvedDriver.id).is('ended_at', null).maybeSingle();
+      if (activeShiftData) setActiveShift(activeShiftData);
 
-      if (activeShiftData) {
-        setActiveShift(activeShiftData);
-      }
-
-      // Get shift history
       const { data: history } = await supabase
-        .from('driver_shifts')
-        .select('*')
-        .eq('driver_id', resolvedDriver.id)
-        .is('ended_at', null)
-        .order('started_at', { ascending: false })
-        .limit(5);
+        .from('driver_shifts').select('*').eq('driver_id', resolvedDriver.id)
+        .is('ended_at', null).order('started_at', { ascending: false }).limit(5);
+      if (history) setShiftHistory(history);
 
-      if (history) {
-        setShiftHistory(history);
-      }
-
-      // Fetch driver schedules
       const { data: scheds } = await supabase
-        .from('driver_schedules')
-        .select('*, vehicles(number)')
-        .eq('driver_id', resolvedDriver.id)
-        .gte('date', new Date().toISOString().split('T')[0])
-        .order('date', { ascending: true })
-        .limit(10);
-      if (scheds) {
-        setSchedules(scheds);
-      }
+        .from('driver_schedules').select('*, vehicles(number)').eq('driver_id', resolvedDriver.id)
+        .gte('date', new Date().toISOString().split('T')[0]).order('date', { ascending: true }).limit(10);
+      if (scheds) setSchedules(scheds);
 
-      // Fetch ongoing manual trip
       const { data: activeTrip } = await supabase
-        .from('trips')
-        .select('*, vehicles(number)')
-        .eq('driver_id', resolvedDriver.id)
-        .eq('status', 'Ongoing')
-        .maybeSingle();
+        .from('trips').select('*, vehicles(number)').eq('driver_id', resolvedDriver.id)
+        .eq('status', 'Ongoing').maybeSingle();
       if (activeTrip) {
         setOngoingTrip(activeTrip);
-        setEndTripForm({ endKm: (activeTrip.start_km || 0) + 1, totalMilk: 0 });
+        setEndTripForm({ endKm: (activeTrip.start_km || 0) + 1 });
       } else {
         setOngoingTrip(null);
       }
@@ -306,14 +220,10 @@ function DriverPage() {
   useEffect(() => {
     let cancelled = false;
     let channel: ReturnType<typeof supabase.channel> | null = null;
-
     async function init() {
       const { data: { session } } = await supabase.auth.getSession();
       if (cancelled || !session) return;
-
       load();
-
-      // Subscribe to changes on assignments, telemetry, shifts, schedules, and trips in real-time
       channel = supabase
         .channel('driver-portal-realtime')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => { if (!cancelled) load(); })
@@ -323,21 +233,12 @@ function DriverPage() {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => { if (!cancelled) load(); })
         .subscribe();
     }
-
     init();
-
-    return () => {
-      cancelled = true;
-      channel?.unsubscribe();
-    };
+    return () => { cancelled = true; channel?.unsubscribe(); };
   }, [user]);
 
-  // Live timer tick
   useEffect(() => {
-    if (!activeShift) {
-      setActiveSeconds(0);
-      return;
-    }
+    if (!activeShift) { setActiveSeconds(0); return; }
     const interval = setInterval(() => {
       const elapsed = Math.floor((Date.now() - new Date(activeShift.started_at).getTime()) / 1000);
       setActiveSeconds(elapsed > 0 ? elapsed : 0);
@@ -345,55 +246,23 @@ function DriverPage() {
     return () => clearInterval(interval);
   }, [activeShift]);
 
-  if (!user) return <Navigate to="/login" />;
-  if (REDIRECT_MAP[user.role] !== "/driver") return <Navigate to={REDIRECT_MAP[user.role]} />;
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-lg font-medium">Loading driver portal...</div>
-      </div>
-    );
-  }
-
   async function handleStartShiftWithInspection(e: React.FormEvent) {
     e.preventDefault();
     if (!driver?.id) return;
     setSubmittingInspection(true);
-
     try {
       const passed = inspectionForm.tyres && inspectionForm.brakes && inspectionForm.lights && inspectionForm.cleanliness;
-
-      // 1. Log pre-trip inspection
-      const { error: inspError } = await supabase
-        .from('pre_trip_inspections')
-        .insert({
-          driver_id: driver.id,
-          vehicle_id: vehicle?.id || null,
-          tyres_ok: inspectionForm.tyres,
-          brakes_ok: inspectionForm.brakes,
-          lights_ok: inspectionForm.lights,
-          cleanliness_ok: inspectionForm.cleanliness,
-          passed: passed
-        });
-
+      const { error: inspError } = await supabase.from('pre_trip_inspections').insert({
+        driver_id: driver.id, vehicle_id: vehicle?.id || null,
+        tyres_ok: inspectionForm.tyres, brakes_ok: inspectionForm.brakes,
+        lights_ok: inspectionForm.lights, cleanliness_ok: inspectionForm.cleanliness, passed,
+      });
       if (inspError) throw inspError;
 
-      // 2. Start shift
-      const { data, error: shiftError } = await supabase
-        .from('driver_shifts')
-        .insert({
-          driver_id: driver.id,
-          vehicle_id: vehicle?.id || null
-        })
-        .select()
-        .maybeSingle();
-
+      const { data, error: shiftError } = await supabase.from('driver_shifts')
+        .insert({ driver_id: driver.id, vehicle_id: vehicle?.id || null }).select().maybeSingle();
       if (shiftError) throw shiftError;
-
-      if (data) {
-        setActiveShift(data);
-      }
+      if (data) setActiveShift(data);
       setShowInspectionModal(false);
       setInspectionForm({ tyres: false, brakes: false, lights: false, cleanliness: false });
       load();
@@ -406,31 +275,18 @@ function DriverPage() {
 
   async function handleToggleShift() {
     if (!driver?.id) {
-      alert("Error: Your driver account has not been registered in the fleet database yet. Please ask your Admin to assign you to a vehicle first.");
+      alert("Error: Your driver account has not been registered. Please ask your Admin to assign you to a vehicle first.");
       return;
     }
-
     if (activeShift) {
-      // End current shift
       const nowStr = new Date().toISOString();
       const elapsedHours = activeSeconds / 3600;
-      
-      const { error } = await supabase
-        .from('driver_shifts')
-        .update({
-          ended_at: nowStr,
-          active_hours: Number(elapsedHours.toFixed(2))
-        })
+      const { error } = await supabase.from('driver_shifts')
+        .update({ ended_at: nowStr, active_hours: Number(elapsedHours.toFixed(2)) })
         .eq('id', activeShift.id);
-
-      if (error) {
-        alert("Failed to end shift: " + error.message);
-      } else {
-        setActiveShift(null);
-        load();
-      }
+      if (error) alert("Failed to end shift: " + error.message);
+      else { setActiveShift(null); load(); }
     } else {
-      // Show pre-trip checklist modal
       setShowInspectionModal(true);
     }
   }
@@ -439,231 +295,306 @@ function DriverPage() {
     const h = Math.floor(secs / 3600).toString().padStart(2, '0');
     const m = Math.floor((secs % 3600) / 60).toString().padStart(2, '0');
     const s = (secs % 60).toString().padStart(2, '0');
-    return `${h}h ${m}m ${s}s`;
+    return `${h}:${m}:${s}`;
   };
 
-  return (
-    <div className="min-h-screen bg-background pb-12">
-      <header className="bg-primary text-primary-foreground px-5 py-4 flex items-center gap-3 shadow">
-        <div className="bg-white rounded-md p-1.5"><Logo className="h-7" /></div>
-        <div className="flex-1 leading-tight">
-          <div className="text-xs opacity-80">Welcome back</div>
-          <div className="font-semibold">{user.name}</div>
+  if (!user) return <Navigate to="/login" />;
+  if (REDIRECT_MAP[user.role] !== "/driver") return <Navigate to={REDIRECT_MAP[user.role]} />;
+
+  if (loading) {
+    return (
+      <div
+        className="min-h-screen flex flex-col items-center justify-center gap-4"
+        style={{ background: "linear-gradient(160deg, oklch(0.14 0.06 258) 0%, oklch(0.20 0.09 265) 100%)" }}
+      >
+        <div className="bg-white/10 rounded-2xl p-4">
+          <Logo className="h-12" />
         </div>
-        <button onClick={() => { logout(); nav("/login"); }}
-          className="p-2 rounded hover:bg-white/10"><LogOut className="h-5 w-5" /></button>
-      </header>
+        <Loader2 className="h-6 w-6 text-white animate-spin" />
+        <p className="text-white/60 text-sm">Loading driver portal…</p>
+      </div>
+    );
+  }
 
-      {showInspectionModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <Card className="w-full max-w-sm">
-            <CardHeader title="Pre-Trip Safety Inspection" subtitle="Verify vehicle condition before starting shift" />
-            <form onSubmit={handleStartShiftWithInspection} className="p-4 space-y-4 text-left">
-              <div className="space-y-3">
-                <label className="flex items-center gap-3 p-2.5 bg-card border border-border rounded hover:bg-muted/40 cursor-pointer">
-                  <input 
-                    type="checkbox"
-                    checked={inspectionForm.tyres}
-                    onChange={(e) => setInspectionForm({ ...inspectionForm, tyres: e.target.checked })}
-                    className="h-4 w-4 rounded text-primary border-border focus:ring-primary focus:ring-opacity-25"
-                  />
-                  <div>
-                    <div className="text-xs font-semibold">Tyres Condition OK</div>
-                    <div className="text-[10px] text-muted-foreground">Pressure, tread depth, and no visible damage</div>
-                  </div>
-                </label>
-                <label className="flex items-center gap-3 p-2.5 bg-card border border-border rounded hover:bg-muted/40 cursor-pointer">
-                  <input 
-                    type="checkbox"
-                    checked={inspectionForm.brakes}
-                    onChange={(e) => setInspectionForm({ ...inspectionForm, brakes: e.target.checked })}
-                    className="h-4 w-4 rounded text-primary border-border focus:ring-primary focus:ring-opacity-25"
-                  />
-                  <div>
-                    <div className="text-xs font-semibold">Brakes Working OK</div>
-                    <div className="text-[10px] text-muted-foreground">Brake pads, responsiveness, and fluid levels</div>
-                  </div>
-                </label>
-                <label className="flex items-center gap-3 p-2.5 bg-card border border-border rounded hover:bg-muted/40 cursor-pointer">
-                  <input 
-                    type="checkbox"
-                    checked={inspectionForm.lights}
-                    onChange={(e) => setInspectionForm({ ...inspectionForm, lights: e.target.checked })}
-                    className="h-4 w-4 rounded text-primary border-border focus:ring-primary focus:ring-opacity-25"
-                  />
-                  <div>
-                    <div className="text-xs font-semibold">Lights & Indicators working</div>
-                    <div className="text-[10px] text-muted-foreground">Headlights, indicators, brake lights, and hazards</div>
-                  </div>
-                </label>
-                <label className="flex items-center gap-3 p-2.5 bg-card border border-border rounded hover:bg-muted/40 cursor-pointer">
-                  <input 
-                    type="checkbox"
-                    checked={inspectionForm.cleanliness}
-                    onChange={(e) => setInspectionForm({ ...inspectionForm, cleanliness: e.target.checked })}
-                    className="h-4 w-4 rounded text-primary border-border focus:ring-primary focus:ring-opacity-25"
-                  />
-                  <div>
-                    <div className="text-xs font-semibold">Cabin & Cargo Clean</div>
-                    <div className="text-[10px] text-muted-foreground">Free of waste and properly sanitised</div>
-                  </div>
-                </label>
-              </div>
+  const openAlerts = alerts.filter((a) => !a.resolved).length;
 
-              <div className="flex gap-2 pt-2 border-t border-border">
-                <Button type="button" variant="outline" onClick={() => { setShowInspectionModal(false); setInspectionForm({ tyres: false, brakes: false, lights: false, cleanliness: false }); }} className="flex-1">Cancel</Button>
-                <Button type="submit" className="flex-1" disabled={submittingInspection}>
-                  {submittingInspection ? <Loader2 className="animate-spin h-4 w-4" /> : "Certify & Start"}
-                </Button>
-              </div>
-            </form>
-          </Card>
-        </div>
-      )}
+  /* ─── TABS ─── */
+  function renderTab() {
+    switch (activeTab) {
+      case "home":    return <HomeTab />;
+      case "trip":    return <TripTab />;
+      case "fuel":    return <FuelTab />;
+      case "alerts":  return <AlertsTab />;
+      case "schedule":return <ScheduleTab />;
+    }
+  }
 
-      <div className="px-4 max-w-md mx-auto md:max-w-3xl">
-        <div className="mt-4">
-          <Card className="overflow-hidden">
-            <div className="bg-gradient-to-br from-primary to-[oklch(0.22_0.08_240)] text-primary-foreground p-5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Truck className="h-5 w-5" />
-                  <div className="text-xs opacity-80">My Vehicle</div>
-                </div>
-                {assignedVehicles.length > 1 && (
-                  <select 
-                    value={vehicle?.id || ""}
-                    onChange={(e) => handleSwitchVehicle(e.target.value)}
-                    className="bg-white/10 text-white border border-white/20 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-white/50"
-                  >
-                    {assignedVehicles.map(v => (
-                      <option key={v.id} value={v.id} className="text-foreground bg-card">
-                        {v.number}
-                      </option>
-                    ))}
-                  </select>
-                )}
+  /* ─────────────── HOME TAB ─────────────── */
+  function HomeTab() {
+    return (
+      <div className="space-y-4">
+        {/* Vehicle card */}
+        <div
+          className="rounded-2xl overflow-hidden"
+          style={{
+            background: "linear-gradient(135deg, oklch(0.38 0.20 264) 0%, oklch(0.28 0.14 255) 100%)",
+            boxShadow: "0 8px 32px oklch(0.38 0.20 264 / 0.30)",
+          }}
+        >
+          <div className="px-5 pt-5 pb-4">
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-2">
+                <Truck className="h-4 w-4 text-white/70" />
+                <span className="text-white/70 text-xs font-medium">My Vehicle</span>
               </div>
-              <div className="text-2xl font-semibold mt-1">{vehicle.number}</div>
-              <div className="text-sm opacity-90">{vehicle.type}</div>
-              <div className="mt-3"><Badge status={vehicle.status}>{vehicle.status}</Badge></div>
+              {assignedVehicles.length > 1 && (
+                <select
+                  value={vehicle?.id || ""}
+                  onChange={(e) => handleSwitchVehicle(e.target.value)}
+                  className="bg-white/15 text-white text-xs border border-white/20 rounded-lg px-2 py-1 focus:outline-none"
+                >
+                  {assignedVehicles.map((v: any) => (
+                    <option key={v.id} value={v.id} className="text-foreground bg-card">{v.number}</option>
+                  ))}
+                </select>
+              )}
             </div>
-            <div className="p-4 grid grid-cols-2 gap-3 text-sm">
-              <Stat icon={<Fuel className="h-4 w-4" />} label="Fuel" value={`${vehicle.fuel}%`} />
-              <Stat icon={<Gauge className="h-4 w-4" />} label="Speed" value={`${vehicle.speed} km/h`} />
-              <Stat icon={<Thermometer className="h-4 w-4" />} label="Temp" value={`${vehicle.temperature}°C`} />
-              <Stat icon={<Activity className="h-4 w-4" />} label="Engine" value={vehicle.engineOn ? "ON" : "OFF"} />
+            <div className="text-white text-2xl font-bold tracking-tight">{vehicle.number}</div>
+            <div className="text-white/60 text-sm mt-0.5">{vehicle.type} {vehicle.model ? `· ${vehicle.model}` : ''}</div>
+            <div className="mt-3">
+              <Badge status={vehicle.status}>{vehicle.status}</Badge>
             </div>
-          </Card>
+          </div>
+
+          {/* Stats row */}
+          <div className="grid grid-cols-4 border-t border-white/10">
+            {[
+              { icon: Fuel, label: "Fuel", value: `${vehicle.fuel}%` },
+              { icon: Gauge, label: "Speed", value: `${vehicle.speed}km/h` },
+              { icon: Thermometer, label: "Temp", value: `${vehicle.temperature}°C` },
+              { icon: Activity, label: "Engine", value: vehicle.engineOn ? "ON" : "OFF" },
+            ].map((s, i) => (
+              <div key={i} className="flex flex-col items-center py-3 gap-0.5 border-r border-white/10 last:border-r-0">
+                <s.icon className="h-4 w-4 text-white/50" />
+                <div className="text-white font-bold text-sm">{s.value}</div>
+                <div className="text-white/45 text-[10px]">{s.label}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <Card className="mt-4 p-4">
-          <div className="flex items-center gap-2"><MapPin className="h-4 w-4 text-primary" /><div className="font-medium text-sm">Active Shift Tracker</div></div>
-          <div className="mt-2 text-sm">{vehicle.route || "Ready to log active hours"}</div>
-          <div className="text-xs text-muted-foreground mt-1">
-            {activeShift ? `Shift running: ${formatTime(activeSeconds)}` : "Start a shift to log your active driving hours."}
+        {/* Shift card */}
+        <div className="bg-card border border-border rounded-2xl p-5" style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className={`h-2 w-2 rounded-full ${activeShift ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground"}`} />
+              <span className="text-sm font-semibold text-foreground">Active Shift</span>
+            </div>
+            {activeShift && (
+              <div
+                className="font-mono text-sm font-bold px-3 py-1 rounded-lg"
+                style={{ background: "oklch(0.60 0.18 155 / 0.12)", color: "oklch(0.48 0.16 155)" }}
+              >
+                {formatTime(activeSeconds)}
+              </div>
+            )}
           </div>
-          <div className="mt-3 h-2 bg-muted rounded-full overflow-hidden">
-            <div className="h-full bg-primary" style={{ width: activeShift ? "100%" : "0%", transition: "width 0.6s" }} />
+
+          <div className="text-sm text-muted-foreground mb-4">
+            {vehicle.route && vehicle.route !== "No route assigned"
+              ? vehicle.route
+              : activeShift ? "Shift in progress" : "Start a shift to log active hours"}
           </div>
-          <div className="mt-3 flex gap-2">
-            <Button className="flex-1" onClick={handleToggleShift}>
-              <Play className="h-4 w-4" /> {activeShift ? "End Active Shift" : "Start Shift"}
-            </Button>
-            <Button 
-              variant="outline" 
-              className="flex-1" 
-              onClick={handleViewRoute}
-              disabled={!ongoingTrip && (!vehicle?.route || vehicle.route === "No route assigned" || vehicle.route === "Ready to log active hours")}
+
+          {/* Fuel progress */}
+          <div className="mb-4">
+            <div className="flex justify-between text-xs mb-1.5">
+              <span className="text-muted-foreground font-medium">Fuel level</span>
+              <span className="font-semibold">{vehicle.fuel}%</span>
+            </div>
+            <div className="h-2 bg-muted rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-700"
+                style={{
+                  width: `${vehicle.fuel}%`,
+                  background: vehicle.fuel < 25
+                    ? "oklch(0.58 0.24 25)"
+                    : vehicle.fuel < 50
+                    ? "oklch(0.76 0.17 72)"
+                    : "oklch(0.60 0.18 155)",
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-2.5">
+            <button
+              onClick={handleToggleShift}
+              className="flex-1 h-11 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-all hover:-translate-y-0.5"
+              style={{
+                background: activeShift
+                  ? "linear-gradient(135deg, oklch(0.58 0.24 25), oklch(0.50 0.20 20))"
+                  : "linear-gradient(135deg, oklch(0.44 0.22 264), oklch(0.36 0.18 258))",
+                boxShadow: activeShift
+                  ? "0 4px 12px oklch(0.58 0.24 25 / 0.30)"
+                  : "0 4px 12px oklch(0.44 0.22 264 / 0.30)",
+              }}
             >
-              View Route
-            </Button>
+              {activeShift
+                ? <><StopCircle className="h-4 w-4" /> End Shift</>
+                : <><Play className="h-4 w-4" /> Start Shift</>
+              }
+            </button>
+            <button
+              onClick={handleViewRoute}
+              disabled={!ongoingTrip && (!vehicle?.route || vehicle.route === "No route assigned")}
+              className="flex-1 h-11 rounded-xl text-sm font-semibold border border-border bg-card text-foreground flex items-center justify-center gap-2 hover:bg-muted/60 transition-all disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <MapPin className="h-4 w-4" /> View Route
+            </button>
           </div>
-        </Card>
+        </div>
 
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: "Safety Score", value: `${driver.score}%`, sub: driver.rating, color: "oklch(0.60 0.18 155)" },
+            { label: "Open Alerts", value: openAlerts, sub: `${alerts.length} total`, color: "oklch(0.58 0.24 25)" },
+            { label: "Total Trips", value: driver.trips, sub: `${(driver.total_km / 1000).toFixed(1)}k km`, color: "oklch(0.42 0.18 264)" },
+          ].map((s, i) => (
+            <div key={i} className="bg-card border border-border rounded-2xl p-4 text-center" style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}>
+              <div className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</div>
+              <div className="text-[10px] font-semibold text-muted-foreground mt-0.5 leading-tight">{s.label}</div>
+              <div className="text-[10px] text-muted-foreground/60 mt-0.5">{s.sub}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Recent shift history */}
+        {shiftHistory.length > 0 && (
+          <div className="bg-card border border-border rounded-2xl overflow-hidden" style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}>
+            <div className="px-5 py-3.5 border-b border-border">
+              <div className="text-sm font-semibold text-foreground">Recent Shifts</div>
+            </div>
+            <div className="divide-y divide-border">
+              {shiftHistory.map((s: any) => (
+                <div key={s.id} className="flex items-center justify-between px-5 py-3">
+                  <div className="text-sm text-foreground">{new Date(s.started_at).toLocaleDateString()}</div>
+                  <div className="text-sm font-semibold text-primary">{s.active_hours}h</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  /* ─────────────── TRIP TAB ─────────────── */
+  function TripTab() {
+    return (
+      <div className="space-y-4">
         {ongoingTrip ? (
-          <Card className="mt-4 p-4 border border-primary/30 bg-gradient-to-br from-primary/5 to-card text-left">
-            <div className="flex items-center gap-2 text-primary font-semibold text-sm">
-              <Route className="h-4 w-4" />
-              <span>Active Dispatch Trip</span>
+          <div
+            className="rounded-2xl p-5 border"
+            style={{
+              background: "linear-gradient(135deg, oklch(0.42 0.18 264 / 0.08), oklch(1 0 0))",
+              borderColor: "oklch(0.42 0.18 264 / 0.25)",
+              boxShadow: "0 1px 3px rgba(10,20,60,0.06)",
+            }}
+          >
+            <div className="flex items-center gap-2 mb-4">
+              <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+              <span className="text-sm font-bold text-primary">Active Dispatch Trip</span>
             </div>
-            <div className="mt-2 text-sm">
-              <span className="font-semibold text-muted-foreground uppercase text-[10px] block">Route Details</span>
-              <span className="font-medium">
-                {ongoingTrip.destination ? `${ongoingTrip.start} → ${ongoingTrip.destination}` : ongoingTrip.start}
-              </span>
-            </div>
-            <div className="mt-2 text-xs text-muted-foreground flex gap-4">
-              <div><strong className="text-foreground">Vehicle:</strong> {ongoingTrip.vehicles?.number || 'Assigned'}</div>
-              <div><strong className="text-foreground">Start Odo:</strong> {ongoingTrip.start_km} km</div>
-            </div>
-            <form onSubmit={handleEndManualTrip} className="mt-4 pt-3 border-t border-border/60 space-y-3">
+
+            <div className="space-y-3 mb-5">
               <div>
-                <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1">Ending Odometer (km) *</label>
-                <input 
-                  type="number" 
+                <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">Route</div>
+                <div className="text-base font-semibold text-foreground">
+                  {ongoingTrip.destination ? `${ongoingTrip.start} → ${ongoingTrip.destination}` : ongoingTrip.start}
+                </div>
+              </div>
+              <div className="flex gap-6">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-0.5">Vehicle</div>
+                  <div className="text-sm font-semibold">{ongoingTrip.vehicles?.number || 'Assigned'}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-0.5">Start Odo</div>
+                  <div className="text-sm font-semibold">{ongoingTrip.start_km} km</div>
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleEndManualTrip} className="space-y-3 pt-4 border-t border-border/60">
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">
+                  Ending Odometer (km) *
+                </label>
+                <input
+                  type="number"
                   required
                   min={ongoingTrip.start_km || 0}
-                  className="w-full p-2 border border-border bg-background rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="w-full h-12 px-4 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/60"
                   value={endTripForm.endKm || ""}
                   onChange={(e) => setEndTripForm({ ...endTripForm, endKm: Number(e.target.value) })}
                   placeholder="e.g. 10300"
                 />
               </div>
-              <Button type="submit" size="sm" className="w-full bg-primary text-primary-foreground font-semibold" disabled={submittingTrip}>
-                {submittingTrip ? <Loader2 className="animate-spin h-3.5 w-3.5 mx-auto" /> : "Complete Trip & Log Data"}
-              </Button>
+              <button
+                type="submit"
+                disabled={submittingTrip}
+                className="w-full h-12 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all"
+                style={{ background: "linear-gradient(135deg, oklch(0.44 0.22 264), oklch(0.36 0.18 258))" }}
+              >
+                {submittingTrip ? <Loader2 className="animate-spin h-4 w-4" /> : <><CheckCircle2 className="h-4 w-4" /> Complete Trip & Log Data</>}
+              </button>
             </form>
-          </Card>
-        ) : (
-          <Card className="mt-4 p-4 text-center">
-            <div className="flex items-center justify-center gap-2 text-muted-foreground text-sm font-medium">
-              <Route className="h-4 w-4" />
-              <span>No active dispatches</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">Main office will assign routes/dispatches dynamically to your profile.</p>
-          </Card>
-        )}
-
-        <div className="grid grid-cols-2 gap-3 mt-4">
-          <Card className="p-4">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground"><ShieldCheck className="h-4 w-4" /> Safety Score</div>
-            <div className="mt-1 text-2xl font-semibold">{driver.score}%</div>
-            <div className="text-xs"><Badge status={driver.rating}>{driver.rating}</Badge></div>
-          </Card>
-          <Card className="p-4">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground"><Bell className="h-4 w-4" /> Open Alerts</div>
-            <div className="mt-1 text-2xl font-semibold">{alerts.filter((a) => !a.resolved).length}</div>
-            <div className="text-xs text-muted-foreground">{alerts.length} total</div>
-          </Card>
-        </div>
-
-        <Card className="mt-4 p-4">
-          <div className="flex items-center gap-2">
-            <Fuel className="h-4 w-4 text-primary" />
-            <div className="font-medium text-sm">Log Fuel Refill</div>
           </div>
-          <form onSubmit={handleLogFuelDriver} className="mt-3 space-y-3">
+        ) : (
+          <div className="bg-card border border-border rounded-2xl p-8 text-center" style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}>
+            <Route className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+            <div className="text-base font-semibold text-foreground mb-1">No Active Trip</div>
+            <p className="text-sm text-muted-foreground">Main office will assign dispatches dynamically to your profile.</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  /* ─────────────── FUEL TAB ─────────────── */
+  function FuelTab() {
+    return (
+      <div className="space-y-4">
+        <div className="bg-card border border-border rounded-2xl p-5" style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}>
+          <div className="flex items-center gap-2 mb-5">
+            <div className="h-9 w-9 rounded-xl flex items-center justify-center" style={{ background: "oklch(0.76 0.17 72 / 0.12)" }}>
+              <Fuel className="h-4.5 w-4.5" style={{ color: "oklch(0.60 0.17 72)" }} />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-foreground">Log Fuel Refill</div>
+              <div className="text-xs text-muted-foreground">Record vehicle refueling</div>
+            </div>
+          </div>
+
+          <form onSubmit={handleLogFuelDriver} className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1 font-sans">Liters *</label>
-                <input 
-                  type="number" 
-                  step="0.01"
-                  required
-                  className="w-full p-2 border border-border bg-transparent rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">Liters *</label>
+                <input
+                  type="number" step="0.01" required
+                  className="w-full h-12 px-4 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/60"
                   value={fuelForm.liters || ""}
                   onChange={(e) => setFuelForm({ ...fuelForm, liters: Number(e.target.value) })}
                   placeholder="e.g. 50"
                 />
               </div>
               <div>
-                <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1 font-sans">Cost (INR) *</label>
-                <input 
-                  type="number" 
-                  step="0.01"
-                  required
-                  className="w-full p-2 border border-border bg-transparent rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">Cost (INR) *</label>
+                <input
+                  type="number" step="0.01" required
+                  className="w-full h-12 px-4 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/60"
                   value={fuelForm.cost || ""}
                   onChange={(e) => setFuelForm({ ...fuelForm, cost: Number(e.target.value) })}
                   placeholder="e.g. 4800"
@@ -671,105 +602,305 @@ function DriverPage() {
               </div>
             </div>
             <div>
-              <label className="block text-[10px] uppercase font-semibold text-muted-foreground mb-1 font-sans">Odometer (km) *</label>
-              <input 
-                type="number" 
-                required
-                className="w-full p-2 border border-border bg-transparent rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">Odometer (km) *</label>
+              <input
+                type="number" required
+                className="w-full h-12 px-4 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/60"
                 value={fuelForm.odometer || ""}
                 onChange={(e) => setFuelForm({ ...fuelForm, odometer: Number(e.target.value) })}
                 placeholder="e.g. 10250"
               />
             </div>
-            <Button type="submit" size="sm" className="w-full" disabled={submittingFuel || !vehicle?.id}>
-              {submittingFuel ? <Loader2 className="animate-spin h-3.5 w-3.5 mx-auto" /> : "Save Refuel Log"}
-            </Button>
+            <button
+              type="submit"
+              disabled={submittingFuel || !vehicle?.id}
+              className="w-full h-12 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all hover:-translate-y-0.5 disabled:opacity-50 disabled:pointer-events-none"
+              style={{ background: "linear-gradient(135deg, oklch(0.44 0.22 264), oklch(0.36 0.18 258))" }}
+            >
+              {submittingFuel ? <Loader2 className="animate-spin h-4 w-4" /> : <><Droplets className="h-4 w-4" /> Save Refuel Log</>}
+            </button>
           </form>
-        </Card>
+        </div>
 
-        <Card className="mt-4">
-          <div className="px-4 py-3 border-b border-border font-medium text-sm">Recent Alerts</div>
-          <div className="divide-y divide-border">
-            {alerts.length === 0 && <div className="px-4 py-6 text-center text-sm text-muted-foreground">No alerts.</div>}
-            {alerts.map((a) => (
-              <div key={a.id} className="px-4 py-3 flex items-start gap-3">
-                <Badge status={a.severity}>{a.severity}</Badge>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium">{a.message}</div>
-                  <div className="text-xs text-muted-foreground">{a.type} · {a.time}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card className="mt-4 p-4">
-          <div className="font-medium text-sm">My Performance</div>
-          <div className="grid grid-cols-3 gap-3 mt-3 text-center">
-            <div>
-              <div className="text-2xl font-semibold">{driver.trips}</div>
-              <div className="text-xs text-muted-foreground">Trips</div>
+        {/* Current fuel stat */}
+        <div className="bg-card border border-border rounded-2xl p-5" style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}>
+          <div className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">Current Level</div>
+          <div className="flex items-end gap-2 mb-2">
+            <div className="text-4xl font-bold" style={{ color: vehicle.fuel < 25 ? "oklch(0.58 0.24 25)" : vehicle.fuel < 50 ? "oklch(0.76 0.17 72)" : "oklch(0.60 0.18 155)" }}>
+              {vehicle.fuel}%
             </div>
-            <div>
-              <div className="text-2xl font-semibold">{(driver.total_km / 1000).toFixed(1)}k</div>
-              <div className="text-xs text-muted-foreground">km driven</div>
-            </div>
-            <div>
-              <div className="text-2xl font-semibold">{driver.events}</div>
-              <div className="text-xs text-muted-foreground">events</div>
-            </div>
+            <div className="text-muted-foreground text-sm mb-1.5">remaining</div>
           </div>
-
-          {shiftHistory.length > 0 && (
-            <div className="mt-4 pt-3 border-t border-border">
-              <div className="text-xs font-semibold text-muted-foreground mb-2">Recent shifts logged</div>
-              <div className="space-y-1.5 text-xs">
-                {shiftHistory.map(s => (
-                  <div key={s.id} className="flex justify-between text-muted-foreground">
-                    <span>{new Date(s.started_at).toLocaleDateString()}</span>
-                    <span className="font-semibold text-foreground">{s.active_hours} active hours</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </Card>
-
-        <Card className="mt-4 p-4 text-left">
-          <div className="flex items-center gap-2">
-            <Calendar className="h-4 w-4 text-primary" />
-            <div className="font-medium text-sm">Duty Schedule Calendar</div>
+          <div className="h-3 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-700"
+              style={{
+                width: `${vehicle.fuel}%`,
+                background: vehicle.fuel < 25 ? "oklch(0.58 0.24 25)" : vehicle.fuel < 50 ? "oklch(0.76 0.17 72)" : "oklch(0.60 0.18 155)",
+              }}
+            />
           </div>
-          <div className="mt-3 divide-y divide-border">
-            {schedules.length === 0 ? (
-              <div className="text-xs text-muted-foreground py-3 text-center">No upcoming scheduled shifts.</div>
-            ) : (
-              schedules.map((s) => (
-                <div key={s.id} className="py-2.5 flex items-center justify-between text-xs">
-                  <div>
-                    <div className="font-semibold text-foreground">{new Date(s.date).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</div>
-                    <div className="text-[10px] text-muted-foreground font-mono">Vehicle: {s.vehicles?.number || 'Unassigned'}</div>
-                  </div>
-                  <div>
-                    <span className="px-2 py-0.5 rounded-full font-medium bg-primary/10 text-primary text-[10px]">
-                      {s.shift_type}
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </Card>
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
-function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  /* ─────────────── ALERTS TAB ─────────────── */
+  function AlertsTab() {
+    return (
+      <div className="space-y-3">
+        {alerts.length === 0 ? (
+          <div className="bg-card border border-border rounded-2xl p-8 text-center" style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}>
+            <Bell className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+            <div className="text-base font-semibold text-foreground mb-1">No Alerts</div>
+            <p className="text-sm text-muted-foreground">All clear — no active alerts for your vehicle.</p>
+          </div>
+        ) : (
+          alerts.map((a) => (
+            <div
+              key={a.id}
+              className="bg-card border border-border rounded-2xl p-4 flex items-start gap-3"
+              style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)", opacity: a.resolved ? 0.55 : 1 }}
+            >
+              <Badge status={a.severity}>{a.severity}</Badge>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-foreground">{a.message}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{a.type} · {a.time}</div>
+              </div>
+              {a.resolved && <CheckCircle2 className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-0.5" />}
+            </div>
+          ))
+        )}
+      </div>
+    );
+  }
+
+  /* ─────────────── SCHEDULE TAB ─────────────── */
+  function ScheduleTab() {
+    return (
+      <div className="space-y-3">
+        {schedules.length === 0 ? (
+          <div className="bg-card border border-border rounded-2xl p-8 text-center" style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}>
+            <Calendar className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
+            <div className="text-base font-semibold text-foreground mb-1">No Upcoming Shifts</div>
+            <p className="text-sm text-muted-foreground">Scheduled shifts will appear here.</p>
+          </div>
+        ) : (
+          schedules.map((s: any) => (
+            <div key={s.id} className="bg-card border border-border rounded-2xl p-4 flex items-center gap-4" style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}>
+              <div
+                className="h-12 w-12 rounded-xl flex flex-col items-center justify-center shrink-0"
+                style={{ background: "oklch(0.42 0.18 264 / 0.08)" }}
+              >
+                <div className="text-[10px] font-bold uppercase" style={{ color: "oklch(0.42 0.18 264)" }}>
+                  {new Date(s.date).toLocaleDateString([], { month: 'short' })}
+                </div>
+                <div className="text-lg font-bold" style={{ color: "oklch(0.42 0.18 264)" }}>
+                  {new Date(s.date).getDate()}
+                </div>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-foreground">{s.shift_type}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  Vehicle: {s.vehicles?.number || 'Unassigned'}
+                </div>
+              </div>
+              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0" />
+            </div>
+          ))
+        )}
+      </div>
+    );
+  }
+
+  /* ─── PRE-TRIP INSPECTION MODAL ─── */
+  const INSPECTION_ITEMS = [
+    { key: "tyres" as const, label: "Tyres Condition OK", desc: "Pressure, tread depth, no visible damage" },
+    { key: "brakes" as const, label: "Brakes Working OK", desc: "Pads, responsiveness & fluid levels" },
+    { key: "lights" as const, label: "Lights & Indicators OK", desc: "Headlights, indicators, brake lights" },
+    { key: "cleanliness" as const, label: "Cabin & Cargo Clean", desc: "Free of waste, properly sanitised" },
+  ];
+
   return (
-    <div className="rounded-md border border-border p-2.5">
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">{icon}{label}</div>
-      <div className="mt-0.5 font-semibold">{value}</div>
+    <div className="min-h-screen bg-background flex flex-col">
+
+      {/* ── TOP HEADER ── */}
+      <header
+        className="safe-top shrink-0"
+        style={{
+          background: "linear-gradient(135deg, oklch(0.16 0.07 258) 0%, oklch(0.22 0.09 265) 100%)",
+        }}
+      >
+        <div className="flex items-center gap-3 px-4 py-3.5">
+          <div className="bg-white/12 rounded-xl p-2 shrink-0">
+            <Logo className="h-8" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-white/55 text-[10px] font-semibold uppercase tracking-widest">Driver Portal</div>
+            <div className="text-white font-bold text-base leading-tight truncate">{user.name}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            {openAlerts > 0 && (
+              <button
+                onClick={() => setActiveTab("alerts")}
+                className="relative p-2 rounded-xl bg-white/10 text-white transition-colors hover:bg-white/20 min-h-0 min-w-0"
+              >
+                <Bell className="h-5 w-5" />
+                <span
+                  className="absolute -top-1 -right-1 h-4.5 w-4.5 text-white text-[9px] font-bold flex items-center justify-center rounded-full"
+                  style={{ background: "oklch(0.58 0.24 25)", minWidth: "18px", height: "18px" }}
+                >
+                  {openAlerts}
+                </span>
+              </button>
+            )}
+            <button
+              onClick={() => { logout(); nav("/login"); }}
+              className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors min-h-0 min-w-0"
+            >
+              <LogOut className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* ── SCROLLABLE BODY ── */}
+      <main className="flex-1 overflow-y-auto px-4 pt-4 pb-24 max-w-lg mx-auto w-full">
+        <div className="mb-4">
+          <h2 className="text-xl font-bold text-foreground">
+            {TABS.find((t) => t.id === activeTab)?.label}
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
+          </p>
+        </div>
+        {renderTab()}
+      </main>
+
+      {/* ── BOTTOM NAV ── */}
+      <nav
+        className="fixed bottom-0 left-0 right-0 safe-bottom z-40 flex"
+        style={{
+          background: "rgba(255,255,255,0.94)",
+          backdropFilter: "blur(16px) saturate(180%)",
+          WebkitBackdropFilter: "blur(16px) saturate(180%)",
+          borderTop: "1px solid oklch(0.90 0.012 240)",
+          boxShadow: "0 -4px 20px rgba(10,20,60,0.08)",
+        }}
+      >
+        {TABS.map((tab) => {
+          const isActive = activeTab === tab.id;
+          const Icon = tab.icon;
+          const badge = tab.id === "alerts" && openAlerts > 0;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className="flex-1 flex flex-col items-center justify-center py-2.5 gap-1 transition-all relative min-h-0"
+              style={{ minHeight: "56px" }}
+            >
+              <div className="relative">
+                <Icon
+                  className="h-5 w-5 transition-all"
+                  style={{ color: isActive ? "oklch(0.42 0.18 264)" : "oklch(0.60 0.02 240)" }}
+                  strokeWidth={isActive ? 2.3 : 1.8}
+                />
+                {badge && (
+                  <span
+                    className="absolute -top-1.5 -right-1.5 h-3.5 w-3.5 text-white text-[8px] font-bold flex items-center justify-center rounded-full"
+                    style={{ background: "oklch(0.58 0.24 25)" }}
+                  >
+                    {openAlerts}
+                  </span>
+                )}
+              </div>
+              <span
+                className="text-[10px] font-semibold transition-all"
+                style={{ color: isActive ? "oklch(0.42 0.18 264)" : "oklch(0.60 0.02 240)" }}
+              >
+                {tab.label}
+              </span>
+              {isActive && (
+                <div
+                  className="absolute bottom-0 left-1/2 -translate-x-1/2 h-0.5 w-8 rounded-full"
+                  style={{ background: "oklch(0.42 0.18 264)" }}
+                />
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* ── PRE-TRIP INSPECTION MODAL ── */}
+      {showInspectionModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 z-50">
+          <div
+            className="w-full max-w-sm rounded-2xl overflow-hidden"
+            style={{
+              background: "white",
+              boxShadow: "0 24px 64px rgba(10,20,60,0.25)",
+            }}
+          >
+            {/* Modal header */}
+            <div
+              className="px-5 py-4"
+              style={{ background: "linear-gradient(135deg, oklch(0.16 0.07 258), oklch(0.22 0.09 265))" }}
+            >
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5 text-white" />
+                <div>
+                  <div className="text-white font-bold text-base">Pre-Trip Inspection</div>
+                  <div className="text-white/60 text-xs">Verify vehicle condition before starting</div>
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleStartShiftWithInspection} className="p-5 space-y-3">
+              {INSPECTION_ITEMS.map((item) => (
+                <label
+                  key={item.key}
+                  className="flex items-start gap-3 p-3.5 rounded-xl border border-border bg-muted/30 hover:bg-muted/50 cursor-pointer transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    checked={inspectionForm[item.key]}
+                    onChange={(e) => setInspectionForm({ ...inspectionForm, [item.key]: e.target.checked })}
+                    className="h-4.5 w-4.5 mt-0.5 rounded text-primary accent-primary shrink-0"
+                  />
+                  <div>
+                    <div className="text-sm font-semibold text-foreground">{item.label}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{item.desc}</div>
+                  </div>
+                </label>
+              ))}
+
+              <div className="flex gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInspectionModal(false);
+                    setInspectionForm({ tyres: false, brakes: false, lights: false, cleanliness: false });
+                  }}
+                  className="flex-1 h-12 rounded-xl text-sm font-semibold border border-border bg-card text-foreground hover:bg-muted/60 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingInspection}
+                  className="flex-1 h-12 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all"
+                  style={{ background: "linear-gradient(135deg, oklch(0.44 0.22 264), oklch(0.36 0.18 258))" }}
+                >
+                  {submittingInspection
+                    ? <Loader2 className="animate-spin h-4 w-4" />
+                    : <><CheckCircle2 className="h-4 w-4" /> Certify & Start</>
+                  }
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

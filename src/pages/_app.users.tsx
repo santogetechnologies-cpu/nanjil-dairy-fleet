@@ -270,6 +270,13 @@ function Page() {
     }
     if (!confirm("Are you sure you want to delete this user profile? This action is permanent.")) return;
 
+    // Delete associated driver record from drivers table first (cascades shifts, etc.)
+    await supabase
+      .from('drivers')
+      .delete()
+      .eq('profile_id', id);
+
+    // Delete profile
     const { error } = await supabase
       .from('profiles')
       .delete()

@@ -8,7 +8,7 @@
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 6px);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -45,126 +45,227 @@
 }
 
 :root {
-  --radius: 0.625rem;
-  --background: oklch(0.99 0.003 240);
-  --foreground: oklch(0.18 0.04 250);
+  --radius: 0.75rem;
+
+  /* — Base — */
+  --background: oklch(0.975 0.006 240);
+  --foreground: oklch(0.15 0.05 255);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.04 250);
+  --card-foreground: oklch(0.15 0.05 255);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.04 250);
-  /* Dark blue primary */
-  --primary: oklch(0.32 0.13 255);
+  --popover-foreground: oklch(0.15 0.05 255);
+
+  /* — Electric Indigo Primary — */
+  --primary: oklch(0.38 0.20 264);
   --primary-foreground: oklch(0.99 0.003 240);
-  --secondary: oklch(0.96 0.01 240);
-  --secondary-foreground: oklch(0.22 0.06 255);
-  --muted: oklch(0.965 0.008 240);
-  --muted-foreground: oklch(0.5 0.02 250);
-  --accent: oklch(0.95 0.04 200);
-  --accent-foreground: oklch(0.22 0.06 255);
-  --destructive: oklch(0.6 0.22 25);
+
+  /* — Supporting — */
+  --secondary: oklch(0.95 0.015 240);
+  --secondary-foreground: oklch(0.22 0.07 255);
+  --muted: oklch(0.955 0.010 240);
+  --muted-foreground: oklch(0.52 0.025 250);
+  --accent: oklch(0.93 0.05 220);
+  --accent-foreground: oklch(0.22 0.07 255);
+
+  /* — Semantic — */
+  --destructive: oklch(0.58 0.24 25);
   --destructive-foreground: oklch(1 0 0);
-  --success: oklch(0.62 0.16 150);
+  --success: oklch(0.60 0.18 155);
   --success-foreground: oklch(1 0 0);
-  --warning: oklch(0.78 0.16 75);
-  --warning-foreground: oklch(0.22 0.06 50);
-  --info: oklch(0.62 0.16 230);
+  --warning: oklch(0.76 0.17 72);
+  --warning-foreground: oklch(0.20 0.06 50);
+  --info: oklch(0.60 0.17 230);
   --info-foreground: oklch(1 0 0);
-  --brand-red: oklch(0.62 0.22 25);
-  --brand-green: oklch(0.62 0.18 150);
-  --border: oklch(0.92 0.01 240);
-  --input: oklch(0.92 0.01 240);
-  --ring: oklch(0.55 0.13 255);
-  --chart-1: oklch(0.45 0.15 255);
-  --chart-2: oklch(0.62 0.18 150);
-  --chart-3: oklch(0.7 0.16 75);
-  --chart-4: oklch(0.6 0.22 25);
-  --chart-5: oklch(0.62 0.16 230);
-  --sidebar: oklch(0.22 0.06 255);
-  --sidebar-foreground: oklch(0.92 0.02 240);
-  --sidebar-accent: oklch(0.3 0.1 255);
+  --brand-red: oklch(0.60 0.24 25);
+  --brand-green: oklch(0.60 0.19 155);
+
+  /* — Borders & Ring — */
+  --border: oklch(0.90 0.012 240);
+  --input: oklch(0.90 0.012 240);
+  --ring: oklch(0.52 0.20 264);
+
+  /* — Charts — */
+  --chart-1: oklch(0.42 0.18 264);
+  --chart-2: oklch(0.60 0.18 155);
+  --chart-3: oklch(0.68 0.17 72);
+  --chart-4: oklch(0.58 0.24 25);
+  --chart-5: oklch(0.60 0.17 230);
+
+  /* — Sidebar — deep navy gradient — */
+  --sidebar: oklch(0.16 0.07 258);
+  --sidebar-foreground: oklch(0.88 0.025 240);
+  --sidebar-accent: oklch(0.38 0.20 264);
   --sidebar-accent-foreground: oklch(1 0 0);
-  --sidebar-border: oklch(0.28 0.08 255);
+  --sidebar-border: oklch(0.22 0.08 258);
 }
 
 @layer base {
-  * { border-color: var(--color-border); }
+  * { border-color: var(--color-border); box-sizing: border-box; }
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
-  h1, h2, h3, h4 { letter-spacing: -0.01em; }
+  h1 { letter-spacing: -0.03em; font-weight: 700; }
+  h2, h3 { letter-spacing: -0.02em; font-weight: 600; }
+  h4 { letter-spacing: -0.01em; font-weight: 600; }
 }
 
+/* ============================================================
+   Gradient Mesh Animation (Login & Accents)
+   ============================================================ */
+@keyframes mesh-shift {
+  0%   { background-position: 0% 0%;   }
+  33%  { background-position: 100% 0%; }
+  66%  { background-position: 100% 100%; }
+  100% { background-position: 0% 0%;   }
+}
+
+@keyframes float-up {
+  0%, 100% { transform: translateY(0px);  }
+  50%       { transform: translateY(-6px); }
+}
+
+@keyframes shimmer {
+  from { background-position: -200% center; }
+  to   { background-position:  200% center; }
+}
+
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0   color-mix(in oklab, var(--color-primary) 40%, transparent); }
+  70%  { box-shadow: 0 0 0 10px color-mix(in oklab, var(--color-primary) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0   color-mix(in oklab, var(--color-primary) 0%, transparent); }
+}
+
+/* ============================================================
+   Utility Classes
+   ============================================================ */
 @utility kpi-card {
-  background: linear-gradient(180deg, var(--color-card), color-mix(in oklab, var(--color-card) 96%, var(--color-primary)));
+  background: linear-gradient(
+    160deg,
+    var(--color-card) 60%,
+    color-mix(in oklab, var(--color-card) 92%, var(--color-primary))
+  );
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: 1.25rem;
-  box-shadow: 0 1px 2px rgba(15,23,42,0.04);
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 3px rgba(10,20,60,0.06), 0 1px 2px rgba(10,20,60,0.04);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
+
 @utility kpi-card-hover {
   &:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 20px -10px color-mix(in oklab, var(--color-primary) 30%, transparent);
+    transform: translateY(-3px);
+    box-shadow: 0 12px 28px -10px color-mix(in oklab, var(--color-primary) 25%, transparent),
+                0 4px 8px -4px rgba(10,20,60,0.08);
   }
+}
+
+@utility glass-card {
+  background: rgba(255,255,255,0.75);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255,255,255,0.55);
+  box-shadow: 0 8px 32px rgba(15,25,80,0.10);
+}
+
+@utility glass-card-dark {
+  background: rgba(255,255,255,0.08);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255,255,255,0.12);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.20);
+}
+
+@utility mesh-bg {
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 20%,
+      color-mix(in oklab, var(--color-primary) 18%, transparent) 0%,
+      transparent 60%),
+    radial-gradient(ellipse 70% 80% at 80% 80%,
+      oklch(0.60 0.17 230 / 0.15) 0%,
+      transparent 60%),
+    radial-gradient(ellipse 60% 70% at 50% 50%,
+      oklch(0.60 0.18 155 / 0.08) 0%,
+      transparent 70%),
+    linear-gradient(135deg, oklch(0.14 0.06 258) 0%, oklch(0.20 0.09 265) 100%);
+  background-size: 200% 200%;
+  animation: mesh-shift 14s ease infinite;
+}
+
+@utility sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.625rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: oklch(0.78 0.025 240);
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@utility sidebar-item-hover {
+  &:hover {
+    background: rgba(255,255,255,0.07);
+    color: oklch(0.96 0.010 240);
+    transform: translateX(2px);
+  }
+}
+
+@utility sidebar-item-active {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--color-sidebar-accent) 30%, transparent),
+    color-mix(in oklab, var(--color-sidebar-accent) 10%, transparent)
+  );
+  color: oklch(1 0 0);
+  box-shadow: inset 3px 0 0 var(--color-sidebar-accent);
+  font-weight: 600;
 }
 
 /* ============================================================
    Mobile / Capacitor – Safe Area & Touch Optimizations
    ============================================================ */
-
-/* Safe area CSS variables — maps to iOS notch/Dynamic Island/home bar */
 :root {
-  --safe-area-top: env(safe-area-inset-top, 0px);
-  --safe-area-right: env(safe-area-inset-right, 0px);
+  --safe-area-top:    env(safe-area-inset-top,    0px);
+  --safe-area-right:  env(safe-area-inset-right,  0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-area-left: env(safe-area-inset-left, 0px);
+  --safe-area-left:   env(safe-area-inset-left,   0px);
 }
 
-/* Prevent rubber-band overscroll on iOS WebView */
 html, body {
   overscroll-behavior: none;
   -webkit-overflow-scrolling: touch;
 }
 
-/* Remove 300ms tap delay on mobile browsers */
 * {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
 
-/* Smooth native-feeling scrolling within scroll containers */
 .overflow-auto,
 .overflow-y-auto,
 .overflow-x-auto {
   -webkit-overflow-scrolling: touch;
 }
 
-/* Minimum touch targets (44x44 per Apple HIG / Material Design) */
 button, a, [role="button"] {
   min-height: 44px;
   min-width: 44px;
 }
 
-/* Padding for home indicator (iPhone X+) at the bottom of full-height views */
-.safe-bottom {
-  padding-bottom: env(safe-area-inset-bottom, 16px);
-}
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom, 16px); }
+.safe-top    { padding-top:    env(safe-area-inset-top,    0px);  }
 
-/* Safe top area for status bar on Capacitor */
-.safe-top {
-  padding-top: env(safe-area-inset-top, 0px);
-}
+input, select, textarea { font-size: 16px; }
 
-/* Prevent text zoom on input focus in iOS Safari */
-input, select, textarea {
-  font-size: 16px;
-}
-
-/* Disable user-select on UI chrome for native feel */
 nav, header, aside {
   user-select: none;
   -webkit-user-select: none;
