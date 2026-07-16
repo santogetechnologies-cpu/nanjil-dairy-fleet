@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Nanjil VIP – iOS Info.plist additions template
+  
+  After running: npx cap add ios
+  
+  Merge these keys into:
+    ios/App/App/Info.plist
+  
+  These usage descriptions are REQUIRED for App Store submission.
+  Without them, iOS will crash when accessing any protected resource.
+-->
+<plist version="1.0">
+<dict>
+
+    <!-- ===== App Metadata ===== -->
+    <key>CFBundleDisplayName</key>
+    <string>Nanjil VIP</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>1.4.2</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <!-- ===== Usage Descriptions (required by App Store) ===== -->
+
+    <!-- Camera — future document scanning / QR features -->
+    <key>NSCameraUsageDescription</key>
+    <string>Nanjil VIP uses the camera to scan vehicle documents and QR codes.</string>
+
+    <!-- Photo Library — save/load vehicle documents -->
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Nanjil VIP accesses your photo library to upload vehicle-related images.</string>
+
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Nanjil VIP saves captured documents to your photo library.</string>
+
+    <!-- Location — GPS tracking for fleet management -->
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Nanjil VIP uses your location to track and display vehicle positions on the map.</string>
+
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Nanjil VIP uses your location in the background to continuously track vehicle routes.</string>
+
+    <!-- Microphone — voice features (if added in future) -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Nanjil VIP may use the microphone for voice commands in future updates.</string>
+
+    <!-- Face ID — biometric login (if enabled in future) -->
+    <key>NSFaceIDUsageDescription</key>
+    <string>Nanjil VIP uses Face ID to securely authenticate your login.</string>
+
+    <!-- ===== App Transport Security ===== -->
+    <!-- Allow HTTPS connections to all domains (Supabase, MapLibre tiles) -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <false/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>supabase.co</key>
+            <dict>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <false/>
+                <key>NSExceptionMinimumTLSVersion</key>
+                <string>TLSv1.2</string>
+            </dict>
+            <key>openstreetmap.org</key>
+            <dict>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <false/>
+            </dict>
+        </dict>
+    </dict>
+
+    <!-- ===== UI Configuration ===== -->
+
+    <!-- Support all interface orientations -->
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+
+    <!-- Status bar style -->
+    <key>UIStatusBarStyle</key>
+    <string>UIStatusBarStyleLightContent</string>
+
+    <key>UIViewControllerBasedStatusBarAppearance</key>
+    <true/>
+
+    <!-- Allows WebView to scroll with bounce -->
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+
+</dict>
+</plist>

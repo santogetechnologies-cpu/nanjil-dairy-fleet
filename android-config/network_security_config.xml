@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android Network Security Config
+  Allows HTTPS connections to Supabase and other required endpoints.
+  Block all cleartext (HTTP) traffic except during development.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <!-- Supabase Cloud -->
+        <domain includeSubdomains="true">supabase.co</domain>
+        <!-- MapLibre tile servers -->
+        <domain includeSubdomains="true">openstreetmap.org</domain>
+        <domain includeSubdomains="true">tile.openstreetmap.org</domain>
+    </domain-config>
+</network-security-config>

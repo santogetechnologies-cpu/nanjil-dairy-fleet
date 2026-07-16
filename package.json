@@ -9,7 +9,12 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "mobile:build": "npm run build && npx cap sync",
+    "mobile:sync": "npx cap sync",
+    "android": "npx cap open android",
+    "ios": "npx cap open ios",
+    "cap:init": "npx cap init \"Nanjil VIP\" com.nanjil.vip --web-dir dist"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
