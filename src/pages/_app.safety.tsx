@@ -1,16 +1,20 @@
 import { useState, useEffect } from "react";
 import { type Driver } from "@/lib/types";
 import { PageHeader } from "@/components/AppLayout";
-import { Kpi, Card, CardHeader, Badge } from "@/components/ui-kit";
-import { ShieldCheck, AlertTriangle, TrendingUp, UsersRound } from "lucide-react";
+import { Kpi, Card, CardHeader, Badge, Button } from "@/components/ui-kit";
+import { ShieldCheck, AlertTriangle, TrendingUp, UsersRound, Trash2 } from "lucide-react";
 import { DataTable } from "@/components/DataTable";
 import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, Radar, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth";
 
 function Page() {
+  const { user } = useAuth();
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [eventsChart, setEventsChart] = useState<{ name: string; value: number }[]>([]);
   const [radarData, setRadarData] = useState<{ metric: string; score: number }[]>([]);
+
+  const canManage = user?.role === "admin" || user?.role === "manager";
 
   async function load() {
     // 1. Fetch safety ranking
@@ -111,6 +115,46 @@ function Page() {
   const needsImprovement = sorted.filter((d) => d.score < 80).length;
   const avgScore = drivers.length > 0 ? Math.round(drivers.reduce((s, d) => s + d.score, 0) / drivers.length) : 0;
 
+  async function handleDeleteDriver(driver: Driver) {
+    if (!confirm(`Are you sure you want to delete driver ${driver.name}? This will remove their driver records, shift history, and safety stats. This action is permanent.`)) return;
+
+    try {
+      // 1. Fetch the driver to get their profile_id (if any)
+      const { data: driverData, error: fetchErr } = await supabase
+        .from('drivers')
+        .select('profile_id')
+        .eq('id', driver.id)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+
+      // 2. Delete from drivers table (which cascades to assignments, shifts, schedules, pre-trip inspections, etc.)
+      const { error: deleteDriverErr } = await supabase
+        .from('drivers')
+        .delete()
+        .eq('id', driver.id);
+
+      if (deleteDriverErr) throw deleteDriverErr;
+
+      // 3. If there's an associated user profile, delete it from profiles table
+      if (driverData?.profile_id) {
+        const { error: deleteProfileErr } = await supabase
+          .from('profiles')
+          .delete()
+          .eq('id', driverData.profile_id);
+
+        if (deleteProfileErr) {
+          console.warn("Driver record deleted, but profile deletion failed:", deleteProfileErr.message);
+        }
+      }
+
+      alert("Driver deleted successfully.");
+      load();
+    } catch (err: any) {
+      alert("Failed to delete driver: " + err.message);
+    }
+  }
+
   return (
     <div>
       <PageHeader title="Driver Safety" subtitle="Real-time scoring, events and ranking" />
@@ -187,6 +231,19 @@ function Page() {
             { key: "rating", label: "Rating", render: (d) => <Badge status={d.rating}>{d.rating}</Badge> },
             { key: "trips", label: "Trips logged", render: (d) => `${d.trips} trips` },
             { key: "totalKm", label: "Total Distance", render: (d) => `${d.totalKm.toLocaleString()} km` },
+            ...(canManage ? [{
+              key: "actions",
+              label: "Actions",
+              render: (d: Driver) => (
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleDeleteDriver(d); }}
+                  className="p-1.5 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                  title="Delete driver"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )
+            }] : [])
           ]}
         />
       </div>
