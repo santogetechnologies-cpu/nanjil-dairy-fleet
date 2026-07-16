@@ -93,6 +93,7 @@ function Page() {
       channel = supabase
         .channel('safety-realtime')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'drivers' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, () => { if (!cancelled) load(); })
         .subscribe();
     }
