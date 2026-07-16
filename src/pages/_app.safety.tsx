@@ -71,17 +71,13 @@ function Page() {
     // Convert incident counts to a 0-100 safety score per dimension (fewer events = higher score)
     const toScore = (count: number) => Math.max(0, Math.round(100 - (count / totalEvents) * 100));
 
-    if (aData && aData.length > 0) {
-      setRadarData([
-        { metric: "Speed Control", score: toScore(speedCount) },
-        { metric: "Smooth Braking", score: toScore(brakeCount) },
-        { metric: "Acceleration", score: toScore(accelCount) },
-        { metric: "Cornering", score: toScore(turnCount) },
-        { metric: "Safe Driving", score: toScore(rashCount) },
-      ]);
-    } else {
-      setRadarData([]);
-    }
+    setRadarData([
+      { metric: "Speed Control", score: aData && aData.length > 0 ? toScore(speedCount) : 100 },
+      { metric: "Smooth Braking", score: aData && aData.length > 0 ? toScore(brakeCount) : 100 },
+      { metric: "Acceleration", score: aData && aData.length > 0 ? toScore(accelCount) : 100 },
+      { metric: "Cornering", score: aData && aData.length > 0 ? toScore(turnCount) : 100 },
+      { metric: "Safe Driving", score: aData && aData.length > 0 ? toScore(rashCount) : 100 },
+    ]);
   }
 
   useEffect(() => {
