@@ -12,7 +12,7 @@ interface Props {
   selectedId?: string;
 }
 
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
+const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
 
 export default function VehicleMapImpl({ vehicles, height = 520, selectedId }: Props) {
   const [active, setActive] = useState<Vehicle | null>(
@@ -51,7 +51,6 @@ export default function VehicleMapImpl({ vehicles, height = 520, selectedId }: P
         mapStyle={MAP_STYLE}
         attributionControl={{ compact: true }}
         style={{ width: "100%", height: "100%" }}
-        reuseMaps
       >
         <NavigationControl position="top-left" />
         <ScaleControl position="bottom-right" />

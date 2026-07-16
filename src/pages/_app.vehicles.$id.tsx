@@ -47,9 +47,16 @@ function VehicleDetailPage() {
   async function loadDrivers() {
     const { data } = await supabase
       .from('drivers')
-      .select('id, name');
+      .select('id, name, profile_id');
     if (data) {
-      setDrivers(data);
+      const map = new Map<string, any>();
+      for (const d of data) {
+        const existing = map.get(d.name);
+        if (!existing || (d.profile_id && !existing.profile_id)) {
+          map.set(d.name, d);
+        }
+      }
+      setDrivers(Array.from(map.values()));
     }
   }
 

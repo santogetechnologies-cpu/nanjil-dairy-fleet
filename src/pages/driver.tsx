@@ -69,11 +69,6 @@ function DriverPage() {
           .from('vehicles')
           .update({ odometer: endKm })
           .eq('id', ongoingTrip.vehicle_id);
-
-        await supabase
-          .from('vehicle_telemetry')
-          .update({ odometer: endKm })
-          .eq('vehicle_id', ongoingTrip.vehicle_id);
       }
 
       alert("Trip completed and logged successfully!");
@@ -115,6 +110,51 @@ function DriverPage() {
   function handleSwitchVehicle(vehicleId: string) {
     localStorage.setItem("activeVehicleId", vehicleId);
     load();
+  }
+
+  function handleViewRoute() {
+    let origin = "";
+    let destination = "";
+    let query = "";
+
+    if (ongoingTrip) {
+      // If we saved routeName · From in start, let's extract the "From" part (after the '·')
+      const startParts = (ongoingTrip.start || "").split(" · ");
+      origin = startParts.length > 1 ? startParts[1] : startParts[0];
+      destination = ongoingTrip.destination || "";
+    } else if (vehicle?.route && vehicle.route !== "No route assigned") {
+      // Try to parse route, e.g. "Nagercoil to Kanyakumari" or "Nagercoil → Kanyakumari"
+      const routeStr = vehicle.route;
+      const separators = [" to ", " TO ", " -> ", " → ", " · "];
+      let foundSplit = false;
+      
+      for (const sep of separators) {
+        if (routeStr.includes(sep)) {
+          const parts = routeStr.split(sep);
+          origin = parts[0].trim();
+          destination = parts[1].trim();
+          foundSplit = true;
+          break;
+        }
+      }
+      
+      if (!foundSplit) {
+        query = routeStr;
+      }
+    }
+
+    let url = "";
+    if (origin && destination) {
+      url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}`;
+    } else if (query || vehicle?.route) {
+      url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query || vehicle.route)}`;
+    }
+
+    if (url) {
+      window.open(url, "_blank");
+    } else {
+      alert("No route details available to view.");
+    }
   }
 
   async function load() {
@@ -530,7 +570,14 @@ function DriverPage() {
             <Button className="flex-1" onClick={handleToggleShift}>
               <Play className="h-4 w-4" /> {activeShift ? "End Active Shift" : "Start Shift"}
             </Button>
-            <Button variant="outline" className="flex-1">View Route</Button>
+            <Button 
+              variant="outline" 
+              className="flex-1" 
+              onClick={handleViewRoute}
+              disabled={!ongoingTrip && (!vehicle?.route || vehicle.route === "No route assigned" || vehicle.route === "Ready to log active hours")}
+            >
+              View Route
+            </Button>
           </div>
         </Card>
 

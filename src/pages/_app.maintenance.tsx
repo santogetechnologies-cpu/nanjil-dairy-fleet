@@ -71,7 +71,7 @@ function Page() {
   async function markCompleted(id: string) {
     const { error } = await supabase
       .from('maintenance_records')
-      .update({ status: 'Completed', completed_at: new Date().toISOString() })
+      .update({ status: 'Completed' })
       .eq('id', id);
 
     if (!error) {
@@ -96,7 +96,7 @@ function Page() {
       return;
     }
 
-    const { error } = await supabase
+    const { data: newRec, error } = await supabase
       .from('maintenance_records')
       .insert({
         vehicle_id: form.vehicleId,
@@ -104,12 +104,27 @@ function Page() {
         cost: Number(form.cost) || 0,
         due_date: form.dueDate || new Date().toISOString().split('T')[0],
         status: 'Upcoming'
-      });
+      })
+      .select()
+      .maybeSingle();
 
     if (error) {
       setSubmitError(error.message || "Failed to log maintenance record.");
       setLoading(false);
       return;
+    }
+
+    if (newRec) {
+      const dueDays = Math.ceil((new Date(newRec.due_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      const severity = dueDays <= 3 ? 'High' : (dueDays <= 7 ? 'Medium' : 'Low');
+
+      await supabase.from('alerts').insert({
+        type: 'Maintenance',
+        severity: severity,
+        vehicle_id: form.vehicleId,
+        message: `Maintenance scheduled: ${form.service.trim()} (Due in ${dueDays} days on ${newRec.due_date})`,
+        resolved: false
+      });
     }
 
     setLoading(false);

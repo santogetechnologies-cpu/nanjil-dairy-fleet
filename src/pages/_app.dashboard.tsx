@@ -182,23 +182,6 @@ function DashboardPage() {
         </div>
 
         <div className="space-y-4">
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-            className="rounded-lg border border-info/40 bg-gradient-to-br from-info/5 to-primary/5 p-4">
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-md bg-primary text-primary-foreground flex items-center justify-center">
-                <Sparkles className="h-4 w-4" />
-              </div>
-              <div className="font-medium">AI Fleet Summary</div>
-            </div>
-            <p className="mt-3 text-sm leading-relaxed">
-              <span className="font-semibold">{mappedVehicles.filter(v => v.fuel < 30).length} vehicles</span> are consuming higher fuel than average.
-              {" "}<span className="font-semibold">{mappedAlerts.filter(a => a.type === 'Safety' && !a.resolved).length} safety alerts</span> require driver attention.
-              All cold chain vehicles are monitored within compliance thresholds.
-            </p>
-            <Link to="/ai" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-              Ask Nanjil AI <ArrowUpRight className="h-3 w-3" />
-            </Link>
-          </motion.div>
 
           <Card>
             <CardHeader title="Fleet Status" />
