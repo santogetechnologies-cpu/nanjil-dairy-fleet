@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/AppLayout";
 import { DataTable } from "@/components/DataTable";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
-import { Plus, X, Loader2 } from "lucide-react";
+import { Plus, X, Loader2, Trash2, AlertTriangle } from "lucide-react";
 
 function VehiclesPage() {
   const { user } = useAuth();
@@ -18,6 +18,9 @@ function VehiclesPage() {
   const [form, setForm] = useState({ number: "", type: "Tanker", model: "", odometer: 0, engineHours: 0 });
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<Vehicle | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   const canAdd = user?.role === "admin";
 
@@ -140,6 +143,46 @@ function VehiclesPage() {
     load();
   }
 
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError("");
+
+    // Delete telemetry first (foreign key dependency)
+    const { error: tErr } = await supabase
+      .from('vehicle_telemetry')
+      .delete()
+      .eq('vehicle_id', deleteTarget.id);
+
+    if (tErr) {
+      setDeleteError(tErr.message || "Failed to delete vehicle telemetry.");
+      setDeleting(false);
+      return;
+    }
+
+    // Also remove any active assignments
+    await supabase
+      .from('vehicle_assignments')
+      .delete()
+      .eq('vehicle_id', deleteTarget.id);
+
+    // Now delete the vehicle record
+    const { error: vErr } = await supabase
+      .from('vehicles')
+      .delete()
+      .eq('id', deleteTarget.id);
+
+    if (vErr) {
+      setDeleteError(vErr.message || "Failed to delete vehicle.");
+      setDeleting(false);
+      return;
+    }
+
+    setDeleting(false);
+    setDeleteTarget(null);
+    load();
+  }
+
   return (
     <div>
       <PageHeader 
@@ -193,6 +236,19 @@ function VehiclesPage() {
             <Badge status={v.engineOn ? "Moving" : "Parked"}>{v.engineOn ? "ON" : "OFF"}</Badge>
           )},
           { key: "lastUpdate", label: "Updated" },
+          ...(canAdd ? [{
+            key: "actions",
+            label: "Actions",
+            render: (v: Vehicle) => (
+              <button
+                onClick={(e) => { e.stopPropagation(); setDeleteTarget(v); setDeleteError(""); }}
+                className="p-1.5 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                title="Delete vehicle"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            ),
+          }] : []),
         ]}
       />
 
@@ -287,6 +343,55 @@ function VehiclesPage() {
                 </Button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => { if (!deleting) { setDeleteTarget(null); setDeleteError(""); } }}>
+          <div className="bg-card rounded-lg shadow-2xl max-w-sm w-full p-6 border border-border" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-3 mb-4">
+              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
+                <AlertTriangle className="h-5 w-5 text-destructive" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-base">Delete Vehicle</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Are you sure you want to permanently delete{" "}
+                  <span className="font-semibold text-foreground">{deleteTarget.number}</span>?
+                  This will remove all telemetry data and cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            {deleteError && (
+              <div className="bg-destructive/10 text-destructive text-xs p-2.5 rounded border border-destructive/20 font-medium mb-4">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => { setDeleteTarget(null); setDeleteError(""); }}
+                disabled={deleting}
+              >
+                Cancel
+              </Button>
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="inline-flex items-center gap-2 h-9 px-4 rounded-md bg-destructive text-white text-sm font-medium hover:bg-destructive/90 disabled:opacity-50 transition-colors"
+              >
+                {deleting ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Deleting…</>
+                ) : (
+                  <><Trash2 className="h-4 w-4" /> Delete Vehicle</>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
