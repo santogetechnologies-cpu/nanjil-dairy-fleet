@@ -1,13 +1,16 @@
 -- ==========================================================
--- Migration: Add drivers and profiles tables to realtime publication
+-- Migration: Recreate supabase_realtime publication with all tables
 -- ==========================================================
 
--- Check if supabase_realtime publication exists, then add tables
-do $$
-begin
-    if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
-        alter publication supabase_realtime add table public.drivers;
-        alter publication supabase_realtime add table public.profiles;
-    end if;
-end;
-$$;
+DROP PUBLICATION IF EXISTS supabase_realtime;
+CREATE PUBLICATION supabase_realtime FOR TABLE 
+    public.profiles,
+    public.drivers,
+    public.vehicles,
+    public.vehicle_telemetry,
+    public.alerts,
+    public.driver_shifts,
+    public.vehicle_documents,
+    public.fuel_purchase_logs,
+    public.pre_trip_inspections,
+    public.driver_schedules;
