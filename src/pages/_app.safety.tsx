@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { type Driver } from "@/lib/types";
 import { PageHeader } from "@/components/AppLayout";
 import { Kpi, Card, CardHeader, Badge, Button } from "@/components/ui-kit";
-import { ShieldCheck, AlertTriangle, TrendingUp, UsersRound, Trash2 } from "lucide-react";
+import { ShieldCheck, AlertTriangle, TrendingUp, UsersRound, Trash2, UserPlus, X, Loader2, Pencil } from "lucide-react";
 import { DataTable } from "@/components/DataTable";
 import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, Radar, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
 import { supabase } from "@/lib/supabase";
@@ -13,6 +13,29 @@ function Page() {
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [eventsChart, setEventsChart] = useState<{ name: string; value: number }[]>([]);
   const [radarData, setRadarData] = useState<{ metric: string; score: number }[]>([]);
+  
+  // Add & Edit Driver state
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [vehicles, setVehicles] = useState<{ id: string; number: string }[]>([]);
+  const [addForm, setAddForm] = useState({
+    name: "",
+    phone: "",
+    license: "",
+    score: 100,
+    vehicleId: ""
+  });
+  const [editForm, setEditForm] = useState({
+    id: "",
+    name: "",
+    phone: "",
+    license: "",
+    score: 100,
+    vehicleId: ""
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [toast, setToast] = useState({ show: false, message: "" });
 
   const canManage = user?.role === "admin" || user?.role === "manager";
 
@@ -35,6 +58,12 @@ function Page() {
         totalKm: d.total_km
       }));
       setDrivers(resolvedDrivers);
+    }
+
+    // Fetch available vehicles list for optional vehicle assignment
+    const { data: vData } = await supabase.from('vehicles').select('id, number').order('number');
+    if (vData) {
+      setVehicles(vData);
     }
 
     // 2. Fetch safety alerts to calculate safety events chart
@@ -115,6 +144,183 @@ function Page() {
   const needsImprovement = sorted.filter((d) => d.score < 80).length;
   const avgScore = drivers.length > 0 ? Math.round(drivers.reduce((s, d) => s + d.score, 0) / drivers.length) : 0;
 
+  async function handleAddDriver(e: React.FormEvent) {
+    e.preventDefault();
+    if (!addForm.name.trim()) {
+      setFormError("Driver name is required.");
+      return;
+    }
+
+    setSubmitting(true);
+    setFormError("");
+
+    try {
+      const scoreNum = Math.min(100, Math.max(0, Number(addForm.score) || 100));
+      const ratingVal = scoreNum >= 90 ? "Excellent" : scoreNum >= 75 ? "Good" : scoreNum >= 60 ? "Average" : "Poor";
+
+      // 1. Insert driver record into drivers table
+      const { data: newDriver, error: insertErr } = await supabase
+        .from('drivers')
+        .insert({
+          name: addForm.name.trim(),
+          phone: addForm.phone.trim() || null,
+          license: addForm.license.trim() ? addForm.license.trim().toUpperCase() : null,
+          score: scoreNum,
+          rating: ratingVal,
+          events: 0,
+          trips: 0,
+          total_km: 0
+        })
+        .select()
+        .single();
+
+      if (insertErr) throw insertErr;
+
+      // 2. If a vehicle was selected, create/update vehicle_assignments
+      if (addForm.vehicleId && newDriver) {
+        await supabase
+          .from('vehicle_assignments')
+          .update({ is_active: false, unassigned_at: new Date().toISOString() })
+          .eq('vehicle_id', addForm.vehicleId)
+          .eq('is_active', true);
+
+        const { error: assignErr } = await supabase
+          .from('vehicle_assignments')
+          .insert({
+            vehicle_id: addForm.vehicleId,
+            driver_id: newDriver.id,
+            is_active: true
+          });
+
+        if (assignErr) {
+          console.warn("Vehicle assignment failed:", assignErr.message);
+        }
+      }
+
+      // 3. Reset form and inform user
+      const createdName = addForm.name.trim();
+      setShowAddModal(false);
+      setAddForm({ name: "", phone: "", license: "", score: 100, vehicleId: "" });
+      setToast({ show: true, message: `Driver "${createdName}" added successfully.` });
+      load();
+
+      setTimeout(() => setToast({ show: false, message: "" }), 3000);
+    } catch (err: any) {
+      setFormError(err?.message || "Failed to add driver. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function openEditModal(driver: Driver) {
+    setFormError("");
+    try {
+      const { data: dData } = await supabase
+        .from('drivers')
+        .select('*')
+        .eq('id', driver.id)
+        .maybeSingle();
+
+      const { data: vAssign } = await supabase
+        .from('vehicle_assignments')
+        .select('vehicle_id')
+        .eq('driver_id', driver.id)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      setEditForm({
+        id: driver.id,
+        name: dData?.name || driver.name,
+        phone: dData?.phone || '',
+        license: dData?.license || '',
+        score: dData?.score ?? driver.score,
+        vehicleId: vAssign?.vehicle_id || ''
+      });
+      setShowEditModal(true);
+    } catch (err: any) {
+      console.error("Failed to load driver details for edit:", err);
+    }
+  }
+
+  async function handleUpdateDriver(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editForm.name.trim() || !editForm.id) {
+      setFormError("Driver name is required.");
+      return;
+    }
+
+    setSubmitting(true);
+    setFormError("");
+
+    try {
+      const scoreNum = Math.min(100, Math.max(0, Number(editForm.score) || 100));
+      const ratingVal = scoreNum >= 90 ? "Excellent" : scoreNum >= 75 ? "Good" : scoreNum >= 60 ? "Average" : "Poor";
+
+      // 1. Update driver record in drivers table
+      const { error: updateErr } = await supabase
+        .from('drivers')
+        .update({
+          name: editForm.name.trim(),
+          phone: editForm.phone.trim() || null,
+          license: editForm.license.trim() ? editForm.license.trim().toUpperCase() : null,
+          score: scoreNum,
+          rating: ratingVal,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', editForm.id);
+
+      if (updateErr) throw updateErr;
+
+      // 2. Check & update vehicle assignment if changed
+      const { data: currAssign } = await supabase
+        .from('vehicle_assignments')
+        .select('vehicle_id')
+        .eq('driver_id', editForm.id)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      const currentVehicleId = currAssign?.vehicle_id || '';
+
+      if (editForm.vehicleId !== currentVehicleId) {
+        // Deactivate current assignment for this driver
+        await supabase
+          .from('vehicle_assignments')
+          .update({ is_active: false, unassigned_at: new Date().toISOString() })
+          .eq('driver_id', editForm.id)
+          .eq('is_active', true);
+
+        if (editForm.vehicleId) {
+          // Deactivate any existing assignment for target vehicle
+          await supabase
+            .from('vehicle_assignments')
+            .update({ is_active: false, unassigned_at: new Date().toISOString() })
+            .eq('vehicle_id', editForm.vehicleId)
+            .eq('is_active', true);
+
+          // Assign new vehicle
+          await supabase
+            .from('vehicle_assignments')
+            .insert({
+              vehicle_id: editForm.vehicleId,
+              driver_id: editForm.id,
+              is_active: true
+            });
+        }
+      }
+
+      const updatedName = editForm.name.trim();
+      setShowEditModal(false);
+      setToast({ show: true, message: `Driver "${updatedName}" updated successfully.` });
+      load();
+
+      setTimeout(() => setToast({ show: false, message: "" }), 3000);
+    } catch (err: any) {
+      setFormError(err?.message || "Failed to update driver.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleDeleteDriver(driver: Driver) {
     if (!confirm(`Are you sure you want to delete driver ${driver.name}? This will remove their driver records, shift history, and safety stats. This action is permanent.`)) return;
 
@@ -157,7 +363,17 @@ function Page() {
 
   return (
     <div>
-      <PageHeader title="Driver Safety" subtitle="Real-time scoring, events and ranking" />
+      <PageHeader
+        title="Driver Safety"
+        subtitle="Real-time scoring, events and ranking"
+        actions={
+          canManage ? (
+            <Button onClick={() => { setShowAddModal(true); setFormError(""); }}>
+              <UserPlus className="h-4 w-4" /> Add Driver
+            </Button>
+          ) : undefined
+        }
+      />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Kpi label="Average Safety Score" value={`${avgScore}%`} accent="success" icon={<ShieldCheck className="h-5 w-5" />} />
@@ -235,20 +451,256 @@ function Page() {
               key: "actions",
               label: "Actions",
               render: (d: Driver) => (
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDeleteDriver(d); }}
-                  className="p-1.5 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-                  title="Delete driver"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); openEditModal(d); }}
+                    className="p-1.5 rounded-md text-muted-foreground hover:bg-muted hover:text-primary transition-colors"
+                    title="Edit driver"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDeleteDriver(d); }}
+                    className="p-1.5 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                    title="Delete driver"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               )
             }] : [])
           ]}
         />
       </div>
+
+      {/* Success Toast */}
+      {toast.show && (
+        <div className="fixed bottom-4 right-4 z-50 bg-green-600 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 border border-green-500 animate-bounce">
+          <span className="text-sm font-medium">{toast.message}</span>
+        </div>
+      )}
+
+      {/* Add Driver Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !submitting && setShowAddModal(false)}>
+          <Card className="w-full max-w-md p-5" onClick={(e: any) => e.stopPropagation()}>
+            <div className="flex items-center justify-between pb-3 border-b border-border">
+              <div className="flex items-center gap-2 font-semibold text-lg">
+                <UserPlus className="h-5 w-5 text-primary" />
+                Add New Driver
+              </div>
+              <button onClick={() => setShowAddModal(false)} disabled={submitting} className="p-1 hover:bg-muted rounded text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {formError && (
+              <div className="mt-3 p-3 bg-destructive/15 text-destructive rounded-md text-xs font-medium border border-destructive/20">
+                {formError}
+              </div>
+            )}
+
+            <form onSubmit={handleAddDriver} className="mt-4 space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  disabled={submitting}
+                  placeholder="e.g. Arun Kumar"
+                  value={addForm.name}
+                  onChange={(e) => setAddForm({ ...addForm, name: e.target.value })}
+                  className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">License Number</label>
+                  <input
+                    type="text"
+                    disabled={submitting}
+                    placeholder="e.g. TN-74-2024-00123"
+                    value={addForm.license}
+                    onChange={(e) => setAddForm({ ...addForm, license: e.target.value })}
+                    className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Phone Number</label>
+                  <input
+                    type="tel"
+                    disabled={submitting}
+                    placeholder="e.g. +91 9876543210"
+                    value={addForm.phone}
+                    onChange={(e) => setAddForm({ ...addForm, phone: e.target.value })}
+                    className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Initial Safety Score</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    disabled={submitting}
+                    value={addForm.score}
+                    onChange={(e) => setAddForm({ ...addForm, score: Number(e.target.value) })}
+                    className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Assign Vehicle</label>
+                  <select
+                    disabled={submitting}
+                    value={addForm.vehicleId}
+                    onChange={(e) => setAddForm({ ...addForm, vehicleId: e.target.value })}
+                    className="w-full h-9 px-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  >
+                    <option value="">-- None (Unassigned) --</option>
+                    {vehicles.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.number}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                <Button type="button" variant="outline" disabled={submitting} onClick={() => setShowAddModal(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={submitting}>
+                  {submitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin mr-1" /> Saving...
+                    </>
+                  ) : (
+                    "Save Driver"
+                  )}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
+
+      {/* Edit Driver Modal */}
+      {showEditModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !submitting && setShowEditModal(false)}>
+          <Card className="w-full max-w-md p-5" onClick={(e: any) => e.stopPropagation()}>
+            <div className="flex items-center justify-between pb-3 border-b border-border">
+              <div className="flex items-center gap-2 font-semibold text-lg">
+                <Pencil className="h-5 w-5 text-primary" />
+                Edit Driver Details
+              </div>
+              <button onClick={() => setShowEditModal(false)} disabled={submitting} className="p-1 hover:bg-muted rounded text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {formError && (
+              <div className="mt-3 p-3 bg-destructive/15 text-destructive rounded-md text-xs font-medium border border-destructive/20">
+                {formError}
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateDriver} className="mt-4 space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  disabled={submitting}
+                  placeholder="e.g. Arun Kumar"
+                  value={editForm.name}
+                  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">License Number</label>
+                  <input
+                    type="text"
+                    disabled={submitting}
+                    placeholder="e.g. TN-74-2024-00123"
+                    value={editForm.license}
+                    onChange={(e) => setEditForm({ ...editForm, license: e.target.value })}
+                    className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Phone Number</label>
+                  <input
+                    type="tel"
+                    disabled={submitting}
+                    placeholder="e.g. +91 9876543210"
+                    value={editForm.phone}
+                    onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                    className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Safety Score (0-100)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    disabled={submitting}
+                    value={editForm.score}
+                    onChange={(e) => setEditForm({ ...editForm, score: Number(e.target.value) })}
+                    className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Assign Vehicle</label>
+                  <select
+                    disabled={submitting}
+                    value={editForm.vehicleId}
+                    onChange={(e) => setEditForm({ ...editForm, vehicleId: e.target.value })}
+                    className="w-full h-9 px-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  >
+                    <option value="">-- None (Unassigned) --</option>
+                    {vehicles.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.number}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                <Button type="button" variant="outline" disabled={submitting} onClick={() => setShowEditModal(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={submitting}>
+                  {submitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin mr-1" /> Updating...
+                    </>
+                  ) : (
+                    "Update Driver"
+                  )}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
 
 export default Page;
+
+
