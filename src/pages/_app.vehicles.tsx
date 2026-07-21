@@ -375,26 +375,14 @@ function VehiclesPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Initial Odometer (km)</label>
-                  <input 
-                    type="number" 
-                    value={form.odometer} 
-                    onChange={(e) => setForm({ ...form, odometer: Number(e.target.value) })} 
-                    className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Engine Hours</label>
-                  <input 
-                    type="number" 
-                    step="0.1"
-                    value={form.engineHours} 
-                    onChange={(e) => setForm({ ...form, engineHours: Number(e.target.value) })} 
-                    className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Initial Odometer (km)</label>
+                <input 
+                  type="number" 
+                  value={form.odometer} 
+                  onChange={(e) => setForm({ ...form, odometer: Number(e.target.value) })} 
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                />
               </div>
 
               <div className="pt-3 border-t border-border flex justify-end gap-2">
@@ -485,26 +473,14 @@ function VehiclesPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Odometer (km)</label>
-                  <input 
-                    type="number" 
-                    value={editForm.odometer} 
-                    onChange={(e) => setEditForm({ ...editForm, odometer: Number(e.target.value) })} 
-                    className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Engine Hours</label>
-                  <input 
-                    type="number" 
-                    step="0.1"
-                    value={editForm.engineHours} 
-                    onChange={(e) => setEditForm({ ...editForm, engineHours: Number(e.target.value) })} 
-                    className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Odometer (km)</label>
+                <input 
+                  type="number" 
+                  value={editForm.odometer} 
+                  onChange={(e) => setEditForm({ ...editForm, odometer: Number(e.target.value) })} 
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                />
               </div>
 
               <div className="pt-3 border-t border-border flex justify-end gap-2">
