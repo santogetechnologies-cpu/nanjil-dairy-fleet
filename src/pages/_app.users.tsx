@@ -185,7 +185,9 @@ function Page() {
       }
 
       // 2. Sign up user via temporary client to prevent session takeover
-      const { data: signUpData, error: signUpErr } = await tempClient.auth.signUp({
+      let targetUserId: string | null = null;
+
+      const { data: res, error: signUpErr } = await tempClient.auth.signUp({
         email: form.email.toLowerCase().trim(),
         password: form.password,
         options: {
@@ -197,16 +199,54 @@ function Page() {
       });
 
       if (signUpErr) {
-        throw new Error(signUpErr.message);
+        // If account already exists in auth.users (e.g. from previously deleted profile)
+        if (signUpErr.message.toLowerCase().includes("already registered") || (signUpErr as any).status === 422) {
+          // Attempt 1: Clear orphaned auth account via RPC if available
+          await supabase.rpc('admin_delete_user_by_email', { target_email: form.email.toLowerCase().trim() });
+
+          // Retry signup after clearing orphan
+          const retry = await tempClient.auth.signUp({
+            email: form.email.toLowerCase().trim(),
+            password: form.password,
+            options: {
+              data: {
+                name: form.name,
+                role: roleVal
+              }
+            }
+          });
+
+          if (retry.data?.user) {
+            targetUserId = retry.data.user.id;
+          } else {
+            // Attempt 2: Try signing in with temp client to retrieve user ID
+            const { data: signInRes } = await tempClient.auth.signInWithPassword({
+              email: form.email.toLowerCase().trim(),
+              password: form.password
+            });
+
+            if (signInRes?.user) {
+              targetUserId = signInRes.user.id;
+              // Reset password to newly specified password
+              await supabase.rpc('admin_reset_user_password', { user_id: targetUserId, new_password: form.password });
+            } else {
+              throw new Error("This email is already registered. If you deleted this profile earlier, the account has been reclaimed for re-use.");
+            }
+          }
+        } else {
+          throw new Error(signUpErr.message);
+        }
+      } else if (res?.user) {
+        targetUserId = res.user.id;
       }
 
-      if (!signUpData.user) {
+      if (!targetUserId) {
         throw new Error("Unable to retrieve user account from creation response.");
       }
 
       // 3. Write profile directly to database to match Auth account
       const { error: profErr } = await supabase.from('profiles').upsert({
-        id: signUpData.user.id,
+        id: targetUserId,
         name: form.name,
         email: form.email.toLowerCase().trim(),
         role: roleVal,
@@ -229,12 +269,15 @@ function Page() {
         if (existingDriver) {
           await supabase
             .from('drivers')
-            .update({ profile_id: signUpData.user.id })
+            .update({ profile_id: targetUserId, name: form.name })
             .eq('id', existingDriver.id);
         } else {
           await supabase
             .from('drivers')
-            .insert({ name: form.name, profile_id: signUpData.user.id });
+            .upsert(
+              { name: form.name, profile_id: targetUserId },
+              { onConflict: 'profile_id' }
+            );
         }
       }
 
@@ -308,25 +351,32 @@ function Page() {
     }
     if (!confirm("Are you sure you want to delete this user profile? This action is permanent.")) return;
 
-    // Delete associated driver record from drivers table first (cascades shifts, etc.)
-    await supabase
-      .from('drivers')
-      .delete()
-      .eq('profile_id', id);
+    // Try deleting via admin RPC (deletes auth.users + profiles + drivers)
+    const { error: rpcErr } = await supabase.rpc('admin_delete_user', { target_user_id: id });
 
-    // Delete profile
-    const { error } = await supabase
-      .from('profiles')
-      .delete()
-      .eq('id', id);
+    if (rpcErr) {
+      console.warn("admin_delete_user RPC error, falling back to manual deletion:", rpcErr);
+      // Delete associated driver record from drivers table first (cascades shifts, etc.)
+      await supabase
+        .from('drivers')
+        .delete()
+        .eq('profile_id', id);
 
-    if (error) {
-      alert("Failed to delete user: " + error.message);
-    } else {
-      setToast({ show: true, message: "User deleted successfully." });
-      loadUsers();
-      setTimeout(() => setToast({ show: false, message: "" }), 3000);
+      // Delete profile
+      const { error } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        alert("Failed to delete user: " + error.message);
+        return;
+      }
     }
+
+    setToast({ show: true, message: "User deleted successfully." });
+    loadUsers();
+    setTimeout(() => setToast({ show: false, message: "" }), 3000);
   }
 
   return (

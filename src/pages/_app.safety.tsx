@@ -45,19 +45,28 @@ function Page() {
     
     let resolvedDrivers: Driver[] = [];
     if (dData) {
-      resolvedDrivers = dData.map(d => ({
-        id: d.id,
-        name: d.name,
-        vehicle: d.vehicle || 'Unknown',
-        phone: '',
-        license: '',
-        score: d.score,
-        events: d.events,
-        rating: d.rating,
-        trips: d.trips,
-        totalKm: d.total_km
-      }));
-      setDrivers(resolvedDrivers);
+      const map = new Map<string, Driver>();
+      for (const d of dData) {
+        const item: Driver = {
+          id: d.id,
+          name: d.name,
+          vehicle: d.vehicle || 'Unknown',
+          phone: '',
+          license: '',
+          score: d.score,
+          events: d.events,
+          rating: d.rating,
+          trips: d.trips,
+          totalKm: d.total_km
+        };
+        const key = (d.name || '').trim().toLowerCase();
+        const existing = map.get(key);
+        // Prefer entry with assigned vehicle or non-zero score/events
+        if (!existing || (existing.vehicle === 'Unknown' && item.vehicle !== 'Unknown')) {
+          map.set(key, item);
+        }
+      }
+      setDrivers(Array.from(map.values()));
     }
 
     // Fetch available vehicles list for optional vehicle assignment

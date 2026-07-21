@@ -121,16 +121,9 @@ function VehiclesPage() {
         .insert({
           number: vehicleNumber,
           type: form.type,
-          model: form.model.trim() || null,
+          model: form.model.trim() || "Unknown Model",
           odometer: Number(form.odometer) || 0,
-          engine_hours: Number(form.engineHours) || 0,
-          status: 'Parked',
-          speed: 0,
-          fuel: 100,
-          temperature: 4.0,
-          humidity: 85,
-          engine_on: false,
-          ignition: false
+          engine_hours: Number(form.engineHours) || 0
         })
         .select()
         .single();
@@ -200,7 +193,7 @@ function VehiclesPage() {
         .update({
           number: vehicleNumber,
           type: editForm.type,
-          model: editForm.model.trim() || null,
+          model: editForm.model.trim() || "Unknown Model",
           route: editForm.route.trim() || null,
           insurance_expiry: editForm.insuranceExpiry || null,
           odometer: Number(editForm.odometer) || 0,
