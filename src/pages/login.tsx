@@ -119,7 +119,7 @@ function LoginPage() {
               transition={{ duration: 0.55, delay: 0.08 }}
             >
               <div className="text-white/50 text-sm font-semibold uppercase tracking-[0.2em] mb-3">
-                Fleet Operations Suite
+
               </div>
               <h1 className="text-4xl xl:text-5xl font-bold text-white leading-[1.15] tracking-tight">
                 Drive smarter.<br />

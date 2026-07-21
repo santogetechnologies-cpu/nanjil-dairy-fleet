@@ -49,6 +49,10 @@ function Page() {
   const [submitError, setSubmitError] = useState("");
   const [toast, setToast] = useState({ show: false, message: "" });
 
+  // Driver selection states
+  const [driverList, setDriverList] = useState<{ id: string; name: string }[]>([]);
+  const [isCustomDriver, setIsCustomDriver] = useState(false);
+
   // Reset password states
   const [selectedUser, setSelectedUser] = useState<UserRow | null>(null);
   const [showResetPwd, setShowResetPwd] = useState(false);
@@ -58,6 +62,19 @@ function Page() {
   const [showConfirmPwd, setShowConfirmPwd] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState("");
+
+  async function loadDrivers() {
+    const { data } = await supabase.from('drivers').select('id, name').order('name');
+    if (data) {
+      const map = new Map<string, { id: string; name: string }>();
+      for (const d of data) {
+        if (d.name && !map.has(d.name)) {
+          map.set(d.name, d);
+        }
+      }
+      setDriverList(Array.from(map.values()));
+    }
+  }
 
   async function loadUsers() {
     const { data } = await supabase.from('profiles').select('*');
@@ -95,6 +112,7 @@ function Page() {
       if (cancelled || !session) return;
 
       loadUsers();
+      loadDrivers();
 
       channel = supabase
         .channel('profiles-realtime')
@@ -200,6 +218,26 @@ function Page() {
         throw new Error(`Profile creation failed: ${profErr.message}`);
       }
 
+      // Link driver record in drivers table if role is driver
+      if (roleVal === "driver") {
+        const { data: existingDriver } = await supabase
+          .from('drivers')
+          .select('id')
+          .ilike('name', form.name)
+          .maybeSingle();
+
+        if (existingDriver) {
+          await supabase
+            .from('drivers')
+            .update({ profile_id: signUpData.user.id })
+            .eq('id', existingDriver.id);
+        } else {
+          await supabase
+            .from('drivers')
+            .insert({ name: form.name, profile_id: signUpData.user.id });
+        }
+      }
+
       // 4. Success Handling
       setToast({ show: true, message: "User created successfully." });
       setShowNew(false);
@@ -296,7 +334,7 @@ function Page() {
       <PageHeader
         title="User Management"
         subtitle={`${users.length} users · roles & permissions`}
-        actions={<Button onClick={() => setShowNew(true)}><Plus className="h-4 w-4" /> Add user</Button>}
+        actions={<Button onClick={() => { loadDrivers(); setIsCustomDriver(false); setShowNew(true); }}><Plus className="h-4 w-4" /> Add user</Button>}
       />
 
       <DataTable<UserRow>
@@ -352,15 +390,57 @@ function Page() {
 
             <form onSubmit={addUser} className="mt-4 space-y-4">
               <div>
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Name</label>
-                <input 
-                  required 
-                  disabled={loading}
-                  value={form.name} 
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="John Doe"
-                  className="mt-1 h-10 w-full px-3 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" 
-                />
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    {form.role === "Driver" ? "Driver Name" : "Name"}
+                  </label>
+                  {form.role === "Driver" && driverList.length > 0 && isCustomDriver && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCustomDriver(false);
+                        setForm({ ...form, name: "" });
+                      }}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      ← Select from driver list
+                    </button>
+                  )}
+                </div>
+
+                {form.role === "Driver" && driverList.length > 0 && !isCustomDriver ? (
+                  <select 
+                    required 
+                    disabled={loading}
+                    value={form.name} 
+                    onChange={(e) => {
+                      if (e.target.value === "__custom__") {
+                        setIsCustomDriver(true);
+                        setForm({ ...form, name: "" });
+                      } else {
+                        setForm({ ...form, name: e.target.value });
+                      }
+                    }}
+                    className="mt-1 h-10 w-full px-3 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                  >
+                    <option value="">-- Select Driver Name --</option>
+                    {driverList.map((d) => (
+                      <option key={d.id} value={d.name}>
+                        {d.name}
+                      </option>
+                    ))}
+                    <option value="__custom__">+ Enter custom driver name...</option>
+                  </select>
+                ) : (
+                  <input 
+                    required 
+                    disabled={loading}
+                    value={form.name} 
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    placeholder={form.role === "Driver" ? "e.g. Bensingh" : "John Doe"}
+                    className="mt-1 h-10 w-full px-3 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" 
+                  />
+                )}
               </div>
 
               <div>

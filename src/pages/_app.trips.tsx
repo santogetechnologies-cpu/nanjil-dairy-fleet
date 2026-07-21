@@ -156,6 +156,23 @@ function TripsPage() {
     }
   }
 
+  async function handleDeleteTrip(id: string) {
+    if (!confirm("Are you sure you want to delete this trip record? This action is permanent.")) return;
+
+    try {
+      const { error } = await supabase
+        .from('trips')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      if (playback?.id === id) setPlayback(null);
+      load();
+    } catch (err: any) {
+      alert("Failed to delete trip: " + err.message);
+    }
+  }
+
   async function handleDispatchTrip(e: React.FormEvent) {
     e.preventDefault();
     if (!dispForm.driverId || !dispForm.vehicleId || !dispForm.routeName.trim() || !dispForm.start.trim() || !dispForm.destination.trim()) return;
@@ -264,10 +281,21 @@ function TripsPage() {
               { key: "startKm", label: "Start Odo", render: (t) => t.startKm !== null ? `${t.startKm} km` : '—' },
               { key: "endKm", label: "End Odo", render: (t) => t.endKm !== null ? `${t.endKm} km` : '—' },
               { key: "status", label: "Status", render: (t) => <Badge status={t.status}>{t.status}</Badge> },
-              { key: "actions", label: "", render: (t) => (
-                <button onClick={() => setPlayback(t)} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
-                  <Play className="h-3 w-3" /> Details
-                </button>
+              { key: "actions", label: "Actions", render: (t) => (
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setPlayback(t)} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                    <Play className="h-3 w-3" /> Details
+                  </button>
+                  {canManage && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeleteTrip(t.id); }}
+                      className="p-1 rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                      title="Delete trip"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
               )},
             ]}
           />
@@ -364,7 +392,7 @@ function TripsPage() {
                 </div>
               </div>
               <div className="flex gap-2 pt-2 border-t border-border">
-                <Button type="button" variant="outline" onClick={() => { setShowDispatchModal(false); setDispForm({ driverId: "", vehicleId: "", routeId: "", start: "", destination: "" }); }} className="flex-1">Cancel</Button>
+                <Button type="button" variant="outline" onClick={() => { setShowDispatchModal(false); setDispForm({ driverId: "", vehicleId: "", routeId: "", routeName: "", start: "", destination: "" }); }} className="flex-1">Cancel</Button>
                 <Button type="submit" className="flex-1" disabled={savingDisp}>
                   {savingDisp ? <Loader2 className="animate-spin h-4 w-4" /> : "Dispatch"}
                 </Button>
@@ -482,7 +510,12 @@ function TripsPage() {
               </div>
             </div>
 
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="mt-5 flex justify-between items-center">
+              {canManage ? (
+                <Button variant="destructive" size="sm" onClick={() => handleDeleteTrip(playback.id)}>
+                  <Trash2 className="h-4 w-4 mr-1" /> Delete Trip
+                </Button>
+              ) : <div />}
               <Button onClick={() => setPlayback(null)}>Close</Button>
             </div>
           </motion.div>

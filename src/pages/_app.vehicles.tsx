@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/AppLayout";
 import { DataTable } from "@/components/DataTable";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
-import { Plus, X, Loader2, Trash2, AlertTriangle } from "lucide-react";
+import { Plus, X, Loader2, Trash2, AlertTriangle, Pencil } from "lucide-react";
 
 function VehiclesPage() {
   const { user } = useAuth();
@@ -18,6 +18,23 @@ function VehiclesPage() {
   const [form, setForm] = useState({ number: "", type: "Tanker", model: "", odometer: 0, engineHours: 0 });
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState("");
+
+  // Edit vehicle states
+  const [editTarget, setEditTarget] = useState<Vehicle | null>(null);
+  const [editForm, setEditForm] = useState({
+    id: "",
+    number: "",
+    type: "Tanker",
+    model: "",
+    route: "",
+    insuranceExpiry: "",
+    odometer: 0,
+    engineHours: 0
+  });
+  const [editLoading, setEditLoading] = useState(false);
+  const [editError, setEditError] = useState("");
+
+  // Delete vehicle states
   const [deleteTarget, setDeleteTarget] = useState<Vehicle | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
@@ -98,49 +115,109 @@ function VehiclesPage() {
       return;
     }
 
-    // 1. Insert vehicle into public.vehicles
-    const { data: newV, error: vError } = await supabase
-      .from('vehicles')
-      .insert({
-        number: vehicleNumber,
-        type: form.type,
-        model: form.model.trim() || 'Unknown Model',
-        odometer: Number(form.odometer) || 0,
-        engine_hours: Number(form.engineHours) || 0.0,
-      })
-      .select()
-      .maybeSingle();
+    try {
+      const { data: inserted, error: insertError } = await supabase
+        .from('vehicles')
+        .insert({
+          number: vehicleNumber,
+          type: form.type,
+          model: form.model.trim() || null,
+          odometer: Number(form.odometer) || 0,
+          engine_hours: Number(form.engineHours) || 0,
+          status: 'Parked',
+          speed: 0,
+          fuel: 100,
+          temperature: 4.0,
+          humidity: 85,
+          engine_on: false,
+          ignition: false
+        })
+        .select()
+        .single();
 
-    if (vError) {
-      setSubmitError(vError.message || "Failed to create vehicle record.");
+      if (insertError) {
+        if (insertError.code === '23505') {
+          throw new Error(`Vehicle number "${vehicleNumber}" already exists.`);
+        }
+        throw insertError;
+      }
+
+      if (inserted) {
+        await supabase.from('vehicle_telemetry').insert({
+          vehicle_id: inserted.id,
+          status: 'Parked',
+          speed: 0,
+          fuel: 100,
+          temperature: 4.0,
+          humidity: 85,
+          engine_on: false,
+          ignition: false,
+          location: 'Main Yard, Nanjil Dairy, Nagercoil'
+        });
+      }
+
+      setShowNew(false);
+      setForm({ number: "", type: "Tanker", model: "", odometer: 0, engineHours: 0 });
+      load();
+    } catch (err: any) {
+      setSubmitError(err.message || "Failed to add vehicle.");
+    } finally {
       setLoading(false);
+    }
+  }
+
+  function openEditModal(v: Vehicle) {
+    setEditTarget(v);
+    setEditForm({
+      id: v.id,
+      number: v.number,
+      type: v.type || "Tanker",
+      model: v.model || "",
+      route: v.route || "",
+      insuranceExpiry: v.insuranceExpiry || "",
+      odometer: v.odometer || 0,
+      engineHours: v.engineHours || 0
+    });
+    setEditError("");
+  }
+
+  async function handleEditSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editTarget) return;
+
+    const vehicleNumber = editForm.number.trim().toUpperCase();
+    if (!vehicleNumber) {
+      setEditError("Vehicle registration number is required.");
       return;
     }
 
-    if (newV) {
-      // 2. Initialize default telemetry state
-      const { error: tError } = await supabase
-        .from('vehicle_telemetry')
-        .insert({
-          vehicle_id: newV.id,
-          status: 'Offline',
-          fuel: 100,
-          speed: 0,
-          temperature: 4.0,
-          humidity: 60,
-          engine_on: false,
-          ignition: false,
-        });
+    setEditLoading(true);
+    setEditError("");
 
-      if (tError) {
-        console.error("Telemetry initialization warning:", tError.message);
-      }
+    try {
+      const { error } = await supabase
+        .from('vehicles')
+        .update({
+          number: vehicleNumber,
+          type: editForm.type,
+          model: editForm.model.trim() || null,
+          route: editForm.route.trim() || null,
+          insurance_expiry: editForm.insuranceExpiry || null,
+          odometer: Number(editForm.odometer) || 0,
+          engine_hours: Number(editForm.engineHours) || 0,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', editTarget.id);
+
+      if (error) throw error;
+
+      setEditTarget(null);
+      load();
+    } catch (err: any) {
+      setEditError(err.message || "Failed to update vehicle.");
+    } finally {
+      setEditLoading(false);
     }
-
-    setLoading(false);
-    setShowNew(false);
-    setForm({ number: "", type: "Tanker", model: "", odometer: 0, engineHours: 0 });
-    load();
   }
 
   async function handleDelete() {
@@ -148,39 +225,21 @@ function VehiclesPage() {
     setDeleting(true);
     setDeleteError("");
 
-    // Delete telemetry first (foreign key dependency)
-    const { error: tErr } = await supabase
-      .from('vehicle_telemetry')
-      .delete()
-      .eq('vehicle_id', deleteTarget.id);
+    try {
+      const { error } = await supabase
+        .from('vehicles')
+        .delete()
+        .eq('id', deleteTarget.id);
 
-    if (tErr) {
-      setDeleteError(tErr.message || "Failed to delete vehicle telemetry.");
+      if (error) throw error;
+
+      setDeleteTarget(null);
+      load();
+    } catch (err: any) {
+      setDeleteError(err.message || "Failed to delete vehicle.");
+    } finally {
       setDeleting(false);
-      return;
     }
-
-    // Also remove any active assignments
-    await supabase
-      .from('vehicle_assignments')
-      .delete()
-      .eq('vehicle_id', deleteTarget.id);
-
-    // Now delete the vehicle record
-    const { error: vErr } = await supabase
-      .from('vehicles')
-      .delete()
-      .eq('id', deleteTarget.id);
-
-    if (vErr) {
-      setDeleteError(vErr.message || "Failed to delete vehicle.");
-      setDeleting(false);
-      return;
-    }
-
-    setDeleting(false);
-    setDeleteTarget(null);
-    load();
   }
 
   return (
@@ -240,18 +299,28 @@ function VehiclesPage() {
             key: "actions",
             label: "Actions",
             render: (v: Vehicle) => (
-              <button
-                onClick={(e) => { e.stopPropagation(); setDeleteTarget(v); setDeleteError(""); }}
-                className="p-1.5 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-                title="Delete vehicle"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={(e) => { e.stopPropagation(); openEditModal(v); }}
+                  className="p-1.5 rounded-md text-muted-foreground hover:bg-muted hover:text-primary transition-colors"
+                  title="Edit vehicle"
+                >
+                  <Pencil className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setDeleteTarget(v); setDeleteError(""); }}
+                  className="p-1.5 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                  title="Delete vehicle"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
             ),
           }] : []),
         ]}
       />
 
+      {/* Add New Vehicle Modal */}
       {showNew && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowNew(false)}>
           <div className="bg-card rounded-lg shadow-xl max-w-md w-full p-5 border border-border" onClick={(e) => e.stopPropagation()}>
@@ -274,7 +343,7 @@ function VehiclesPage() {
                   value={form.number} 
                   onChange={(e) => setForm({ ...form, number: e.target.value })} 
                   placeholder="e.g. TN-74-Z-1234"
-                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary uppercase"
                   required
                 />
               </div>
@@ -306,26 +375,14 @@ function VehiclesPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Initial Odometer (km)</label>
-                  <input 
-                    type="number" 
-                    value={form.odometer} 
-                    onChange={(e) => setForm({ ...form, odometer: Number(e.target.value) })} 
-                    className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Engine Hours</label>
-                  <input 
-                    type="number" 
-                    step="0.1"
-                    value={form.engineHours} 
-                    onChange={(e) => setForm({ ...form, engineHours: Number(e.target.value) })} 
-                    className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Initial Odometer (km)</label>
+                <input 
+                  type="number" 
+                  value={form.odometer} 
+                  onChange={(e) => setForm({ ...form, odometer: Number(e.target.value) })} 
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                />
               </div>
 
               <div className="pt-3 border-t border-border flex justify-end gap-2">
@@ -339,6 +396,104 @@ function VehiclesPage() {
                     </>
                   ) : (
                     "Create Vehicle"
+                  )}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Vehicle Modal */}
+      {editTarget && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !editLoading && setEditTarget(null)}>
+          <div className="bg-card rounded-lg shadow-xl max-w-md w-full p-5 border border-border" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between pb-3 border-b border-border">
+              <div className="flex items-center gap-2 font-semibold text-lg">
+                <Pencil className="h-5 w-5 text-primary" />
+                Edit Vehicle Details
+              </div>
+              <button onClick={() => setEditTarget(null)} disabled={editLoading} className="p-1 hover:bg-muted rounded text-muted-foreground"><X className="h-4 w-4" /></button>
+            </div>
+
+            <form onSubmit={handleEditSubmit} className="mt-4 space-y-4">
+              {editError && (
+                <div className="bg-destructive/10 text-destructive text-xs p-2.5 rounded border border-destructive/20 font-medium">
+                  {editError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Number (Registration) *</label>
+                <input 
+                  type="text" 
+                  value={editForm.number} 
+                  onChange={(e) => setEditForm({ ...editForm, number: e.target.value })} 
+                  placeholder="e.g. TN-74-Z-1234"
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary uppercase"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Type *</label>
+                <select 
+                  value={editForm.type} 
+                  onChange={(e) => setEditForm({ ...editForm, type: e.target.value })} 
+                  className="h-9 px-3 w-full rounded-md border border-border bg-card text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  required
+                >
+                  <option value="Tanker">Tanker</option>
+                  <option value="Truck">Truck</option>
+                  <option value="Pick-up">Pick-up</option>
+                  <option value="Delivery Van">Delivery Van</option>
+                  <option value="Container">Container</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Model</label>
+                <input 
+                  type="text" 
+                  value={editForm.model} 
+                  onChange={(e) => setEditForm({ ...editForm, model: e.target.value })} 
+                  placeholder="e.g. Ashok Leyland Ecomet"
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Assigned Route</label>
+                <input 
+                  type="text" 
+                  value={editForm.route} 
+                  onChange={(e) => setEditForm({ ...editForm, route: e.target.value })} 
+                  placeholder="e.g. Route A (Nagercoil - Thuckalay)"
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Odometer (km)</label>
+                <input 
+                  type="number" 
+                  value={editForm.odometer} 
+                  onChange={(e) => setEditForm({ ...editForm, odometer: Number(e.target.value) })} 
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-border flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setEditTarget(null)} disabled={editLoading}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={editLoading}>
+                  {editLoading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" /> Updating…
+                    </>
+                  ) : (
+                    "Update Vehicle"
                   )}
                 </Button>
               </div>
