@@ -7,6 +7,7 @@ const LoginPage = lazy(() => import("./pages/login"));
 const DriverPage = lazy(() => import("./pages/driver"));
 const AppGate = lazy(() => import("./pages/_app"));
 
+
 const DashboardPage = lazy(() => import("./pages/_app.dashboard"));
 const TrackingPage = lazy(() => import("./pages/_app.tracking"));
 const VehiclesPage = lazy(() => import("./pages/_app.vehicles"));
