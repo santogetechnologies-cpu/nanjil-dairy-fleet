@@ -13,11 +13,26 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // Split vendor chunks for faster mobile startup
-        manualChunks: {
-          "vendor-react": ["react", "react-dom", "react-router-dom"],
-          "vendor-supabase": ["@supabase/supabase-js"],
-          "vendor-recharts": ["recharts"],
-          "vendor-maplibre": ["maplibre-gl", "react-map-gl"],
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (
+              id.includes("react-router-dom") ||
+              id.includes("react-dom") ||
+              id.includes("react/") ||
+              id.includes("react-is")
+            ) {
+              return "vendor-react";
+            }
+            if (id.includes("@supabase")) {
+              return "vendor-supabase";
+            }
+            if (id.includes("recharts")) {
+              return "vendor-recharts";
+            }
+            if (id.includes("maplibre-gl") || id.includes("react-map-gl")) {
+              return "vendor-maplibre";
+            }
+          }
         },
       },
     },
