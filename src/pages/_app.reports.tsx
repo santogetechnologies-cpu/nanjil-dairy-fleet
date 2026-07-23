@@ -7,7 +7,7 @@ import { supabase } from "@/lib/supabase";
 const REPORTS = [
   { id: "vehicle", name: "Vehicle Report", desc: "Status, odometer, location and assignments for all fleet vehicles." },
   { id: "fuel", name: "Fuel Report", desc: "Daily consumption, mileage and alerts across the fleet." },
-  { id: "safety", name: "Driver Safety Report", desc: "Driver scores, ranking and event breakdown." },
+  { id: "safety", name: "Driver Management Report", desc: "Driver scores, ranking and event breakdown." },
   { id: "trip", name: "Trip Report", desc: "Trip log including start/destination, distance and duration." },
   { id: "cold-chain", name: "Cold Chain Report", desc: "Temperature & humidity compliance for milk transport." },
   { id: "maintenance", name: "Maintenance Report", desc: "Service history, upcoming services and cost summary." },

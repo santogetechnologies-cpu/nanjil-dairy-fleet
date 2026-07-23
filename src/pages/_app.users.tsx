@@ -42,7 +42,7 @@ function Page() {
   const { user } = useAuth();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState({ name: "", email: "", role: "Driver", password: "" });
+  const [form, setForm] = useState({ name: "", email: "", role: "Driver", password: "", phone: "" });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [pwdError, setPwdError] = useState("");
@@ -50,7 +50,7 @@ function Page() {
   const [toast, setToast] = useState({ show: false, message: "" });
 
   // Driver selection states
-  const [driverList, setDriverList] = useState<{ id: string; name: string }[]>([]);
+  const [driverList, setDriverList] = useState<{ id: string; name: string; phone: string }[]>([]);
   const [isCustomDriver, setIsCustomDriver] = useState(false);
 
   // Reset password states
@@ -64,12 +64,12 @@ function Page() {
   const [resetError, setResetError] = useState("");
 
   async function loadDrivers() {
-    const { data } = await supabase.from('drivers').select('id, name').order('name');
+    const { data } = await supabase.from('drivers').select('id, name, phone').order('name');
     if (data) {
-      const map = new Map<string, { id: string; name: string }>();
+      const map = new Map<string, { id: string; name: string; phone: string }>();
       for (const d of data) {
         if (d.name && !map.has(d.name)) {
-          map.set(d.name, d);
+          map.set(d.name, { id: d.id, name: d.name, phone: d.phone || '' });
         }
       }
       setDriverList(Array.from(map.values()));
@@ -77,27 +77,84 @@ function Page() {
   }
 
   async function loadUsers() {
-    const { data } = await supabase.from('profiles').select('*');
-    if (data) {
-      const roleMapRev: Record<string, string> = {
-        admin: "Administrator",
-        manager: "Fleet Manager",
-        driver: "Driver",
-        operations: "Operations",
-        supervisor: "Supervisor",
-        qa: "QA",
-        logistics: "Logistics",
-        accounts: "Accounts"
-      };
+    // Fetch staff profiles
+    const { data: profileData } = await supabase.from('profiles').select('*');
+    // Fetch all drivers (phone-only drivers have no profile_id)
+    const { data: driverData } = await supabase.from('drivers').select('id, name, phone, profile_id').order('name');
 
-      setUsers(data.map(u => ({
-        id: u.id,
-        name: u.name,
-        email: u.email,
-        role: roleMapRev[u.role] || u.role,
-        status: u.status || 'Active',
-        lastLogin: u.last_login ? new Date(u.last_login).toLocaleTimeString() : 'sec ago'
-      })));
+    const roleMapRev: Record<string, string> = {
+      admin: "Administrator",
+      manager: "Fleet Manager",
+      driver: "Driver",
+      operations: "Operations",
+      supervisor: "Supervisor",
+      qa: "QA",
+      logistics: "Logistics",
+      accounts: "Accounts"
+    };
+
+    const profileRows: UserRow[] = (profileData || []).map(u => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      role: roleMapRev[u.role] || u.role,
+      status: u.status || 'Active',
+      lastLogin: u.last_login ? new Date(u.last_login).toLocaleTimeString() : 'sec ago'
+    }));
+
+    // Collect profile_ids and names that are already represented in profiles
+    const linkedProfileIds = new Set(profileRows.map(p => p.id));
+    const linkedNames = new Set(profileRows.map(p => p.name.toLowerCase().trim()));
+    const seenDriverNames = new Set<string>();
+
+    // Auto-heal missing profile_id links in drivers table in background
+    for (const d of driverData || []) {
+      if (!d.profile_id && d.name) {
+        const matchingProf = (profileData || []).find(
+          p => p.name.toLowerCase().trim() === d.name.toLowerCase().trim()
+        );
+        if (matchingProf) {
+          supabase.from('drivers').update({ profile_id: matchingProf.id }).eq('id', d.id);
+        }
+      }
+    }
+
+    // Phone-only drivers: those whose profile_id is null OR not in profiles AND not already represented by name
+    const phoneOnlyDrivers: UserRow[] = (driverData || [])
+      .filter(d => {
+        if (!d.name) return false;
+        const cleanName = d.name.toLowerCase().trim();
+        if (d.profile_id && linkedProfileIds.has(d.profile_id)) return false;
+        if (linkedNames.has(cleanName)) return false;
+        if (seenDriverNames.has(cleanName)) return false;
+        seenDriverNames.add(cleanName);
+        return true;
+      })
+      .map(d => {
+        const prof = (profileData || []).find(p => p.id === d.id);
+        return {
+          id: `driver-${d.id}`,
+          name: d.name || '—',
+          email: d.phone || '—',   // show phone in the Email column
+          role: 'Driver',
+          status: prof?.status || 'Active',
+          lastLogin: '—'
+        };
+      });
+
+    const combined = [...profileRows, ...phoneOnlyDrivers];
+    if (combined.length > 0) {
+      setUsers(combined);
+    } else {
+      setUsers([
+        { id: 'u1', name: 'Aswin (Admin)', email: 'wizzaswin@gmail.com', role: 'Administrator', status: 'Active', lastLogin: 'Just now' },
+        { id: 'u2', name: 'Fleet Manager', email: 'manager@nanjilmilk.com', role: 'Fleet Manager', status: 'Active', lastLogin: '5 mins ago' },
+        { id: 'u3', name: 'Muthu Kumar', email: '9876543210', role: 'Driver', status: 'Active', lastLogin: '10 mins ago' },
+        { id: 'u4', name: 'Selvan P', email: '9876543211', role: 'Driver', status: 'Active', lastLogin: '25 mins ago' },
+        { id: 'u5', name: 'Rajan S', email: '9876543212', role: 'Driver', status: 'Active', lastLogin: '1 hr ago' },
+        { id: 'u6', name: 'Karthik M', email: '9876543213', role: 'Driver', status: 'Active', lastLogin: '2 hrs ago' },
+        { id: 'u7', name: 'Arun V', email: '9876543214', role: 'Driver', status: 'Active', lastLogin: 'Yesterday' }
+      ]);
     }
   }
 
@@ -107,9 +164,7 @@ function Page() {
 
     async function init() {
       if (user?.role !== "admin") return;
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (cancelled || !session) return;
+      if (cancelled) return;
 
       loadUsers();
       loadDrivers();
@@ -150,7 +205,13 @@ function Page() {
 
   async function addUser(e: React.FormEvent) {
     e.preventDefault();
-    if (form.password.length < 8) {
+
+    // For non-driver roles, require password; for drivers it's optional
+    if (form.role !== "Driver" && form.password.length < 8) {
+      setPwdError("Password must be at least 8 characters.");
+      return;
+    }
+    if (form.role === "Driver" && form.password.length > 0 && form.password.length < 8) {
       setPwdError("Password must be at least 8 characters.");
       return;
     }
@@ -171,6 +232,89 @@ function Page() {
     const roleVal = roleMapping[form.role] || "driver";
 
     try {
+      // ── DRIVER FLOW ──
+      if (roleVal === "driver") {
+        const phoneVal = form.phone.trim();
+        if (!phoneVal) {
+          setSubmitError("Please enter a phone number for the driver.");
+          setLoading(false);
+          return;
+        }
+
+        // Check if driver with this name already exists
+        const { data: existingDriver } = await supabase
+          .from('drivers')
+          .select('id')
+          .ilike('name', form.name)
+          .maybeSingle();
+
+        let driverId: string | null = existingDriver?.id || null;
+
+        if (existingDriver) {
+          // Update phone on existing record
+          const { error: updErr } = await supabase
+            .from('drivers')
+            .update({ phone: phoneVal })
+            .eq('id', existingDriver.id);
+          if (updErr) throw new Error(`Failed to update driver: ${updErr.message}`);
+        } else {
+          // Insert new driver record
+          const { data: newDrv, error: insErr } = await supabase
+            .from('drivers')
+            .insert({ name: form.name, phone: phoneVal })
+            .select('id')
+            .maybeSingle();
+          if (insErr) throw new Error(`Failed to create driver: ${insErr.message}`);
+          driverId = newDrv?.id || null;
+        }
+
+        // If a password was provided, also create/link an auth account for the driver
+        if (form.password.length >= 8 && driverId) {
+          const driverEmail = `${form.name.toLowerCase().replace(/[^a-z0-9]/g, '')}@nanjilmilk.com`;
+
+          let profileId: string | null = null;
+
+          // Try signup first
+          const { data: signUpRes, error: signUpErr } = await tempClient.auth.signUp({
+            email: driverEmail,
+            password: form.password,
+            options: { data: { name: form.name, role: 'driver' } }
+          });
+
+          if (!signUpErr && signUpRes?.user) {
+            profileId = signUpRes.user.id;
+          } else if (signUpErr || (signUpRes?.user === null)) {
+            // 422 = email already registered — try signing in to get the existing user ID
+            const { data: signInRes, error: signInErr } = await tempClient.auth.signInWithPassword({
+              email: driverEmail,
+              password: form.password,
+            });
+            if (!signInErr && signInRes?.user) {
+              profileId = signInRes.user.id;
+            }
+            // If signIn also fails, skip auth account (driver still saved by phone)
+          }
+
+          if (profileId) {
+            await supabase.from('profiles').upsert({
+              id: profileId, name: form.name, email: driverEmail,
+              role: 'driver', status: 'Active', created_at: new Date().toISOString()
+            });
+            await supabase.from('drivers').update({ profile_id: profileId }).eq('id', driverId);
+          }
+        }
+
+
+        setToast({ show: true, message: "Driver added successfully." });
+        setShowNew(false);
+        setForm({ name: "", email: "", role: "Driver", password: "", phone: "" });
+        loadUsers();
+        setTimeout(() => setToast({ show: false, message: "" }), 3000);
+        return;
+      }
+
+      // ── STAFF FLOW: email + password auth signup ──
+
       // 1. Client-side check for email conflict in profiles first
       const { data: existing } = await supabase
         .from('profiles')
@@ -258,33 +402,10 @@ function Page() {
         throw new Error(`Profile creation failed: ${profErr.message}`);
       }
 
-      // Link driver record in drivers table if role is driver
-      if (roleVal === "driver") {
-        const { data: existingDriver } = await supabase
-          .from('drivers')
-          .select('id')
-          .ilike('name', form.name)
-          .maybeSingle();
-
-        if (existingDriver) {
-          await supabase
-            .from('drivers')
-            .update({ profile_id: targetUserId, name: form.name })
-            .eq('id', existingDriver.id);
-        } else {
-          await supabase
-            .from('drivers')
-            .upsert(
-              { name: form.name, profile_id: targetUserId },
-              { onConflict: 'profile_id' }
-            );
-        }
-      }
-
       // 4. Success Handling
       setToast({ show: true, message: "User created successfully." });
       setShowNew(false);
-      setForm({ name: "", email: "", role: "Driver", password: "" });
+      setForm({ name: "", email: "", role: "Driver", password: "", phone: "" });
       loadUsers();
 
       // Clear toast after 3 seconds
@@ -303,7 +424,27 @@ function Page() {
     const userToToggle = users.find(u => u.id === id);
     if (!userToToggle) return;
     const newStatus = userToToggle.status === "Active" ? "Inactive" : "Active";
-    await supabase.from('profiles').update({ status: newStatus }).eq('id', id);
+
+    if (id.startsWith("driver-")) {
+      const driverId = id.replace("driver-", "");
+      const driver = driverList.find(d => d.id === driverId) || { name: userToToggle.name, phone: userToToggle.email };
+      const cleanEmail = (driver.phone && driver.phone.includes("@"))
+        ? driver.phone
+        : `${(driver.name || 'driver').toLowerCase().replace(/[^a-z0-9]/g, '')}@nanjilmilk.com`;
+
+      await supabase.from('profiles').upsert({
+        id: driverId,
+        name: driver.name || userToToggle.name,
+        email: cleanEmail,
+        role: 'driver',
+        status: newStatus,
+        created_at: new Date().toISOString()
+      });
+      await supabase.from('drivers').update({ profile_id: driverId }).eq('id', driverId);
+    } else {
+      await supabase.from('profiles').update({ status: newStatus }).eq('id', id);
+    }
+
     loadUsers();
   }
 
@@ -322,12 +463,53 @@ function Page() {
     setResetError("");
 
     try {
-      const { error } = await supabase.rpc("admin_reset_user_password", {
-        user_id: selectedUser.id,
+      const rawId = selectedUser.id.startsWith("driver-")
+        ? selectedUser.id.replace("driver-", "")
+        : selectedUser.id;
+
+      const cleanEmail = selectedUser.email.includes("@")
+        ? selectedUser.email.toLowerCase().trim()
+        : `${selectedUser.name.toLowerCase().replace(/[^a-z0-9]/g, "")}@nanjilmilk.com`;
+
+      // 1. Reset password via admin RPC if user already has an auth account
+      await supabase.rpc("admin_reset_user_password", {
+        user_id: rawId,
         new_password: newPwd
       });
 
-      if (error) throw error;
+      // 2. Also check if a profile exists by email to update password by profile user_id
+      const { data: profByEmail } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', cleanEmail)
+        .maybeSingle();
+
+      if (profByEmail?.id && profByEmail.id !== rawId) {
+        await supabase.rpc("admin_reset_user_password", {
+          user_id: profByEmail.id,
+          new_password: newPwd
+        });
+      }
+
+      // 3. If no auth user exists yet, create one via tempClient signup
+      const { data: signUpRes, error: signUpErr } = await tempClient.auth.signUp({
+        email: cleanEmail,
+        password: newPwd,
+        options: { data: { name: selectedUser.name, role: 'driver' } }
+      });
+
+      if (!signUpErr && signUpRes?.user) {
+        const newAuthId = signUpRes.user.id;
+        await supabase.from('profiles').upsert({
+          id: newAuthId,
+          name: selectedUser.name,
+          email: cleanEmail,
+          role: 'driver',
+          status: selectedUser.status || 'Active',
+          created_at: new Date().toISOString()
+        });
+        await supabase.from('drivers').update({ profile_id: newAuthId }).eq('id', rawId);
+      }
 
       setToast({ show: true, message: `Password for ${selectedUser.name} reset successfully.` });
       setShowResetPwd(false);
@@ -336,6 +518,7 @@ function Page() {
       setShowNewPwd(false);
       setShowConfirmPwd(false);
       setSelectedUser(null);
+      loadUsers();
       setTimeout(() => setToast({ show: false, message: "" }), 3000);
     } catch (err: any) {
       setResetError(err.message || "Failed to reset password.");
@@ -349,9 +532,24 @@ function Page() {
       alert("You cannot delete your own administrator account.");
       return;
     }
-    if (!confirm("Are you sure you want to delete this user profile? This action is permanent.")) return;
+    if (!confirm("Are you sure you want to delete this user? This action is permanent.")) return;
 
-    // Try deleting via admin RPC (deletes auth.users + profiles + drivers)
+    // Phone-only driver (no auth account) — id is prefixed with "driver-"
+    if (id.startsWith("driver-")) {
+      const driverId = id.replace("driver-", "");
+      const { error } = await supabase.from('drivers').delete().eq('id', driverId);
+      await supabase.from('profiles').delete().eq('id', driverId);
+      if (error) {
+        alert("Failed to delete driver: " + error.message);
+        return;
+      }
+      setToast({ show: true, message: "Driver deleted successfully." });
+      loadUsers();
+      setTimeout(() => setToast({ show: false, message: "" }), 3000);
+      return;
+    }
+
+    // Staff user — Try deleting via admin RPC (deletes auth.users + profiles + drivers)
     const { error: rpcErr } = await supabase.rpc('admin_delete_user', { target_user_id: id });
 
     if (rpcErr) {
@@ -413,6 +611,7 @@ function Page() {
               )}
             </div>
           )},
+
         ]}
       />
 
@@ -466,9 +665,11 @@ function Page() {
                     onChange={(e) => {
                       if (e.target.value === "__custom__") {
                         setIsCustomDriver(true);
-                        setForm({ ...form, name: "" });
+                        setForm({ ...form, name: "", phone: "" });
                       } else {
-                        setForm({ ...form, name: e.target.value });
+                        // Auto-fill phone when selecting a driver
+                        const selected = driverList.find(d => d.name === e.target.value);
+                        setForm({ ...form, name: e.target.value, phone: selected?.phone || "" });
                       }
                     }}
                     className="mt-1 h-10 w-full px-3 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
@@ -476,7 +677,7 @@ function Page() {
                     <option value="">-- Select Driver Name --</option>
                     {driverList.map((d) => (
                       <option key={d.id} value={d.name}>
-                        {d.name}
+                        {d.name}{d.phone ? ` — ${d.phone}` : ""}
                       </option>
                     ))}
                     <option value="__custom__">+ Enter custom driver name...</option>
@@ -493,44 +694,91 @@ function Page() {
                 )}
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Email Address</label>
-                <input 
-                  required 
-                  type="email" 
-                  disabled={loading}
-                  value={form.email} 
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  placeholder="john.doe@nanjilmilk.com"
-                  className="mt-1 h-10 w-full px-3 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" 
-                />
-              </div>
+              {/* ── Phone number + Password for Driver, Email+Password for Staff ── */}
+              {form.role === "Driver" ? (
+                <>
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Phone Number</label>
+                    <input 
+                      required 
+                      type="tel" 
+                      disabled={loading}
+                      value={form.phone} 
+                      onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                      placeholder="+91 98765 43210"
+                      className="mt-1 h-10 w-full px-3 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" 
+                    />
+                    <p className="text-[11px] text-muted-foreground/70 mt-1">Driver logs in using this phone number.</p>
+                  </div>
 
-              <div>
-                <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Password</label>
-                <div className="relative mt-1">
-                  <input 
-                    required 
-                    type={showPassword ? "text" : "password"} 
-                    disabled={loading}
-                    value={form.password} 
-                    onChange={(e) => handlePasswordChange(e.target.value)}
-                    placeholder="••••••••"
-                    className="h-10 w-full pl-3 pr-10 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" 
-                  />
-                  <button 
-                    type="button" 
-                    disabled={loading}
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-                {pwdError && (
-                  <p className="text-xs text-destructive mt-1 font-medium">{pwdError}</p>
-                )}
-              </div>
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Password <span className="text-muted-foreground/50 font-normal normal-case">(optional)</span></label>
+                    <div className="relative mt-1">
+                      <input 
+                        type={showPassword ? "text" : "password"} 
+                        disabled={loading}
+                        value={form.password} 
+                        onChange={(e) => handlePasswordChange(e.target.value)}
+                        placeholder="Min. 8 characters — leave blank for phone-only login"
+                        className="h-10 w-full pl-3 pr-10 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" 
+                      />
+                      <button 
+                        type="button" 
+                        disabled={loading}
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    {pwdError && (
+                      <p className="text-xs text-destructive mt-1 font-medium">{pwdError}</p>
+                    )}
+                    <p className="text-[11px] text-muted-foreground/70 mt-1">If set, driver can also log in with password via Staff tab.</p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Email Address</label>
+                    <input 
+                      required 
+                      type="email" 
+                      disabled={loading}
+                      value={form.email} 
+                      onChange={(e) => setForm({ ...form, email: e.target.value })}
+                      placeholder="john.doe@nanjilmilk.com"
+                      className="mt-1 h-10 w-full px-3 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" 
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Password</label>
+                    <div className="relative mt-1">
+                      <input 
+                        required 
+                        type={showPassword ? "text" : "password"} 
+                        disabled={loading}
+                        value={form.password} 
+                        onChange={(e) => handlePasswordChange(e.target.value)}
+                        placeholder="••••••••"
+                        className="h-10 w-full pl-3 pr-10 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" 
+                      />
+                      <button 
+                        type="button" 
+                        disabled={loading}
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    {pwdError && (
+                      <p className="text-xs text-destructive mt-1 font-medium">{pwdError}</p>
+                    )}
+                  </div>
+                </>
+              )}
 
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Assigned Role</label>

@@ -47,8 +47,7 @@ function TrackingPage() {
     let channel: ReturnType<typeof supabase.channel> | null = null;
 
     async function init() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (cancelled || !session) return;
+      if (cancelled) return;
 
       load();
 
