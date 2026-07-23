@@ -127,8 +127,7 @@ function Page() {
     let channel: ReturnType<typeof supabase.channel> | null = null;
 
     async function init() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (cancelled || !session) return;
+      if (cancelled) return;
 
       load();
 
@@ -373,7 +372,7 @@ function Page() {
   return (
     <div>
       <PageHeader
-        title="Driver Safety"
+        title="Driver Management"
         subtitle="Real-time scoring, events and ranking"
         actions={
           canManage ? (

@@ -29,7 +29,7 @@ const NAV_GROUPS = [
   {
     label: "Monitoring",
     items: [
-      { to: "/safety", label: "Driver Safety", icon: ShieldCheck },
+      { to: "/safety", label: "Driver Management", icon: ShieldCheck },
       { to: "/engine", label: "Engine & Ignition", icon: Cog },
       { to: "/cold-chain", label: "Cold Chain", icon: Thermometer },
       { to: "/alerts", label: "Alerts Center", icon: Bell },

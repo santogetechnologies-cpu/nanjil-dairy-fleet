@@ -143,12 +143,25 @@ function DriverPage() {
   }
 
   async function load() {
-    if (!user) return;
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
+    if (!user) { setLoading(false); return; }
 
-    const { data: dData } = await supabase
-      .from('drivers').select('*').eq('profile_id', session.user.id).maybeSingle();
+    // Drivers use localStorage sessions — no Supabase auth session required
+    const { data: { session } } = await supabase.auth.getSession();
+
+    // Try to find driver record by profile_id (Supabase session) or by name (localStorage session)
+    let dData: any = null;
+    if (session?.user?.id) {
+      const { data } = await supabase
+        .from('drivers').select('*').eq('profile_id', session.user.id).maybeSingle();
+      dData = data;
+    }
+    // Fallback: match by driver name from auth context (localStorage session)
+    if (!dData && user.name) {
+      const { data } = await supabase
+        .from('drivers').select('*').ilike('name', user.name).maybeSingle();
+      dData = data;
+    }
+
     const resolvedDriver = dData || { id: null, name: user.name, score: 0, rating: "Poor", trips: 0, total_km: 0, events: 0 };
     setDriver(resolvedDriver);
 
@@ -221,8 +234,7 @@ function DriverPage() {
     let cancelled = false;
     let channel: ReturnType<typeof supabase.channel> | null = null;
     async function init() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (cancelled || !session) return;
+      if (cancelled) return;
       load();
       channel = supabase
         .channel('driver-portal-realtime')
