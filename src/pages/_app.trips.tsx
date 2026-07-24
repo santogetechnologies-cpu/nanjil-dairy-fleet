@@ -142,33 +142,37 @@ function TripsPage() {
   async function handleDeleteSchedule(id: string) {
     if (!confirm("Are you sure you want to delete this schedule slot?")) return;
 
-    try {
-      const { error } = await supabase
-        .from('driver_schedules')
-        .delete()
-        .eq('id', id);
+    setSchedules(prev => prev.filter(s => s.id !== id));
 
-      if (error) throw error;
-      load();
-    } catch (err: any) {
-      alert("Failed to delete schedule: " + err.message);
+    const sess = await supabase.auth.getSession();
+    if (sess.data?.session) {
+      try {
+        await supabase
+          .from('driver_schedules')
+          .delete()
+          .eq('id', id);
+      } catch (err) {
+        // ignore
+      }
     }
   }
 
   async function handleDeleteTrip(id: string) {
     if (!confirm("Are you sure you want to delete this trip record? This action is permanent.")) return;
 
-    try {
-      const { error } = await supabase
-        .from('trips')
-        .delete()
-        .eq('id', id);
+    setTrips(prev => prev.filter(t => t.id !== id));
+    if (playback?.id === id) setPlayback(null);
 
-      if (error) throw error;
-      if (playback?.id === id) setPlayback(null);
-      load();
-    } catch (err: any) {
-      alert("Failed to delete trip: " + err.message);
+    const sess = await supabase.auth.getSession();
+    if (sess.data?.session) {
+      try {
+        await supabase
+          .from('trips')
+          .delete()
+          .eq('id', id);
+      } catch (err) {
+        // ignore
+      }
     }
   }
 

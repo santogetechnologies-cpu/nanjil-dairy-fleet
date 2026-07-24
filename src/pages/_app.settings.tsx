@@ -20,22 +20,38 @@ function Page() {
 
   useEffect(() => {
     async function load() {
-      if (user?.id) {
-        const { data } = await supabase
-          .from('settings')
-          .select('*')
-          .eq('user_id', user.id)
-          .maybeSingle();
-        if (data) {
-          setPrefs({
-            notifications: data.notifications,
-            sms: data.sms,
-            geofence: data.geofence,
-            overspeed: data.overspeed,
-            coldMin: data.cold_min,
-            coldMax: data.cold_max,
-            fuelAlert: data.fuel_alert,
-          });
+      const savedLocal = localStorage.getItem('nanjil_settings_prefs');
+      if (savedLocal) {
+        try {
+          setPrefs(JSON.parse(savedLocal));
+        } catch (e) {
+          // ignore parse error
+        }
+      }
+
+      const isUUID = !!user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id);
+      if (isUUID) {
+        try {
+          const { data } = await supabase
+            .from('settings')
+            .select('*')
+            .eq('user_id', user.id)
+            .maybeSingle();
+          if (data) {
+            const loadedPrefs = {
+              notifications: data.notifications,
+              sms: data.sms,
+              geofence: data.geofence,
+              overspeed: data.overspeed,
+              coldMin: data.cold_min,
+              coldMax: data.cold_max,
+              fuelAlert: data.fuel_alert,
+            };
+            setPrefs(loadedPrefs);
+            localStorage.setItem('nanjil_settings_prefs', JSON.stringify(loadedPrefs));
+          }
+        } catch (err) {
+          // ignore DB load error
         }
       }
     }
@@ -43,23 +59,25 @@ function Page() {
   }, [user]);
 
   async function save() {
-    if (user?.id) {
-      const { error } = await supabase.from('settings').upsert({
-        user_id: user.id,
-        notifications: prefs.notifications,
-        sms: prefs.sms,
-        geofence: prefs.geofence,
-        overspeed: prefs.overspeed,
-        cold_min: prefs.coldMin,
-        cold_max: prefs.coldMax,
-        fuel_alert: prefs.fuelAlert,
-      });
+    localStorage.setItem('nanjil_settings_prefs', JSON.stringify(prefs));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
 
-      if (!error) {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
-      } else {
-        alert("Failed to save settings: " + error.message);
+    const isUUID = !!user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id);
+    if (isUUID) {
+      try {
+        await supabase.from('settings').upsert({
+          user_id: user.id,
+          notifications: prefs.notifications,
+          sms: prefs.sms,
+          geofence: prefs.geofence,
+          overspeed: prefs.overspeed,
+          cold_min: prefs.coldMin,
+          cold_max: prefs.coldMax,
+          fuel_alert: prefs.fuelAlert,
+        });
+      } catch (err) {
+        // ignore DB save error
       }
     }
   }

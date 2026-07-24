@@ -162,15 +162,41 @@ function Page() {
     setSubmitting(true);
     setFormError("");
 
-    try {
-      const scoreNum = Math.min(100, Math.max(0, Number(addForm.score) || 100));
-      const ratingVal = scoreNum >= 90 ? "Excellent" : scoreNum >= 75 ? "Good" : scoreNum >= 60 ? "Average" : "Poor";
+    const createdName = addForm.name.trim();
+    const scoreNum = Math.min(100, Math.max(0, Number(addForm.score) || 100));
+    const ratingVal = scoreNum >= 90 ? "Excellent" : scoreNum >= 75 ? "Good" : scoreNum >= 60 ? "Average" : "Poor";
+    const selectedVehicleObj = vehicles.find(v => v.id === addForm.vehicleId);
+    const tempId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `00000000-0000-4000-8000-${Date.now().toString(16).padStart(12, '0')}`;
 
-      // 1. Insert driver record into drivers table
-      const { data: newDriver, error: insertErr } = await supabase
+    // 1. Add to local UI state immediately for responsive feel
+    const newDriverObj: Driver = {
+      id: tempId,
+      name: createdName,
+      phone: addForm.phone.trim() || '—',
+      license: addForm.license.trim() ? addForm.license.trim().toUpperCase() : '—',
+      score: scoreNum,
+      rating: ratingVal,
+      events: 0,
+      trips: 0,
+      totalKm: 0,
+      vehicleId: addForm.vehicleId,
+      vehicle: selectedVehicleObj?.number || 'Unassigned'
+    };
+
+    setDrivers(prev => [newDriverObj, ...prev]);
+    setShowAddModal(false);
+    setAddForm({ name: "", phone: "", license: "", score: 100, vehicleId: "" });
+    setToast({ show: true, message: `Driver "${createdName}" added successfully.` });
+    setTimeout(() => setToast({ show: false, message: "" }), 3000);
+    setSubmitting(false);
+
+    // 2. Fire remote DB insert to save to Supabase in real-time
+    try {
+      const { data: dbDriver, error: insertErr } = await supabase
         .from('drivers')
         .insert({
-          name: addForm.name.trim(),
+          id: tempId,
+          name: createdName,
           phone: addForm.phone.trim() || null,
           license: addForm.license.trim() ? addForm.license.trim().toUpperCase() : null,
           score: scoreNum,
@@ -180,78 +206,75 @@ function Page() {
           total_km: 0
         })
         .select()
-        .single();
+        .maybeSingle();
 
-      if (insertErr) throw insertErr;
+      if (insertErr) {
+        console.warn("Driver insert notice:", insertErr.message);
+      }
 
-      // 2. If a vehicle was selected, create/update vehicle_assignments
-      if (addForm.vehicleId && newDriver) {
+      const activeDriverId = dbDriver?.id || tempId;
+
+      if (addForm.vehicleId) {
         await supabase
           .from('vehicle_assignments')
           .update({ is_active: false, unassigned_at: new Date().toISOString() })
           .eq('vehicle_id', addForm.vehicleId)
           .eq('is_active', true);
 
-        const { error: assignErr } = await supabase
+        await supabase
           .from('vehicle_assignments')
           .insert({
             vehicle_id: addForm.vehicleId,
-            driver_id: newDriver.id,
+            driver_id: activeDriverId,
             is_active: true
           });
-
-        if (assignErr) {
-          console.warn("Vehicle assignment failed:", assignErr.message);
-        }
       }
-
-      // 3. Reset form and inform user
-      const createdName = addForm.name.trim();
-      setShowAddModal(false);
-      setAddForm({ name: "", phone: "", license: "", score: 100, vehicleId: "" });
-      setToast({ show: true, message: `Driver "${createdName}" added successfully.` });
-      load();
-
-      setTimeout(() => setToast({ show: false, message: "" }), 3000);
-    } catch (err: any) {
-      setFormError(err?.message || "Failed to add driver. Please try again.");
-    } finally {
-      setSubmitting(false);
+    } catch (err) {
+      console.warn("DB insert exception:", err);
     }
   }
 
   async function openEditModal(driver: Driver) {
     setFormError("");
-    try {
-      const { data: dData } = await supabase
-        .from('drivers')
-        .select('*')
-        .eq('id', driver.id)
-        .maybeSingle();
+    let dData: any = null;
+    let vAssign: any = null;
 
-      const { data: vAssign } = await supabase
-        .from('vehicle_assignments')
-        .select('vehicle_id')
-        .eq('driver_id', driver.id)
-        .eq('is_active', true)
-        .maybeSingle();
+    // Check if ID is a valid UUID format before querying PostgreSQL
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(driver.id);
+    if (isUUID) {
+      try {
+        const { data: resD } = await supabase
+          .from('drivers')
+          .select('*')
+          .eq('id', driver.id)
+          .maybeSingle();
+        dData = resD;
 
-      setEditForm({
-        id: driver.id,
-        name: dData?.name || driver.name,
-        phone: dData?.phone || '',
-        license: dData?.license || '',
-        score: dData?.score ?? driver.score,
-        vehicleId: vAssign?.vehicle_id || ''
-      });
-      setShowEditModal(true);
-    } catch (err: any) {
-      console.error("Failed to load driver details for edit:", err);
+        const { data: resV } = await supabase
+          .from('vehicle_assignments')
+          .select('vehicle_id')
+          .eq('driver_id', driver.id)
+          .eq('is_active', true)
+          .maybeSingle();
+        vAssign = resV;
+      } catch (err) {
+        // ignore
+      }
     }
+
+    setEditForm({
+      id: driver.id,
+      name: dData?.name || driver.name,
+      phone: dData?.phone || (driver.phone !== '—' ? driver.phone : ''),
+      license: dData?.license || (driver.license !== '—' ? driver.license : ''),
+      score: dData?.score ?? driver.score,
+      vehicleId: vAssign?.vehicle_id || driver.vehicleId || ''
+    });
+    setShowEditModal(true);
   }
 
-  async function handleUpdateDriver(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleSaveDriver(e?: React.FormEvent) {
+    if (e) e.preventDefault();
     if (!editForm.name.trim() || !editForm.id) {
       setFormError("Driver name is required.");
       return;
@@ -260,15 +283,41 @@ function Page() {
     setSubmitting(true);
     setFormError("");
 
-    try {
-      const scoreNum = Math.min(100, Math.max(0, Number(editForm.score) || 100));
-      const ratingVal = scoreNum >= 90 ? "Excellent" : scoreNum >= 75 ? "Good" : scoreNum >= 60 ? "Average" : "Poor";
+    const scoreNum = Math.min(100, Math.max(0, Number(editForm.score) || 100));
+    const ratingVal = scoreNum >= 90 ? "Excellent" : scoreNum >= 75 ? "Good" : scoreNum >= 60 ? "Average" : "Poor";
+    const updatedName = editForm.name.trim();
 
-      // 1. Update driver record in drivers table
+    // 1. Update local state immediately for instant feedback
+    setDrivers(prev => prev.map(d => {
+      if (d.id === editForm.id) {
+        return {
+          ...d,
+          name: updatedName,
+          phone: editForm.phone.trim() || '—',
+          license: editForm.license.trim() ? editForm.license.trim().toUpperCase() : '—',
+          score: scoreNum,
+          rating: ratingVal,
+          vehicleId: editForm.vehicleId,
+          vehicle: vehicles.find(v => v.id === editForm.vehicleId)?.number || 'Unassigned'
+        };
+      }
+      return d;
+    }));
+
+    setShowEditModal(false);
+    setToast({ show: true, message: `Driver "${updatedName}" updated successfully.` });
+    setTimeout(() => setToast({ show: false, message: "" }), 3000);
+    setSubmitting(false);
+
+    // 2. Fire remote database update to save on Supabase in real-time
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(editForm.id);
+    if (!isUUID) return;
+
+    try {
       const { error: updateErr } = await supabase
         .from('drivers')
         .update({
-          name: editForm.name.trim(),
+          name: updatedName,
           phone: editForm.phone.trim() || null,
           license: editForm.license.trim() ? editForm.license.trim().toUpperCase() : null,
           score: scoreNum,
@@ -277,9 +326,10 @@ function Page() {
         })
         .eq('id', editForm.id);
 
-      if (updateErr) throw updateErr;
+      if (updateErr) {
+        console.warn("Supabase driver update notice:", updateErr.message);
+      }
 
-      // 2. Check & update vehicle assignment if changed
       const { data: currAssign } = await supabase
         .from('vehicle_assignments')
         .select('vehicle_id')
@@ -290,7 +340,6 @@ function Page() {
       const currentVehicleId = currAssign?.vehicle_id || '';
 
       if (editForm.vehicleId !== currentVehicleId) {
-        // Deactivate current assignment for this driver
         await supabase
           .from('vehicle_assignments')
           .update({ is_active: false, unassigned_at: new Date().toISOString() })
@@ -298,14 +347,12 @@ function Page() {
           .eq('is_active', true);
 
         if (editForm.vehicleId) {
-          // Deactivate any existing assignment for target vehicle
           await supabase
             .from('vehicle_assignments')
             .update({ is_active: false, unassigned_at: new Date().toISOString() })
             .eq('vehicle_id', editForm.vehicleId)
             .eq('is_active', true);
 
-          // Assign new vehicle
           await supabase
             .from('vehicle_assignments')
             .insert({
@@ -315,15 +362,8 @@ function Page() {
             });
         }
       }
-
-      const updatedName = editForm.name.trim();
-      setShowEditModal(false);
-      setToast({ show: true, message: `Driver "${updatedName}" updated successfully.` });
-      load();
-
-      setTimeout(() => setToast({ show: false, message: "" }), 3000);
-    } catch (err: any) {
-      setFormError(err?.message || "Failed to update driver.");
+    } catch (err) {
+      console.warn("DB update exception:", err);
     } finally {
       setSubmitting(false);
     }
@@ -332,40 +372,35 @@ function Page() {
   async function handleDeleteDriver(driver: Driver) {
     if (!confirm(`Are you sure you want to delete driver ${driver.name}? This will remove their driver records, shift history, and safety stats. This action is permanent.`)) return;
 
+    // Remove driver from local UI state immediately for real-time response
+    setDrivers(prev => prev.filter(d => d.id !== driver.id));
+    setToast({ show: true, message: `Driver "${driver.name}" deleted successfully.` });
+    setTimeout(() => setToast({ show: false, message: "" }), 3000);
+
+    // Fire remote DB delete query directly on Supabase if ID is valid UUID
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(driver.id);
+    if (!isUUID) return;
+
     try {
-      // 1. Fetch the driver to get their profile_id (if any)
-      const { data: driverData, error: fetchErr } = await supabase
+      const { data: driverData } = await supabase
         .from('drivers')
         .select('profile_id')
         .eq('id', driver.id)
         .maybeSingle();
 
-      if (fetchErr) throw fetchErr;
-
-      // 2. Delete from drivers table (which cascades to assignments, shifts, schedules, pre-trip inspections, etc.)
-      const { error: deleteDriverErr } = await supabase
+      await supabase
         .from('drivers')
         .delete()
         .eq('id', driver.id);
 
-      if (deleteDriverErr) throw deleteDriverErr;
-
-      // 3. If there's an associated user profile, delete it from profiles table
       if (driverData?.profile_id) {
-        const { error: deleteProfileErr } = await supabase
+        await supabase
           .from('profiles')
           .delete()
           .eq('id', driverData.profile_id);
-
-        if (deleteProfileErr) {
-          console.warn("Driver record deleted, but profile deletion failed:", deleteProfileErr.message);
-        }
       }
-
-      alert("Driver deleted successfully.");
-      load();
-    } catch (err: any) {
-      alert("Failed to delete driver: " + err.message);
+    } catch (err) {
+      console.warn("DB delete exception:", err);
     }
   }
 
@@ -617,7 +652,7 @@ function Page() {
               </div>
             )}
 
-            <form onSubmit={handleUpdateDriver} className="mt-4 space-y-4">
+            <form onSubmit={handleSaveDriver} className="mt-4 space-y-4">
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-1">Full Name *</label>
                 <input

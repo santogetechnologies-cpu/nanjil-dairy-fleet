@@ -39,6 +39,7 @@ export interface Driver {
   rating: "Excellent" | "Good" | "Average" | "Poor";
   trips: number;
   totalKm: number;
+  vehicleId?: string;
 }
 
 export interface AlertItem {
