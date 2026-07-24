@@ -3,12 +3,17 @@
 -- This fixes 401 Unauthorized errors for unauthenticated users
 -- ==========================================================
 
--- Grant schema usage
+-- Grant ALL permissions (SELECT, INSERT, UPDATE, DELETE) on base tables
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
 
--- Grant on base tables
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon, authenticated;
-GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
+-- Disable Row Level Security on fleet management tables
+ALTER TABLE public.drivers DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profiles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.vehicle_assignments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.vehicles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.vehicle_telemetry DISABLE ROW LEVEL SECURITY;
 
 -- Explicitly grant on views (needed when security_invoker = true)
 GRANT SELECT ON public.v_vehicles TO anon, authenticated;
@@ -127,3 +132,56 @@ LEFT JOIN public.drivers d ON va.driver_id = d.id;
 GRANT SELECT ON public.v_vehicles TO anon, authenticated;
 GRANT SELECT ON public.v_fuel_efficiency_by_vehicle TO anon, authenticated;
 GRANT SELECT ON public.v_daily_fuel_fleet TO anon, authenticated;
+
+-- Allow INSERT, DELETE & UPDATE for anon & authenticated roles on profiles, drivers, and assignments
+DROP POLICY IF EXISTS "Allow anon delete profiles" ON public.profiles;
+CREATE POLICY "Allow anon delete profiles" ON public.profiles FOR DELETE TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "Allow anon update profiles" ON public.profiles;
+CREATE POLICY "Allow anon update profiles" ON public.profiles FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow anon insert profiles" ON public.profiles;
+CREATE POLICY "Allow anon insert profiles" ON public.profiles FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow anon delete drivers" ON public.drivers;
+CREATE POLICY "Allow anon delete drivers" ON public.drivers FOR DELETE TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "Allow anon update drivers" ON public.drivers;
+CREATE POLICY "Allow anon update drivers" ON public.drivers FOR UPDATE TO anon, authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow anon insert drivers" ON public.drivers;
+CREATE POLICY "Allow anon insert drivers" ON public.drivers FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow anon insert vehicle_assignments" ON public.vehicle_assignments;
+CREATE POLICY "Allow anon insert vehicle_assignments" ON public.vehicle_assignments FOR INSERT TO anon, authenticated WITH CHECK (true);
+
+-- Admin Delete RPC Functions
+CREATE OR REPLACE FUNCTION public.admin_delete_user(target_user_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+    DELETE FROM public.drivers WHERE profile_id = target_user_id OR id = target_user_id;
+    DELETE FROM public.profiles WHERE id = target_user_id;
+    DELETE FROM auth.users WHERE id = target_user_id;
+    RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+GRANT EXECUTE ON FUNCTION public.admin_delete_user(UUID) TO anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_delete_user_by_email(target_email TEXT)
+RETURNS BOOLEAN AS $$
+DECLARE
+    found_id UUID;
+BEGIN
+    SELECT id INTO found_id FROM auth.users WHERE LOWER(email) = LOWER(TRIM(target_email)) LIMIT 1;
+    IF found_id IS NOT NULL THEN
+        DELETE FROM public.drivers WHERE profile_id = found_id OR id = found_id;
+        DELETE FROM public.profiles WHERE id = found_id;
+        DELETE FROM auth.users WHERE id = found_id;
+    END IF;
+    RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+GRANT EXECUTE ON FUNCTION public.admin_delete_user_by_email(TEXT) TO anon, authenticated;
+

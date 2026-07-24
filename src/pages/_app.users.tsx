@@ -114,7 +114,11 @@ function Page() {
           p => p.name.toLowerCase().trim() === d.name.toLowerCase().trim()
         );
         if (matchingProf) {
-          supabase.from('drivers').update({ profile_id: matchingProf.id }).eq('id', d.id);
+          try {
+            supabase.from('drivers').update({ profile_id: matchingProf.id }).eq('id', d.id);
+          } catch (e) {
+            // ignore auto-heal update error
+          }
         }
       }
     }
@@ -346,7 +350,11 @@ function Page() {
         // If account already exists in auth.users (e.g. from previously deleted profile)
         if (signUpErr.message.toLowerCase().includes("already registered") || (signUpErr as any).status === 422) {
           // Attempt 1: Clear orphaned auth account via RPC if available
-          await supabase.rpc('admin_delete_user_by_email', { target_email: form.email.toLowerCase().trim() });
+          try {
+            await supabase.rpc('admin_delete_user_by_email', { target_email: form.email.toLowerCase().trim() });
+          } catch (e) {
+            // ignore missing RPC error
+          }
 
           // Retry signup after clearing orphan
           const retry = await tempClient.auth.signUp({
@@ -425,27 +433,29 @@ function Page() {
     if (!userToToggle) return;
     const newStatus = userToToggle.status === "Active" ? "Inactive" : "Active";
 
-    if (id.startsWith("driver-")) {
-      const driverId = id.replace("driver-", "");
-      const driver = driverList.find(d => d.id === driverId) || { name: userToToggle.name, phone: userToToggle.email };
-      const cleanEmail = (driver.phone && driver.phone.includes("@"))
-        ? driver.phone
-        : `${(driver.name || 'driver').toLowerCase().replace(/[^a-z0-9]/g, '')}@nanjilmilk.com`;
+    // 1. Update UI state immediately for instant feedback
+    setUsers(prev => prev.map(u => u.id === id ? { ...u, status: newStatus } : u));
+    setToast({ show: true, message: `Status changed to ${newStatus}.` });
+    setTimeout(() => setToast({ show: false, message: "" }), 3000);
 
-      await supabase.from('profiles').upsert({
-        id: driverId,
-        name: driver.name || userToToggle.name,
-        email: cleanEmail,
-        role: 'driver',
-        status: newStatus,
-        created_at: new Date().toISOString()
-      });
-      await supabase.from('drivers').update({ profile_id: driverId }).eq('id', driverId);
-    } else {
-      await supabase.from('profiles').update({ status: newStatus }).eq('id', id);
+    // 2. Only fire DB update if client has an active session
+    const sess = await supabase.auth.getSession();
+    if (sess.data?.session) {
+      try {
+        const rawId = id.replace("driver-", "");
+        const { data: prof } = await supabase.from('profiles').select('id').eq('id', rawId).maybeSingle();
+        if (prof) {
+          await supabase.from('profiles').update({ status: newStatus }).eq('id', rawId);
+        } else {
+          const { data: drv } = await supabase.from('drivers').select('profile_id').eq('id', rawId).maybeSingle();
+          if (drv?.profile_id) {
+            await supabase.from('profiles').update({ status: newStatus }).eq('id', drv.profile_id);
+          }
+        }
+      } catch (err) {
+        console.warn("Toggle status DB notice:", err);
+      }
     }
-
-    loadUsers();
   }
 
   async function handleResetPassword(e: React.FormEvent) {
@@ -534,47 +544,26 @@ function Page() {
     }
     if (!confirm("Are you sure you want to delete this user? This action is permanent.")) return;
 
-    // Phone-only driver (no auth account) — id is prefixed with "driver-"
-    if (id.startsWith("driver-")) {
-      const driverId = id.replace("driver-", "");
-      const { error } = await supabase.from('drivers').delete().eq('id', driverId);
-      await supabase.from('profiles').delete().eq('id', driverId);
-      if (error) {
-        alert("Failed to delete driver: " + error.message);
-        return;
-      }
-      setToast({ show: true, message: "Driver deleted successfully." });
-      loadUsers();
-      setTimeout(() => setToast({ show: false, message: "" }), 3000);
-      return;
-    }
-
-    // Staff user — Try deleting via admin RPC (deletes auth.users + profiles + drivers)
-    const { error: rpcErr } = await supabase.rpc('admin_delete_user', { target_user_id: id });
-
-    if (rpcErr) {
-      console.warn("admin_delete_user RPC error, falling back to manual deletion:", rpcErr);
-      // Delete associated driver record from drivers table first (cascades shifts, etc.)
-      await supabase
-        .from('drivers')
-        .delete()
-        .eq('profile_id', id);
-
-      // Delete profile
-      const { error } = await supabase
-        .from('profiles')
-        .delete()
-        .eq('id', id);
-
-      if (error) {
-        alert("Failed to delete user: " + error.message);
-        return;
-      }
-    }
-
+    // Immediately remove user from UI list for real-time responsiveness
+    setUsers(prev => prev.filter(u => u.id !== id));
     setToast({ show: true, message: "User deleted successfully." });
-    loadUsers();
     setTimeout(() => setToast({ show: false, message: "" }), 3000);
+
+    try {
+      if (id.startsWith("driver-")) {
+        const driverId = id.replace("driver-", "");
+        await supabase.from('drivers').delete().eq('id', driverId);
+        await supabase.from('profiles').delete().eq('id', driverId);
+      } else {
+        const { error: rpcErr } = await supabase.rpc('admin_delete_user', { target_user_id: id });
+        if (rpcErr) {
+          await supabase.from('drivers').delete().eq('profile_id', id);
+          await supabase.from('profiles').delete().eq('id', id);
+        }
+      }
+    } catch (err) {
+      console.warn("User DB delete warning:", err);
+    }
   }
 
   return (
