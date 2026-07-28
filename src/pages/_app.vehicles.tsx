@@ -15,7 +15,15 @@ function VehiclesPage() {
   const [filter, setFilter] = useState<VehicleStatus | "All">("All");
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState({ number: "", type: "Tanker", model: "", odometer: 0, engineHours: 0 });
+  const [form, setForm] = useState({ 
+    number: "", 
+    type: "Tanker", 
+    tankerCapacity: "10000",
+    customTankerCapacity: "",
+    model: "", 
+    odometer: 0, 
+    engineHours: 0 
+  });
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState("");
 
@@ -25,6 +33,8 @@ function VehiclesPage() {
     id: "",
     number: "",
     type: "Tanker",
+    tankerCapacity: "10000",
+    customTankerCapacity: "",
     model: "",
     route: "",
     insuranceExpiry: "",
@@ -123,11 +133,20 @@ function VehiclesPage() {
     }
 
     try {
+      let finalType = form.type;
+      if (form.type === "Tanker") {
+        const capLitres = form.tankerCapacity === "custom"
+          ? (Number(form.customTankerCapacity) || 10000)
+          : (Number(form.tankerCapacity) || 10000);
+        const klStr = capLitres >= 1000 && capLitres % 1000 === 0 ? `${capLitres / 1000}KL` : "";
+        finalType = klStr ? `Tanker ${klStr} (${capLitres.toLocaleString()} L)` : `Tanker (${capLitres.toLocaleString()} L)`;
+      }
+
       const { data: inserted, error: insertError } = await supabase
         .from('vehicles')
         .insert({
           number: vehicleNumber,
-          type: form.type,
+          type: finalType,
           model: form.model.trim() || "Unknown Model",
           odometer: Number(form.odometer) || 0,
           engine_hours: Number(form.engineHours) || 0
@@ -164,7 +183,7 @@ function VehiclesPage() {
       }
 
       setShowNew(false);
-      setForm({ number: "", type: "Tanker", model: "", odometer: 0, engineHours: 0 });
+      setForm({ number: "", type: "Tanker", tankerCapacity: "10000", customTankerCapacity: "", model: "", odometer: 0, engineHours: 0 });
       load();
     } catch (err: any) {
       setSubmitError(err.message || "Failed to add vehicle.");
@@ -175,10 +194,40 @@ function VehiclesPage() {
 
   function openEditModal(v: Vehicle) {
     setEditTarget(v);
+    
+    let baseType = "Tanker";
+    let capPreset = "10000";
+    let customCap = "";
+
+    if (v.type) {
+      if (v.type.toLowerCase().includes("tanker")) {
+        baseType = "Tanker";
+        const litresMatch = v.type.match(/(\d[\d,]*)\s*l/i);
+        const klMatch = v.type.match(/(\d+)\s*kl/i);
+        let cap = 10000;
+        if (litresMatch) {
+          cap = parseInt(litresMatch[1].replace(/,/g, ""), 10);
+        } else if (klMatch) {
+          cap = parseInt(klMatch[1], 10) * 1000;
+        }
+        const presets = ["3000", "5000", "10000", "12000", "15000", "18000", "20000", "25000"];
+        if (presets.includes(String(cap))) {
+          capPreset = String(cap);
+        } else {
+          capPreset = "custom";
+          customCap = String(cap);
+        }
+      } else {
+        baseType = v.type;
+      }
+    }
+
     setEditForm({
       id: v.id,
       number: v.number,
-      type: v.type || "Tanker",
+      type: baseType,
+      tankerCapacity: capPreset,
+      customTankerCapacity: customCap,
       model: v.model || "",
       route: v.route || "",
       insuranceExpiry: v.insuranceExpiry || "",
@@ -202,11 +251,20 @@ function VehiclesPage() {
     setEditError("");
 
     try {
+      let finalType = editForm.type;
+      if (editForm.type === "Tanker") {
+        const capLitres = editForm.tankerCapacity === "custom"
+          ? (Number(editForm.customTankerCapacity) || 10000)
+          : (Number(editForm.tankerCapacity) || 10000);
+        const klStr = capLitres >= 1000 && capLitres % 1000 === 0 ? `${capLitres / 1000}KL` : "";
+        finalType = klStr ? `Tanker ${klStr} (${capLitres.toLocaleString()} L)` : `Tanker (${capLitres.toLocaleString()} L)`;
+      }
+
       const { error } = await supabase
         .from('vehicles')
         .update({
           number: vehicleNumber,
-          type: editForm.type,
+          type: finalType,
           model: editForm.model.trim() || "Unknown Model",
           route: editForm.route.trim() || null,
           insurance_expiry: editForm.insuranceExpiry || null,
@@ -372,6 +430,50 @@ function VehiclesPage() {
                 </select>
               </div>
 
+              {form.type === "Tanker" && (
+                <div className="space-y-4 p-3 bg-muted/40 rounded-lg border border-border/60">
+                  <div>
+                    <label className="block text-xs font-semibold text-primary uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                      <span>Tanker Litre Capacity *</span>
+                      <span className="text-[10px] text-muted-foreground font-normal lowercase">(milk volume)</span>
+                    </label>
+                    <select
+                      value={form.tankerCapacity}
+                      onChange={(e) => setForm({ ...form, tankerCapacity: e.target.value })}
+                      className="h-9 px-3 w-full rounded-md border border-border bg-card text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                      required
+                    >
+                      <option value="3000">3,000 Litres (3 KL)</option>
+                      <option value="5000">5,000 Litres (5 KL)</option>
+                      <option value="10000">10,000 Litres (10 KL)</option>
+                      <option value="12000">12,000 Litres (12 KL)</option>
+                      <option value="15000">15,000 Litres (15 KL)</option>
+                      <option value="18000">18,000 Litres (18 KL)</option>
+                      <option value="20000">20,000 Litres (20 KL)</option>
+                      <option value="25000">25,000 Litres (25 KL)</option>
+                      <option value="custom">Custom Litre Capacity...</option>
+                    </select>
+                  </div>
+
+                  {form.tankerCapacity === "custom" && (
+                    <div>
+                      <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                        Custom Capacity (Litres) *
+                      </label>
+                      <input
+                        type="number"
+                        value={form.customTankerCapacity}
+                        onChange={(e) => setForm({ ...form, customTankerCapacity: e.target.value })}
+                        placeholder="e.g. 8500"
+                        min="100"
+                        className="h-9 px-3 w-full rounded-md border border-border bg-card text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Model</label>
                 <input 
@@ -458,6 +560,50 @@ function VehiclesPage() {
                   <option value="Container">Container</option>
                 </select>
               </div>
+
+              {editForm.type === "Tanker" && (
+                <div className="space-y-4 p-3 bg-muted/40 rounded-lg border border-border/60">
+                  <div>
+                    <label className="block text-xs font-semibold text-primary uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                      <span>Tanker Litre Capacity *</span>
+                      <span className="text-[10px] text-muted-foreground font-normal lowercase">(milk volume)</span>
+                    </label>
+                    <select
+                      value={editForm.tankerCapacity}
+                      onChange={(e) => setEditForm({ ...editForm, tankerCapacity: e.target.value })}
+                      className="h-9 px-3 w-full rounded-md border border-border bg-card text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                      required
+                    >
+                      <option value="3000">3,000 Litres (3 KL)</option>
+                      <option value="5000">5,000 Litres (5 KL)</option>
+                      <option value="10000">10,000 Litres (10 KL)</option>
+                      <option value="12000">12,000 Litres (12 KL)</option>
+                      <option value="15000">15,000 Litres (15 KL)</option>
+                      <option value="18000">18,000 Litres (18 KL)</option>
+                      <option value="20000">20,000 Litres (20 KL)</option>
+                      <option value="25000">25,000 Litres (25 KL)</option>
+                      <option value="custom">Custom Litre Capacity...</option>
+                    </select>
+                  </div>
+
+                  {editForm.tankerCapacity === "custom" && (
+                    <div>
+                      <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                        Custom Capacity (Litres) *
+                      </label>
+                      <input
+                        type="number"
+                        value={editForm.customTankerCapacity}
+                        onChange={(e) => setEditForm({ ...editForm, customTankerCapacity: e.target.value })}
+                        placeholder="e.g. 8500"
+                        min="100"
+                        className="h-9 px-3 w-full rounded-md border border-border bg-card text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                        required
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Model</label>
