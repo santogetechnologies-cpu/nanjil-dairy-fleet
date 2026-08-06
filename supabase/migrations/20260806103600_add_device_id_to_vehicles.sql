@@ -2,7 +2,8 @@
 ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS device_id VARCHAR(8) UNIQUE CONSTRAINT check_device_id_length CHECK (device_id IS NULL OR length(device_id) = 8);
 
 -- Recreate public.v_vehicles view to include device_id
-CREATE OR REPLACE VIEW public.v_vehicles AS
+DROP VIEW IF EXISTS public.v_vehicles CASCADE;
+CREATE VIEW public.v_vehicles AS
 SELECT 
     v.id,
     v.number,
