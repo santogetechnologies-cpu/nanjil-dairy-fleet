@@ -155,7 +155,8 @@ function Page() {
   "temperature": 4.2,
   "humidity": 65,
   "engine_on": true,
-  "ignition": true
+  "ignition": true,
+  "device_id": "ABC12345"
 }`}
                   </pre>
                 </div>
@@ -164,7 +165,7 @@ function Page() {
                   <pre className="p-3 bg-muted rounded border border-border font-mono text-xs text-foreground overflow-x-auto h-48">
 {`#include <WiFi.h>
 #include <HTTPClient.h>
-
+ 
 void postTelemetry() {
   HTTPClient http;
   String url = "https://lorxcxmwmxsesuqyzxih.supabase.co/rest/v1/vehicle_telemetry?vehicle_id=eq.VEHICLE_UUID";
@@ -174,7 +175,7 @@ void postTelemetry() {
   http.addHeader("apikey", "YOUR_SUPABASE_ANON_KEY");
   http.addHeader("Authorization", "Bearer YOUR_SUPABASE_ANON_KEY");
   
-  String payload = "{\\"status\\":\\"Moving\\",\\"lat\\":8.2523,\\"lng\\":77.4532,\\"speed\\":45,\\"fuel\\":80,\\"temperature\\":3.8,\\"humidity\\":62}";
+  String payload = "{\\"status\\":\\"Moving\\",\\"lat\\":8.2523,\\"lng\\":77.4532,\\"speed\\":45,\\"fuel\\":80,\\"temperature\\":3.8,\\"humidity\\":62,\\"device_id\\":\\"ABC12345\\"}";
   int httpResponseCode = http.PATCH(payload);
   http.end();
 }`}

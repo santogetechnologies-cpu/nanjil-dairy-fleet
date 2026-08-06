@@ -17,6 +17,7 @@ function VehiclesPage() {
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ 
     number: "", 
+    deviceId: "",
     type: "Tanker", 
     tankerCapacity: "10000",
     customTankerCapacity: "",
@@ -32,6 +33,7 @@ function VehiclesPage() {
   const [editForm, setEditForm] = useState({
     id: "",
     number: "",
+    deviceId: "",
     type: "Tanker",
     tankerCapacity: "10000",
     customTankerCapacity: "",
@@ -77,7 +79,8 @@ function VehiclesPage() {
         ignition: v.ignition || false,
         driver: v.driver_name || '',
         driverId: v.driver_id || '',
-        lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago'
+        lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago',
+        deviceId: v.device_id || ''
       })));
     } else {
       setVehicles([
@@ -132,6 +135,13 @@ function VehiclesPage() {
       return;
     }
 
+    const devId = form.deviceId.trim().toUpperCase();
+    if (devId && !/^[A-Z0-9]{8}$/.test(devId)) {
+      setSubmitError("Device ID must be exactly 8 alphanumeric characters.");
+      setLoading(false);
+      return;
+    }
+
     try {
       let finalType = form.type;
       if (form.type === "Tanker") {
@@ -149,13 +159,17 @@ function VehiclesPage() {
           type: finalType,
           model: form.model.trim() || "Unknown Model",
           odometer: Number(form.odometer) || 0,
-          engine_hours: Number(form.engineHours) || 0
+          engine_hours: Number(form.engineHours) || 0,
+          device_id: devId || null
         })
         .select()
         .single();
 
       if (insertError) {
         if (insertError.code === '23505') {
+          if (insertError.message?.includes('device_id')) {
+            throw new Error(`Device ID "${devId}" is already assigned to another vehicle.`);
+          }
           throw new Error(`Vehicle number "${vehicleNumber}" already exists.`);
         }
         throw insertError;
@@ -183,7 +197,7 @@ function VehiclesPage() {
       }
 
       setShowNew(false);
-      setForm({ number: "", type: "Tanker", tankerCapacity: "10000", customTankerCapacity: "", model: "", odometer: 0, engineHours: 0 });
+      setForm({ number: "", deviceId: "", type: "Tanker", tankerCapacity: "10000", customTankerCapacity: "", model: "", odometer: 0, engineHours: 0 });
       load();
     } catch (err: any) {
       setSubmitError(err.message || "Failed to add vehicle.");
@@ -225,6 +239,7 @@ function VehiclesPage() {
     setEditForm({
       id: v.id,
       number: v.number,
+      deviceId: v.deviceId || "",
       type: baseType,
       tankerCapacity: capPreset,
       customTankerCapacity: customCap,
@@ -244,6 +259,12 @@ function VehiclesPage() {
     const vehicleNumber = editForm.number.trim().toUpperCase();
     if (!vehicleNumber) {
       setEditError("Vehicle registration number is required.");
+      return;
+    }
+
+    const devId = editForm.deviceId.trim().toUpperCase();
+    if (devId && !/^[A-Z0-9]{8}$/.test(devId)) {
+      setEditError("Device ID must be exactly 8 alphanumeric characters.");
       return;
     }
 
@@ -270,11 +291,19 @@ function VehiclesPage() {
           insurance_expiry: editForm.insuranceExpiry || null,
           odometer: Number(editForm.odometer) || 0,
           engine_hours: Number(editForm.engineHours) || 0,
+          device_id: devId || null,
           updated_at: new Date().toISOString()
         })
         .eq('id', editTarget.id);
 
-      if (error) throw error;
+      if (error) {
+        if (error.code === '23505') {
+          if (error.message?.includes('device_id')) {
+            throw new Error(`Device ID "${devId}" is already assigned to another vehicle.`);
+          }
+        }
+        throw error;
+      }
 
       setEditTarget(null);
       load();
@@ -415,6 +444,20 @@ function VehiclesPage() {
               </div>
 
               <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Device ID</label>
+                <input 
+                  type="text" 
+                  value={form.deviceId} 
+                  onChange={(e) => setForm({ ...form, deviceId: e.target.value.toUpperCase() })} 
+                  placeholder="e.g. ABC12345"
+                  maxLength={8}
+                  pattern="[a-zA-Z0-9]{8}"
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary uppercase font-mono"
+                  title="Device ID must be exactly 8 alphanumeric characters"
+                />
+              </div>
+
+              <div>
                 <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Type *</label>
                 <select 
                   value={form.type} 
@@ -532,6 +575,20 @@ function VehiclesPage() {
                   {editError}
                 </div>
               )}
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Device ID</label>
+                <input 
+                  type="text" 
+                  value={editForm.deviceId} 
+                  onChange={(e) => setEditForm({ ...editForm, deviceId: e.target.value.toUpperCase() })} 
+                  placeholder="e.g. ABC12345"
+                  maxLength={8}
+                  pattern="[a-zA-Z0-9]{8}"
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary uppercase font-mono"
+                  title="Device ID must be exactly 8 alphanumeric characters"
+                />
+              </div>
 
               <div>
                 <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Number (Registration) *</label>
