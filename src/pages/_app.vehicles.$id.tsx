@@ -133,7 +133,8 @@ function VehicleDetailPage() {
         ignition: vehicleData.ignition || false,
         driver: vehicleData.driver_name || '',
         driverId: vehicleData.driver_id || '',
-        lastUpdate: vehicleData.last_update ? new Date(vehicleData.last_update).toLocaleTimeString() : 'sec ago'
+        lastUpdate: vehicleData.last_update ? new Date(vehicleData.last_update).toLocaleTimeString() : 'sec ago',
+        deviceId: vehicleData.device_id || ''
       });
 
       // 2. Fetch history from telemetry_history
@@ -521,6 +522,7 @@ function VehicleDetailPage() {
             <CardHeader title="Vehicle Information" />
             <dl className="px-4 py-3 text-sm grid grid-cols-2 gap-y-3">
               <Field label="Registration" value={v.number} />
+              <Field label="Device ID" value={v.deviceId || 'Not Configured'} />
               <Field label="Model" value={v.model} />
               <Field label="Driver" value={v.driver || 'No Driver'} />
               <Field label="Route" value={v.route || 'Unassigned'} />

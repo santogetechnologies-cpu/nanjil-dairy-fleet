@@ -26,6 +26,7 @@ export interface Vehicle {
   odometer: number;
   engineHours: number;
   lastUpdate: string;
+  deviceId?: string;
 }
 
 export interface Driver {
