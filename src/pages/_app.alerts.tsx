@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { type AlertItem } from "@/lib/types";
 import { PageHeader } from "@/components/AppLayout";
 import { Card, Badge, Button } from "@/components/ui-kit";
@@ -7,8 +8,18 @@ import { CheckCircle2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
 function Page() {
+  const [params, setParams] = useSearchParams();
+  const typeParam = params.get("type");
+  const initialType = (typeParam && ["Fuel", "Safety", "Temperature", "Vehicle", "Maintenance"].includes(typeParam)) ? typeParam : "All";
+
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
-  const [type, setType] = useState<string>("All");
+  const [type, setType] = useState<string>(initialType);
+
+  useEffect(() => {
+    const typeParam = params.get("type");
+    const currentType = (typeParam && ["Fuel", "Safety", "Temperature", "Vehicle", "Maintenance"].includes(typeParam)) ? typeParam : "All";
+    setType(currentType);
+  }, [params]);
   const [severity, setSeverity] = useState<string>("All");
   const [resolved, setResolved] = useState<"All" | "Open" | "Resolved">("Open");
 
@@ -82,7 +93,15 @@ function Page() {
 
       <div className="flex flex-wrap gap-2 mb-3">
         {["All", "Fuel", "Safety", "Temperature", "Vehicle", "Maintenance"].map((t) => (
-          <button key={t} onClick={() => setType(t)}
+          <button key={t} onClick={() => {
+            setType(t);
+            if (t === "All") {
+              params.delete("type");
+            } else {
+              params.set("type", t);
+            }
+            setParams(params);
+          }}
             className={`px-3 h-8 rounded-md text-sm border ${type === t ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"}`}>
             {t}
           </button>

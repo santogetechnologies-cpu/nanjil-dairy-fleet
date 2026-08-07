@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 
 export function Card({
   children, className = "", ...props
@@ -87,31 +88,44 @@ const ACCENT_CONFIG: Record<string, { icon: string; value: string; hint: string 
 };
 
 export function Kpi({
-  label, value, hint, accent = "primary", icon,
+  label, value, hint, accent = "primary", icon, to,
 }: {
   label: string;
   value: ReactNode;
   hint?: string;
   accent?: "primary" | "success" | "warning" | "destructive" | "info";
   icon?: ReactNode;
+  to?: string;
 }) {
   const cfg = ACCENT_CONFIG[accent];
+  const content = (
+    <div className="flex items-start justify-between gap-3">
+      <div className="flex-1 min-w-0">
+        <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-widest mb-2">
+          {label}
+        </div>
+        <div className={`text-2xl font-bold tracking-tight ${cfg.value}`}>{value}</div>
+        {hint && <div className={`text-xs mt-1.5 ${cfg.hint}`}>{hint}</div>}
+      </div>
+      {icon && (
+        <div className={`h-10 w-10 rounded-xl flex items-center justify-center shrink-0 ${cfg.icon}`}>
+          {icon}
+        </div>
+      )}
+    </div>
+  );
+
+  if (to) {
+    return (
+      <Link to={to} className="kpi-card kpi-card-hover block cursor-pointer select-none no-underline">
+        {content}
+      </Link>
+    );
+  }
+
   return (
     <div className="kpi-card kpi-card-hover">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-widest mb-2">
-            {label}
-          </div>
-          <div className={`text-2xl font-bold tracking-tight ${cfg.value}`}>{value}</div>
-          {hint && <div className={`text-xs mt-1.5 ${cfg.hint}`}>{hint}</div>}
-        </div>
-        {icon && (
-          <div className={`h-10 w-10 rounded-xl flex items-center justify-center shrink-0 ${cfg.icon}`}>
-            {icon}
-          </div>
-        )}
-      </div>
+      {content}
     </div>
   );
 }

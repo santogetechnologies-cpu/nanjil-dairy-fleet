@@ -10,9 +10,19 @@ import { Plus, X, Loader2, Trash2, AlertTriangle, Pencil } from "lucide-react";
 
 function VehiclesPage() {
   const { user } = useAuth();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const q = params.get("q") ?? "";
-  const [filter, setFilter] = useState<VehicleStatus | "All">("All");
+  
+  const statusParam = params.get("status") as VehicleStatus | null;
+  const initialFilter = (statusParam && ["Moving", "Idle", "Parked", "Offline"].includes(statusParam)) ? statusParam : "All";
+  const [filter, setFilter] = useState<VehicleStatus | "All">(initialFilter);
+
+  useEffect(() => {
+    const statusParam = params.get("status") as VehicleStatus | null;
+    const currentFilter = (statusParam && ["Moving", "Idle", "Parked", "Offline"].includes(statusParam)) ? statusParam : "All";
+    setFilter(currentFilter);
+  }, [params]);
+
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ 
@@ -355,7 +365,15 @@ function VehiclesPage() {
         {(["All", "Moving", "Idle", "Parked", "Offline"] as const).map((s) => (
           <button
             key={s}
-            onClick={() => setFilter(s)}
+            onClick={() => {
+              setFilter(s);
+              if (s === "All") {
+                params.delete("status");
+              } else {
+                params.set("status", s);
+              }
+              setParams(params);
+            }}
             className={`px-3 h-8 rounded-md text-sm border transition-colors ${
               filter === s ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"
             }`}
