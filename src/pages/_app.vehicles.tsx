@@ -6,7 +6,8 @@ import { PageHeader } from "@/components/AppLayout";
 import { DataTable } from "@/components/DataTable";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
-import { Plus, X, Loader2, Trash2, AlertTriangle, Pencil } from "lucide-react";
+import { Plus, X, Loader2, Trash2, AlertTriangle, Pencil, Radio } from "lucide-react";
+import { useFirebaseTracking } from "@/hooks/useFirebaseTracking";
 
 function VehiclesPage() {
   const { user } = useAuth();
@@ -23,7 +24,10 @@ function VehiclesPage() {
     setFilter(currentFilter);
   }, [params]);
 
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [rawVehicles, setRawVehicles] = useState<Vehicle[]>([]);
+  // Real-time Firebase Firestore tracking (matches vehicles strictly by deviceId)
+  const vehicles = useFirebaseTracking(rawVehicles);
+
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ 
     number: "", 
@@ -66,7 +70,7 @@ function VehiclesPage() {
   async function load() {
     const { data } = await supabase.from('v_vehicles').select('*');
     if (data && data.length > 0) {
-      setVehicles(data.map(v => ({
+      const mapped = data.map(v => ({
         id: v.id,
         number: v.number,
         type: v.type,
@@ -91,16 +95,86 @@ function VehiclesPage() {
         driverId: v.driver_id || '',
         lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago',
         deviceId: v.device_id || ''
-      })));
+      }));
+
+      setRawVehicles(mapped);
     } else {
-      setVehicles([
-        { id: 'v1', number: 'TN-74-V-1001', type: 'Tanker 10KL', model: 'Ashok Leyland', route: 'Nagercoil - Kanyakumari', insuranceExpiry: '2027-01-15', lastService: '2026-06-10', nextServiceKm: 15000, odometer: 42350, engineHours: 1240, status: 'Moving', location: 'Nagercoil Route', lat: 8.1833, lng: 77.4119, speed: 45, fuel: 82, temperature: 4.2, humidity: 85, engineOn: true, ignition: true, driver: 'Muthu Kumar', driverId: 'd1', lastUpdate: 'Just now' },
-        { id: 'v2', number: 'TN-74-V-1002', type: 'Chilled Van', model: 'Tata 407', route: 'Marthandam Milk Collection', insuranceExpiry: '2026-11-20', lastService: '2026-05-18', nextServiceKm: 12000, odometer: 68120, engineHours: 2150, status: 'Moving', location: 'Marthandam Sector 4', lat: 8.3000, lng: 77.2000, speed: 38, fuel: 65, temperature: 3.8, humidity: 82, engineOn: true, ignition: true, driver: 'Selvan P', driverId: 'd2', lastUpdate: 'Just now' },
-        { id: 'v3', number: 'TN-74-V-1003', type: 'Refrigerated Truck', model: 'BharatBenz 1217', route: 'Thuckalay Dairy Line', insuranceExpiry: '2027-03-05', lastService: '2026-06-25', nextServiceKm: 20000, odometer: 31400, engineHours: 980, status: 'Idle', location: 'Thuckalay Chilling Centre', lat: 8.2500, lng: 77.3333, speed: 0, fuel: 90, temperature: 5.1, humidity: 88, engineOn: true, ignition: false, driver: 'Rajan S', driverId: 'd3', lastUpdate: '2 mins ago' },
-        { id: 'v4', number: 'TN-74-V-1004', type: 'Tanker 15KL', model: 'Eicher Pro 3015', route: 'Valliyur Inter-district Route', insuranceExpiry: '2026-09-30', lastService: '2026-04-12', nextServiceKm: 18000, odometer: 89500, engineHours: 3410, status: 'Parked', location: 'Valliyur Depot Base', lat: 8.3833, lng: 77.6167, speed: 0, fuel: 50, temperature: 18.5, humidity: 60, engineOn: false, ignition: false, driver: 'Karthik M', driverId: 'd4', lastUpdate: '10 mins ago' },
-        { id: 'v5', number: 'TN-74-V-1005', type: 'Delivery Van', model: 'Mahindra Bolero', route: 'Colachel Local Distribution', insuranceExpiry: '2026-12-10', lastService: '2026-07-01', nextServiceKm: 10000, odometer: 24100, engineHours: 720, status: 'Offline', location: 'Colachel Branch Garage', lat: 8.1764, lng: 77.2611, speed: 0, fuel: 30, temperature: 22.0, humidity: 70, engineOn: false, ignition: false, driver: 'Arun V', driverId: 'd5', lastUpdate: '1 hr ago' },
-      ]);
+      setRawVehicles([]);
     }
+  }
+
+  async function seedAllVehicleTelemetry(allVehicles: any[]) {
+    const locations = [
+      { loc: "Nagercoil Central Depot Yard", lat: 8.1833, lng: 77.4119 },
+      { loc: "Thuckalay Chilling Centre", lat: 8.2500, lng: 77.3333 },
+      { loc: "Marthandam Milk Collection Line", lat: 8.3000, lng: 77.2000 },
+      { loc: "Colachel Coastal Distribution Base", lat: 8.1764, lng: 77.2611 },
+      { loc: "Valliyur Inter-district Line", lat: 8.3833, lng: 77.6167 },
+      { loc: "Kanyakumari Express Sector", lat: 8.0883, lng: 77.5385 },
+      { loc: "Radhapuram Collection Hub", lat: 8.2700, lng: 77.6800 },
+      { loc: "Pechiparai Dairy Line", lat: 8.4300, lng: 77.3200 },
+      { loc: "Aralvaimozhi Route", lat: 8.2600, lng: 77.5200 },
+      { loc: "Suchindram Distribution Sector", lat: 8.1500, lng: 77.4600 },
+      { loc: "Karungal Route", lat: 8.2300, lng: 77.2400 },
+      { loc: "Chunkankadai Junction", lat: 8.2000, lng: 77.3900 },
+      { loc: "Monday Market Dairy Centre", lat: 8.2200, lng: 77.2900 }
+    ];
+
+    const now = Date.now();
+
+    for (let idx = 0; idx < allVehicles.length; idx++) {
+      const v = allVehicles[idx];
+      // Only seed if vehicle does not have active telemetry yet
+      if (v.lat && Number(v.lat) !== 0) continue;
+
+      const locItem = locations[idx % locations.length];
+      const statusOptions = ["Moving", "Moving", "Idle", "Parked"];
+      const status = statusOptions[idx % statusOptions.length];
+      const speed = status === "Moving" ? 35 + (idx * 3) % 25 : 0;
+      const fuel = Math.max(40, 95 - (idx * 4) % 50);
+      const temp = Number((3.6 + (idx % 4) * 0.3).toFixed(1));
+      const humidity = 60 + (idx * 3) % 25;
+
+      const payload = {
+        vehicle_id: v.id,
+        status: status,
+        lat: locItem.lat,
+        lng: locItem.lng,
+        speed: speed,
+        fuel: fuel,
+        temperature: temp,
+        humidity: humidity,
+        engine_on: status === "Moving" || status === "Idle",
+        ignition: status === "Moving",
+        location: locItem.loc,
+        last_update: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+
+      const { error } = await supabase
+        .from("vehicle_telemetry")
+        .upsert(payload, { onConflict: "vehicle_id" });
+
+      if (!error) {
+        // Insert 5 telemetry history records for time-series charts
+        for (let i = 4; i >= 0; i--) {
+          const timeAgo = new Date(now - i * 3 * 60 * 60 * 1000).toISOString();
+          const hSpeed = status === "Moving" ? Math.max(10, speed + (i % 2 === 0 ? 5 : -5)) : 0;
+          const hFuel = Math.max(15, fuel + i * 2);
+          const hTemp = Number((temp + (i % 2 === 0 ? 0.2 : -0.2)).toFixed(1));
+
+          await supabase.from("telemetry_history").insert({
+            vehicle_id: v.id,
+            speed: hSpeed,
+            fuel: hFuel,
+            temperature: hTemp,
+            humidity: humidity,
+            recorded_at: timeAgo
+          });
+        }
+      }
+    }
+    load();
   }
 
   useEffect(() => {
@@ -145,9 +219,9 @@ function VehiclesPage() {
       return;
     }
 
-    const devId = form.deviceId.trim().toUpperCase();
-    if (devId && !/^[A-Z0-9]{8}$/.test(devId)) {
-      setSubmitError("Device ID must be exactly 8 alphanumeric characters.");
+    const devId = form.deviceId.trim();
+    if (devId && !/^\d{15}$/.test(devId)) {
+      setSubmitError("Device ID must be exactly a 15-digit number.");
       setLoading(false);
       return;
     }
@@ -272,9 +346,9 @@ function VehiclesPage() {
       return;
     }
 
-    const devId = editForm.deviceId.trim().toUpperCase();
-    if (devId && !/^[A-Z0-9]{8}$/.test(devId)) {
-      setEditError("Device ID must be exactly 8 alphanumeric characters.");
+    const devId = editForm.deviceId.trim();
+    if (devId && !/^\d{15}$/.test(devId)) {
+      setEditError("Device ID must be exactly a 15-digit number.");
       return;
     }
 
@@ -466,12 +540,12 @@ function VehiclesPage() {
                 <input 
                   type="text" 
                   value={form.deviceId} 
-                  onChange={(e) => setForm({ ...form, deviceId: e.target.value.toUpperCase() })} 
-                  placeholder="e.g. ABC12345"
-                  maxLength={8}
-                  pattern="[a-zA-Z0-9]{8}"
-                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary uppercase font-mono"
-                  title="Device ID must be exactly 8 alphanumeric characters"
+                  onChange={(e) => setForm({ ...form, deviceId: e.target.value.replace(/\D/g, '') })} 
+                  placeholder="e.g. 123456789012345"
+                  maxLength={15}
+                  pattern="\\d{15}"
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                  title="Device ID must be exactly a 15-digit number"
                 />
               </div>
 
@@ -599,12 +673,12 @@ function VehiclesPage() {
                 <input 
                   type="text" 
                   value={editForm.deviceId} 
-                  onChange={(e) => setEditForm({ ...editForm, deviceId: e.target.value.toUpperCase() })} 
-                  placeholder="e.g. ABC12345"
-                  maxLength={8}
-                  pattern="[a-zA-Z0-9]{8}"
-                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary uppercase font-mono"
-                  title="Device ID must be exactly 8 alphanumeric characters"
+                  onChange={(e) => setEditForm({ ...editForm, deviceId: e.target.value.replace(/\D/g, '') })} 
+                  placeholder="e.g. 123456789012345"
+                  maxLength={15}
+                  pattern="\\d{15}"
+                  className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                  title="Device ID must be exactly a 15-digit number"
                 />
               </div>
 

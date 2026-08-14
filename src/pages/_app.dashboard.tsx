@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
-  Truck, Activity, ParkingSquare, Pause, Fuel, Thermometer, Wrench, Sparkles, ArrowUpRight,
+  Truck, Activity, ParkingSquare, Pause, Fuel, Thermometer, Wrench, Sparkles, ArrowUpRight, Radio,
 } from "lucide-react";
 import { Kpi, Card, CardHeader, Badge } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
@@ -12,6 +12,7 @@ import {
   PieChart, Pie, Cell, Legend,
 } from "recharts";
 import { supabase } from "@/lib/supabase";
+import { usePureFirebaseTracking } from "@/hooks/useFirebaseTracking";
 
 const STATUS_COLORS: Record<string, string> = {
   Moving: "oklch(0.62 0.16 150)",
@@ -27,6 +28,9 @@ function DashboardPage() {
   const [maintenance, setMaintenance] = useState<any[]>([]);
   const [eff, setEff] = useState<any[]>([]);
   const [fuelData, setFuelData] = useState<any[]>([]);
+
+  // Map shows ONLY vehicles with device IDs, streamed live from Firebase Firestore
+  const firebaseVehicles = usePureFirebaseTracking();
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -52,13 +56,7 @@ function DashboardPage() {
       }
       if (cancelled) return;
       if (vRes.data && vRes.data.length > 0) setVehicles(vRes.data);
-      else setVehicles([
-        { id: 'v1', number: 'TN-74-V-1001', type: 'Tanker 10KL', status: 'Moving', speed: 45, fuel: 82, location: 'Nagercoil Route' },
-        { id: 'v2', number: 'TN-74-V-1002', type: 'Chilled Van', status: 'Moving', speed: 38, fuel: 65, location: 'Marthandam Sector 4' },
-        { id: 'v3', number: 'TN-74-V-1003', type: 'Refrigerated Truck', status: 'Idle', speed: 0, fuel: 90, location: 'Thuckalay Chilling Centre' },
-        { id: 'v4', number: 'TN-74-V-1004', type: 'Tanker 15KL', status: 'Parked', speed: 0, fuel: 50, location: 'Valliyur Depot Base' },
-        { id: 'v5', number: 'TN-74-V-1005', type: 'Delivery Van', status: 'Offline', speed: 0, fuel: 30, location: 'Colachel Branch Garage' },
-      ]);
+      else setVehicles([]);
 
       if (aRes.data && aRes.data.length > 0) setAlerts(aRes.data);
       else setAlerts([
@@ -153,8 +151,12 @@ function DashboardPage() {
     ignition: v.ignition,
     driver: v.driver_name || '',
     driverId: v.driver_id || '',
-    lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago'
+    lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago',
+    deviceId: v.device_id || ''
   }));
+
+  // Only vehicles with a Device ID streamed from Firebase, shown on the map
+  const mapVehicles = firebaseVehicles.filter(v => v.deviceId && v.deviceId.trim());
 
   const mappedAlerts = alerts.map(a => {
     const vObj = vehicles.find(x => x.id === a.vehicle_id);
@@ -172,14 +174,15 @@ function DashboardPage() {
   const recentAlerts = mappedAlerts.filter((a) => !a.resolved).slice(0, 6);
 
   const kpiData = {
-    totalVehicles: mappedVehicles.length,
-    moving: mappedVehicles.filter(v => v.status === 'Moving').length,
-    idle: mappedVehicles.filter(v => v.status === 'Idle').length,
-    parked: mappedVehicles.filter(v => v.status === 'Parked').length,
-    offline: mappedVehicles.filter(v => v.status === 'Offline').length,
+    totalVehicles: mapVehicles.length,
+    moving: mapVehicles.filter(v => v.status === 'Moving').length,
+    idle: mapVehicles.filter(v => v.status === 'Idle').length,
+    parked: mapVehicles.filter(v => v.status === 'Parked').length,
+    offline: mapVehicles.filter(v => v.status === 'Offline').length,
     fuelAlerts: mappedAlerts.filter(a => a.type === 'Fuel' && !a.resolved).length,
     tempAlerts: mappedAlerts.filter(a => a.type === 'Temperature' && !a.resolved).length,
     maintenanceDue: maintenance.filter(m => m.status !== 'Completed').length,
+    trackedLive: mapVehicles.length,
   };
 
   const statusData = [
@@ -202,10 +205,10 @@ function DashboardPage() {
       />
 
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3">
-        <Kpi label="Total Vehicles" value={kpiData.totalVehicles} icon={<Truck className="h-5 w-5" />} hint="Fleet size" to="/vehicles" />
-        <Kpi label="Currently Moving" value={kpiData.moving} accent="success" icon={<Activity className="h-5 w-5" />} hint={`${kpiData.totalVehicles > 0 ? Math.round((kpiData.moving/kpiData.totalVehicles)*100) : 0}% of fleet`} to="/vehicles?status=Moving" />
-        <Kpi label="Idle Vehicles" value={kpiData.idle} accent="warning" icon={<Pause className="h-5 w-5" />} hint="Engine on, no motion" to="/vehicles?status=Idle" />
-        <Kpi label="Parked Vehicles" value={kpiData.parked} icon={<ParkingSquare className="h-5 w-5" />} hint="Engine off" to="/vehicles?status=Parked" />
+        <Kpi label="Total Vehicles" value={kpiData.totalVehicles} icon={<Truck className="h-5 w-5" />} hint="Live GPS units" to="/tracking" />
+        <Kpi label="Currently Moving" value={kpiData.moving} accent="success" icon={<Activity className="h-5 w-5" />} hint={`${kpiData.totalVehicles > 0 ? Math.round((kpiData.moving/kpiData.totalVehicles)*100) : 0}% of fleet`} to="/tracking" />
+        <Kpi label="Idle Vehicles" value={kpiData.idle} accent="warning" icon={<Pause className="h-5 w-5" />} hint="Engine on, no motion" to="/tracking" />
+        <Kpi label="Parked Vehicles" value={kpiData.parked} icon={<ParkingSquare className="h-5 w-5" />} hint="Engine off" to="/tracking" />
         <Kpi label="Fuel Alerts" value={kpiData.fuelAlerts} accent="destructive" icon={<Fuel className="h-5 w-5" />} hint="Open issues" to="/alerts?type=Fuel" />
         <Kpi label="Temperature Alerts" value={kpiData.tempAlerts} accent="info" icon={<Thermometer className="h-5 w-5" />} hint="Cold-chain" to="/cold-chain" />
         <Kpi label="Maintenance Due" value={kpiData.maintenanceDue} accent="warning" icon={<Wrench className="h-5 w-5" />} hint="Next 30 days" to="/maintenance" />
@@ -214,10 +217,21 @@ function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-5">
         <div className="lg:col-span-2">
           <Card>
-            <CardHeader title="Live Vehicle Map" subtitle={`Kanyakumari district · ${mappedVehicles.length} vehicles tracked`}
-              action={<Link to="/tracking" className="text-xs font-medium text-primary hover:underline">View full map →</Link>} />
+            <CardHeader
+              title="Live Vehicle Map"
+              subtitle={
+                <div className="flex items-center gap-2">
+                  <span>Kanyakumari district · {mapVehicles.length} active GPS devices</span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                    <Radio className="h-3 w-3 text-amber-500 animate-pulse" />
+                    Firebase Live
+                  </span>
+                </div>
+              }
+              action={<Link to="/tracking" className="text-xs font-medium text-primary hover:underline">View full map →</Link>}
+            />
             <div className="p-3">
-              <VehicleMap vehicles={mappedVehicles} height={420} />
+              <VehicleMap vehicles={mapVehicles} height={420} />
             </div>
           </Card>
         </div>

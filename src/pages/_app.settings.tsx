@@ -156,7 +156,7 @@ function Page() {
   "humidity": 65,
   "engine_on": true,
   "ignition": true,
-  "device_id": "ABC12345"
+  "device_id": 123456789012345
 }`}
                   </pre>
                 </div>
@@ -175,7 +175,7 @@ void postTelemetry() {
   http.addHeader("apikey", "YOUR_SUPABASE_ANON_KEY");
   http.addHeader("Authorization", "Bearer YOUR_SUPABASE_ANON_KEY");
   
-  String payload = "{\\"status\\":\\"Moving\\",\\"lat\\":8.2523,\\"lng\\":77.4532,\\"speed\\":45,\\"fuel\\":80,\\"temperature\\":3.8,\\"humidity\\":62,\\"device_id\\":\\"ABC12345\\"}";
+  String payload = "{\\"status\\":\\"Moving\\",\\"lat\\":8.2523,\\"lng\\":77.4532,\\"speed\\":45,\\"fuel\\":80,\\"temperature\\":3.8,\\"humidity\\":62,\\"device_id\\":123456789012345}";
   int httpResponseCode = http.PATCH(payload);
   http.end();
 }`}

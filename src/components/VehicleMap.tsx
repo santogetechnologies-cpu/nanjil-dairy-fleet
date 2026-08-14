@@ -6,6 +6,8 @@ interface Props {
   vehicles: Vehicle[];
   height?: number;
   selectedId?: string;
+  onSelectVehicle?: (vehicle: Vehicle) => void;
+  routeHistory?: Array<{ lat: number; lng: number }>;
 }
 
 const LazyMap = lazy(() => import("./VehicleMapImpl"));
