@@ -66,17 +66,23 @@ export function AppLayout({ children }: { children: ReactNode }) {
     let channel: ReturnType<typeof supabase.channel> | null = null;
 
     async function getUnread() {
-      const { data } = await supabase
-        .from('alerts')
-        .select('id')
-        .eq('resolved', false);
-      if (cancelled) return;
-      if (data) setUnread(data.length);
+      try {
+        const { data, error } = await supabase
+          .from('alerts')
+          .select('id')
+          .eq('resolved', false);
+        if (cancelled) return;
+        if (error) {
+          console.warn("Alerts fetch warning:", error.message);
+          return;
+        }
+        if (data) setUnread(data.length);
+      } catch (err) {
+        // Silently catch network or authorization errors
+      }
     }
 
     async function init() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (cancelled || !session) return;
       getUnread();
       channel = supabase
         .channel('alerts-badge')
