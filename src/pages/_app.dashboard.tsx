@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import {
   Truck, Activity, ParkingSquare, Pause, Fuel, Thermometer, Wrench, Sparkles, ArrowUpRight, Radio,
 } from "lucide-react";
-import { Kpi, Card, CardHeader, Badge } from "@/components/ui-kit";
+import { Kpi, Card, CardHeader } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { VehicleMap } from "@/components/VehicleMap";
 import {
@@ -171,8 +171,6 @@ function DashboardPage() {
     };
   });
 
-  const recentAlerts = mappedAlerts.filter((a) => !a.resolved).slice(0, 6);
-
   const kpiData = {
     totalVehicles: mapVehicles.length,
     moving: mapVehicles.filter(v => v.status === 'Moving').length,
@@ -255,42 +253,20 @@ function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
-        <Card className="lg:col-span-2">
-          <CardHeader title="Daily Fuel Consumption" subtitle="Litres consumed across the fleet" />
-          <div className="p-3" style={{ height: 260 }}>
-            <ResponsiveContainer>
-              <BarChart data={fuelData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
-                <XAxis dataKey="day" fontSize={12} />
-                <YAxis fontSize={12} />
-                <Tooltip />
-                <Bar dataKey="consumed" fill="oklch(0.45 0.15 255)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader title="Open Alerts" action={<Link to="/alerts" className="text-xs text-primary hover:underline">View all →</Link>} />
-          <div className="divide-y divide-border max-h-[260px] overflow-y-auto">
-            {recentAlerts.map((a) => (
-              <div key={a.id} className="px-4 py-3 flex items-start gap-3">
-                <Badge status={a.severity}>{a.severity}</Badge>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium truncate">{a.message}</div>
-                  <div className="text-xs text-muted-foreground">{a.vehicle} · {a.type} · {a.time}</div>
-                </div>
-              </div>
-            ))}
-            {recentAlerts.length === 0 && (
-              <div className="p-4 text-center text-sm text-muted-foreground">
-                No active alerts.
-              </div>
-            )}
-          </div>
-        </Card>
-      </div>
+      <Card className="mt-4">
+        <CardHeader title="Daily Fuel Consumption" subtitle="Litres consumed across the fleet" />
+        <div className="p-3" style={{ height: 260 }}>
+          <ResponsiveContainer>
+            <BarChart data={fuelData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
+              <XAxis dataKey="day" fontSize={12} />
+              <YAxis fontSize={12} />
+              <Tooltip />
+              <Bar dataKey="consumed" fill="oklch(0.45 0.15 255)" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
 
       <Card className="mt-4">
         <CardHeader title="Fuel Efficiency by Vehicle" subtitle="km/L · top 10 vehicles" />
