@@ -533,7 +533,7 @@ function VehiclesPage() {
                   onChange={(e) => setForm({ ...form, deviceId: e.target.value.replace(/\D/g, '') })} 
                   placeholder="e.g. 123456789012345"
                   maxLength={15}
-                  pattern="\\d{15}"
+                  pattern="[0-9]{15}"
                   className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary font-mono"
                   title="Device ID must be exactly a 15-digit number"
                 />
@@ -666,7 +666,7 @@ function VehiclesPage() {
                   onChange={(e) => setEditForm({ ...editForm, deviceId: e.target.value.replace(/\D/g, '') })} 
                   placeholder="e.g. 123456789012345"
                   maxLength={15}
-                  pattern="\\d{15}"
+                  pattern="[0-9]{15}"
                   className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary font-mono"
                   title="Device ID must be exactly a 15-digit number"
                 />
