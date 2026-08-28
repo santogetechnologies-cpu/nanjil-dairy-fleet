@@ -22,7 +22,7 @@ export function CardHeader({
   title, subtitle, action,
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
   action?: ReactNode;
 }) {
   return (

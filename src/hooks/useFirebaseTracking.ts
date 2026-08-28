@@ -49,8 +49,8 @@ export function parseFirestoreTelemetry(data: FirestoreVehicleDoc, existing?: Ve
     ? data.humidity
     : (data.humidity != null ? parseFloat(String(data.humidity)) : (existing?.humidity ?? 65));
 
-  const engineOn = data.engine_on === true || data.engine_on === "true" || data.engine_on === 1;
-  const ignition = data.ignition === true || data.ignition === "true" || data.ignition === 1;
+  const engineOn = data.engine_on === true || data.engine_on === "true" || (data.engine_on as any) === 1;
+  const ignition = data.ignition === true || data.ignition === "true" || (data.ignition as any) === 1;
 
   let status: VehicleStatus = existing?.status || "Idle";
   if (data.status && ["Moving", "Idle", "Parked", "Offline"].includes(data.status)) {

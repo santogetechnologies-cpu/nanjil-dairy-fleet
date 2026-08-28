@@ -3,10 +3,10 @@ import { Card, CardHeader, Badge, Button } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { VehicleMap } from "@/components/VehicleMap";
 import {
-  ResponsiveContainer, LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
+  ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
 } from "recharts";
 import {
-  ChevronLeft, Fuel, Thermometer, Gauge, Activity, Loader2, X, Plus, Radio,
+  ChevronLeft, Gauge, Activity, Loader2, X, Plus, Radio,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
@@ -545,9 +545,9 @@ function VehicleDetailPage() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat icon={<Gauge className="h-4 w-4" />} label="Current Speed" value={`${v.speed} km/h`} />
-        <Stat icon={<Fuel className="h-4 w-4" />} label="Fuel" value={`${v.fuel}%`} />
-        <Stat icon={<Thermometer className="h-4 w-4" />} label="Temperature" value={`${v.temperature}°C`} />
-        <Stat icon={<Activity className="h-4 w-4" />} label="Engine" value={v.engineOn ? "Running" : "Off"} />
+        <Stat icon={<Activity className="h-4 w-4" />} label="Odometer" value={`${v.odometer.toLocaleString()} km`} />
+        <Stat icon={<Radio className="h-4 w-4" />} label="Device ID" value={v.deviceId || 'Not Configured'} />
+        <Stat icon={<Gauge className="h-4 w-4" />} label="Status" value={v.status} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
@@ -559,12 +559,12 @@ function VehicleDetailPage() {
               height={360}
               selectedId={v.id}
               routeHistory={history.map((h, i) => {
-                const targetLat = (typeof v.lat === 'number' && !isNaN(v.lat) && v.lat !== 0) ? v.lat : 8.1833;
-                const targetLng = (typeof v.lng === 'number' && !isNaN(v.lng) && v.lng !== 0) ? v.lng : 77.4119;
+                const targetLat = (typeof v.lat === 'number' && !isNaN(v.lat) && v.lat !== 0) ? v.lat : 8.260765379365829;
+                const targetLng = (typeof v.lng === 'number' && !isNaN(v.lng) && v.lng !== 0) ? v.lng : 77.28837309537465;
                 const fraction = (i + 1) / (history.length || 1);
                 return {
-                  lat: 8.1833 + (targetLat - 8.1833) * fraction,
-                  lng: 77.4119 + (targetLng - 77.4119) * fraction
+                  lat: 8.260765379365829 + (targetLat - 8.260765379365829) * fraction,
+                  lng: 77.28837309537465 + (targetLng - 77.28837309537465) * fraction
                 };
               })}
             />
@@ -583,8 +583,6 @@ function VehicleDetailPage() {
               <Field label="Insurance" value={v.insuranceExpiry || 'N/A'} />
               <Field label="Last Service" value={v.lastService || 'N/A'} />
               <Field label="Odometer" value={`${v.odometer.toLocaleString()} km`} />
-              <Field label="Engine Hours" value={`${v.engineHours.toLocaleString()} h`} />
-              <Field label="Ignition" value={v.ignition ? "ON" : "OFF"} />
               <Field label="Next Service" value={`${v.nextServiceKm} km`} />
             </dl>
           </Card>
@@ -596,7 +594,7 @@ function VehicleDetailPage() {
                 <p className="text-xs text-muted-foreground">Manual verification logs</p>
               </div>
               {canManage && (
-                <Button size="xs" onClick={() => setShowAddDoc(true)} className="flex items-center gap-1">
+                <Button size="sm" onClick={() => setShowAddDoc(true)} className="flex items-center gap-1">
                   <Plus className="h-3 w-3" /> Log Document
                 </Button>
               )}
@@ -633,10 +631,10 @@ function VehicleDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+      <div className="mt-4">
         <Card>
-          <CardHeader title="Speed History" subtitle="Live logs from telemetry history" />
-          <div className="p-3" style={{ height: 240 }}>
+          <CardHeader title="Speed History" subtitle="Live speed tracking from GPS device" />
+          <div className="p-3" style={{ height: 260 }}>
             {history.length > 0 ? (
               <ResponsiveContainer>
                 <LineChart data={history}>
@@ -649,49 +647,7 @@ function VehicleDetailPage() {
               </ResponsiveContainer>
             ) : (
               <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
-                No telemetry history registered.
-              </div>
-            )}
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader title="Fuel Usage" subtitle="Live logs from telemetry history" />
-          <div className="p-3" style={{ height: 240 }}>
-            {history.length > 0 ? (
-              <ResponsiveContainer>
-                <AreaChart data={history}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
-                  <XAxis dataKey="day" fontSize={11} />
-                  <YAxis fontSize={11} />
-                  <Tooltip />
-                  <Area type="monotone" dataKey="fuel" stroke="oklch(0.62 0.18 150)" fill="oklch(0.62 0.18 150 / 0.25)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
-                No telemetry history registered.
-              </div>
-            )}
-          </div>
-        </Card>
-
-        <Card className="lg:col-span-2">
-          <CardHeader title="Temperature History" subtitle="Compliance window 2°C – 6°C" />
-          <div className="p-3" style={{ height: 240 }}>
-            {history.length > 0 ? (
-              <ResponsiveContainer>
-                <LineChart data={history}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
-                  <XAxis dataKey="t" fontSize={11} />
-                  <YAxis domain={[0, 12]} fontSize={11} />
-                  <Tooltip />
-                  <Line type="monotone" dataKey="temp" stroke="oklch(0.6 0.22 25)" strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
-                No telemetry history registered.
+                No GPS speed history registered yet.
               </div>
             )}
           </div>

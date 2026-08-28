@@ -30,7 +30,7 @@ const NAV_GROUPS = [
     label: "Monitoring",
     items: [
       { to: "/safety", label: "Driver Management", icon: ShieldCheck },
-      { to: "/engine", label: "Engine & Ignition", icon: Cog },
+      { to: "/engine", label: "Vehicle Activity", icon: Cog },
       { to: "/cold-chain", label: "Cold Chain", icon: Thermometer },
       { to: "/alerts", label: "Alerts Center", icon: Bell },
     ],
@@ -370,14 +370,14 @@ export function PageHeader({
   title, subtitle, actions,
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
   actions?: ReactNode;
 }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-foreground">{title}</h1>
-        {subtitle && <p className="text-sm text-muted-foreground mt-0.5">{subtitle}</p>}
+        {subtitle && <div className="text-sm text-muted-foreground mt-0.5">{subtitle}</div>}
       </div>
       {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
     </div>

@@ -406,7 +406,7 @@ function VehiclesPage() {
     const targetId = deleteTarget.id;
 
     // Instantly remove vehicle from state
-    setVehicles(prev => prev.filter(v => v.id !== targetId));
+    setRawVehicles((prev: Vehicle[]) => prev.filter((v: Vehicle) => v.id !== targetId));
     setDeleteTarget(null);
 
     try {
@@ -460,27 +460,17 @@ function VehiclesPage() {
       <DataTable<Vehicle>
         data={data}
         initialQuery={q}
-        searchKeys={["number", "driver", "type", "location", "route"]}
+        searchKeys={["number", "driver", "type", "location", "route", "deviceId"]}
         columns={[
           { key: "number", label: "Vehicle #", render: (v) => (
             <Link to={`/vehicles/${v.id}`} className="font-medium text-primary hover:underline">{v.number}</Link>
           )},
           { key: "type", label: "Type" },
-          { key: "driver", label: "Driver" },
+          { key: "driver", label: "Driver", render: (v) => v.driver || <span className="text-muted-foreground">Unassigned</span> },
           { key: "status", label: "Status", render: (v) => <Badge status={v.status}>{v.status}</Badge> },
-          { key: "location", label: "Location" },
-          { key: "fuel", label: "Fuel %", render: (v) => (
-            <div className="flex items-center gap-2 min-w-[100px]">
-              <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                <div className={`h-full ${v.fuel < 25 ? "bg-destructive" : v.fuel < 50 ? "bg-warning" : "bg-success"}`} style={{ width: `${v.fuel}%` }} />
-              </div>
-              <span className="text-xs font-medium w-10 text-right">{v.fuel}%</span>
-            </div>
-          )},
-          { key: "temperature", label: "Temp", render: (v) => `${v.temperature}°C` },
-          { key: "engineOn", label: "Engine", render: (v) => (
-            <Badge status={v.engineOn ? "Moving" : "Parked"}>{v.engineOn ? "ON" : "OFF"}</Badge>
-          )},
+          { key: "location", label: "Location", render: (v) => v.location || <span className="text-muted-foreground">—</span> },
+          { key: "route", label: "Route", render: (v) => v.route || <span className="text-muted-foreground">—</span> },
+          { key: "odometer", label: "Odometer", render: (v) => v.odometer ? `${v.odometer.toLocaleString()} km` : <span className="text-muted-foreground">—</span> },
           { key: "lastUpdate", label: "Updated" },
           ...(canAdd ? [{
             key: "actions",
@@ -502,7 +492,7 @@ function VehiclesPage() {
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
-            ),
+            )
           }] : []),
         ]}
       />
@@ -543,7 +533,7 @@ function VehiclesPage() {
                   onChange={(e) => setForm({ ...form, deviceId: e.target.value.replace(/\D/g, '') })} 
                   placeholder="e.g. 123456789012345"
                   maxLength={15}
-                  pattern="\\d{15}"
+                  pattern="[0-9]{15}"
                   className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary font-mono"
                   title="Device ID must be exactly a 15-digit number"
                 />
@@ -676,7 +666,7 @@ function VehiclesPage() {
                   onChange={(e) => setEditForm({ ...editForm, deviceId: e.target.value.replace(/\D/g, '') })} 
                   placeholder="e.g. 123456789012345"
                   maxLength={15}
-                  pattern="\\d{15}"
+                  pattern="[0-9]{15}"
                   className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary font-mono"
                   title="Device ID must be exactly a 15-digit number"
                 />

@@ -327,7 +327,17 @@ function Page() {
         .eq('id', editForm.id);
 
       if (updateErr) {
-        console.warn("Supabase driver update notice:", updateErr.message);
+        if (updateErr.code === '23505' || updateErr.message?.includes('duplicate')) {
+          await supabase
+            .from('drivers')
+            .update({
+              name: updatedName,
+              score: scoreNum,
+              rating: ratingVal,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', editForm.id);
+        }
       }
 
       const { data: currAssign } = await supabase

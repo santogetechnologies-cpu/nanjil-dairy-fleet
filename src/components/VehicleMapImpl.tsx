@@ -53,8 +53,8 @@ export default function VehicleMapImpl({
       const lng = mappedVehicles.reduce((s, v) => s + v.lng, 0) / mappedVehicles.length;
       return { longitude: lng, latitude: lat, zoom: 11 };
     }
-    // Default base point: Nanjil Dairy Plant, Mulagumoodu
-    return { longitude: 77.3084, latitude: 8.2632, zoom: 11.5 };
+    // Default base point: Nanjil Dairy Plant
+    return { longitude: 77.28837309537465, latitude: 8.260765379365829, zoom: 11.5 };
   }, [mappedVehicles, selectedId]);
 
   const [realRoadCoords, setRealRoadCoords] = useState<[number, number][] | null>(null);
@@ -68,8 +68,8 @@ export default function VehicleMapImpl({
     }
 
     let isSubscribed = true;
-    const startLng = (routeHistory && routeHistory.length > 0 && typeof routeHistory[0].lng === "number") ? routeHistory[0].lng : 77.3084;
-    const startLat = (routeHistory && routeHistory.length > 0 && typeof routeHistory[0].lat === "number") ? routeHistory[0].lat : 8.2632;
+    const startLng = (routeHistory && routeHistory.length > 0 && typeof routeHistory[0].lng === "number") ? routeHistory[0].lng : 77.28837309537465;
+    const startLat = (routeHistory && routeHistory.length > 0 && typeof routeHistory[0].lat === "number") ? routeHistory[0].lat : 8.260765379365829;
     const endLng = targetVehicle.lng;
     const endLat = targetVehicle.lat;
 
@@ -119,9 +119,9 @@ export default function VehicleMapImpl({
       coordinates = validPoints.map(pt => [pt.lng, pt.lat]);
       coordinates.push([targetVehicle.lng, targetVehicle.lat]);
     } else {
-      // Synthesize realistic route path waypoints leading from Nanjil Dairy Plant (77.3084, 8.2632) to vehicle's current location
-      const baseLng = 77.3084;
-      const baseLat = 8.2632;
+      // Synthesize realistic route path waypoints leading from Nanjil Dairy Plant (77.28837309537465, 8.260765379365829) to vehicle's current location
+      const baseLng = 77.28837309537465;
+      const baseLat = 8.260765379365829;
       const endLng = targetVehicle.lng;
       const endLat = targetVehicle.lat;
       const stepLng = (endLng - baseLng) / 4;
@@ -196,7 +196,7 @@ export default function VehicleMapImpl({
         )}
 
         {/* Nanjil Dairy Plant Base Point Pin Marker */}
-        <Marker longitude={77.3084} latitude={8.2632} anchor="bottom">
+        <Marker longitude={77.28837309537465} latitude={8.260765379365829} anchor="bottom">
           <div className="flex items-center gap-1.5 bg-amber-600 text-white px-2 py-1 rounded-md text-[11px] font-bold shadow-lg border-2 border-white ring-2 ring-amber-600/30">
             <Truck className="h-3.5 w-3.5" />
             <span>Nanjil Dairy Plant (Base Point)</span>
