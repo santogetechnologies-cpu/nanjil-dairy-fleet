@@ -1,12 +1,16 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { collection, onSnapshot, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { supabase } from "@/lib/supabase";
 import { type Vehicle, type VehicleStatus } from "@/lib/types";
 
 export interface FirestoreVehicleDoc {
-  device_id?: string;
+  device_id?: string | number;
   vehicle_number?: string;
   number?: string;
+  "v.no"?: string;
+  v_no?: string;
+  vehicle_no?: string;
   driver?: string;
   driver_id?: string;
   type?: string;
@@ -79,12 +83,50 @@ export function parseFirestoreTelemetry(data: FirestoreVehicleDoc, existing?: Ve
 }
 
 /**
- * Hook to stream live tracking vehicles DIRECTLY and EXCLUSIVELY from Firebase Firestore ("vechile" collection)
- * No Supabase calls used for tracking data.
+ * Hook to stream live tracking vehicles DIRECTLY from Firebase Firestore ("vechile" collection)
+ * enriched reactively with registered vehicle master data (number, driver, model) from Supabase.
  */
 export function usePureFirebaseTracking() {
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [supabaseVehicles, setSupabaseVehicles] = useState<any[]>([]);
+  const [firestoreDocs, setFirestoreDocs] = useState<Array<{ id: string; data: FirestoreVehicleDoc }>>([]);
 
+  // 1. Fetch Supabase registered vehicles and listen for updates
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSupabaseVehicles() {
+      try {
+        const { data, error } = await supabase.from("v_vehicles").select("*");
+        if (data && !cancelled) {
+          setSupabaseVehicles(data);
+        }
+        if (error) {
+          console.warn("Error querying Supabase v_vehicles:", error);
+        }
+      } catch (err) {
+        console.warn("Could not load Supabase vehicles for tracking:", err);
+      }
+    }
+
+    loadSupabaseVehicles();
+
+    const channel = supabase
+      .channel("pure-tracking-supabase-vehicles")
+      .on("postgres_changes", { event: "*", schema: "public", table: "vehicles" }, () => {
+        loadSupabaseVehicles();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_assignments" }, () => {
+        loadSupabaseVehicles();
+      })
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      channel.unsubscribe();
+    };
+  }, []);
+
+  // 2. Subscribe in real time to Firebase Firestore "vechile" collection
   useEffect(() => {
     if (!db) return;
 
@@ -93,46 +135,14 @@ export function usePureFirebaseTracking() {
     const unsubscribe = onSnapshot(
       collectionRef,
       (snapshot) => {
-        const results: Vehicle[] = [];
-
+        const docs: Array<{ id: string; data: FirestoreVehicleDoc }> = [];
         snapshot.forEach((docSnap) => {
-          const data = docSnap.data() as FirestoreVehicleDoc;
-          const docId = docSnap.id.trim();
-          const devId = (data.device_id || docId).toString().trim();
-
-          const parsed = parseFirestoreTelemetry(data);
-
-          const vehicleNumber = data.vehicle_number || data.number || `TN-75-DEV-${devId.slice(-4) || docId.slice(-4)}`;
-
-          results.push({
-            id: devId || docId,
-            number: vehicleNumber,
-            type: data.type || "Milk Tanker",
-            model: data.model || "Firebase GPS Tracker",
-            driver: data.driver || "Assigned Driver",
-            driverId: data.driver_id || "",
-            status: parsed.status || "Idle",
-            location: parsed.location || "Live GPS Location",
-            lat: parsed.lat || 0,
-            lng: parsed.lng || 0,
-            speed: parsed.speed || 0,
-            fuel: parsed.fuel || 80,
-            temperature: parsed.temperature || 0,
-            humidity: parsed.humidity || 65,
-            engineOn: parsed.engineOn || false,
-            ignition: parsed.ignition || false,
-            route: "Milk Collection Route",
-            insuranceExpiry: "2026-12-31",
-            lastService: "2026-01-15",
-            nextServiceKm: 10000,
-            odometer: 45000,
-            engineHours: 1200,
-            lastUpdate: "Just now (Firebase)",
-            deviceId: devId || docId
+          docs.push({
+            id: docSnap.id.trim(),
+            data: docSnap.data() as FirestoreVehicleDoc
           });
         });
-
-        setVehicles(results);
+        setFirestoreDocs(docs);
       },
       (error) => {
         console.warn("Pure Firebase Firestore live tracking error:", error);
@@ -141,6 +151,76 @@ export function usePureFirebaseTracking() {
 
     return () => unsubscribe();
   }, []);
+
+  // 3. Reactively combine Firestore live telemetry with Supabase registered vehicles metadata
+  const vehicles = useMemo(() => {
+    return firestoreDocs.map(({ id: docId, data }) => {
+      const devId = (data.device_id != null ? String(data.device_id) : docId).trim();
+      const parsed = parseFirestoreTelemetry(data);
+
+      // Match in Supabase vehicles by device_id or id or vehicle number
+      const cleanDevId = devId.replace(/\D/g, "");
+      const matchedSupabase = supabaseVehicles.find((sv) => {
+        const sDevId = (sv.device_id || "").toString().trim().replace(/\D/g, "");
+        const sId = (sv.id || "").toString().trim();
+        const sNumber = (sv.number || "").toString().trim().replace(/[\s-]/g, "").toUpperCase();
+        const rawNum = (data.vehicle_number || data["v.no"] || data.v_no || data.vehicle_no || data.number || "")
+          .toString().trim().replace(/[\s-]/g, "").toUpperCase();
+
+        return (
+          (cleanDevId && sDevId && (sDevId === cleanDevId || cleanDevId.endsWith(sDevId) || sDevId.endsWith(cleanDevId))) ||
+          (sId && (sId === devId || sId === docId)) ||
+          (rawNum && sNumber && rawNum === sNumber)
+        );
+      });
+
+      const rawFirebaseVehicleNumber =
+        data.vehicle_number ||
+        data["v.no"] ||
+        data.v_no ||
+        data.vehicle_no ||
+        data.number;
+
+      const vehicleNumber =
+        matchedSupabase?.number ||
+        rawFirebaseVehicleNumber ||
+        `TN-75-DEV-${devId.slice(-4) || docId.slice(-4)}`;
+
+      const vehicleId = matchedSupabase?.id || devId || docId;
+      const driverName = matchedSupabase?.driver_name || data.driver || "Assigned Driver";
+      const driverId = matchedSupabase?.driver_id || data.driver_id || "";
+      const vehicleType = matchedSupabase?.type || data.type || "Milk Tanker";
+      const vehicleModel = matchedSupabase?.model || data.model || "Firebase GPS Tracker";
+      const vehicleRoute = matchedSupabase?.route || "Milk Collection Route";
+
+      return {
+        id: vehicleId,
+        number: vehicleNumber,
+        type: vehicleType,
+        model: vehicleModel,
+        driver: driverName,
+        driverId: driverId,
+        status: parsed.status || "Idle",
+        location: parsed.location || "Live GPS Location",
+        lat: parsed.lat || 0,
+        lng: parsed.lng || 0,
+        speed: parsed.speed || 0,
+        fuel: parsed.fuel || 80,
+        temperature: parsed.temperature || 0,
+        humidity: parsed.humidity || 65,
+        engineOn: parsed.engineOn || false,
+        ignition: parsed.ignition || false,
+        route: vehicleRoute,
+        insuranceExpiry: matchedSupabase?.insurance_expiry || "2026-12-31",
+        lastService: matchedSupabase?.last_service || "2026-01-15",
+        nextServiceKm: matchedSupabase?.next_service_km || 10000,
+        odometer: matchedSupabase?.odometer || 45000,
+        engineHours: matchedSupabase?.engine_hours ? Number(matchedSupabase.engine_hours) : 1200,
+        lastUpdate: "Just now (Firebase)",
+        deviceId: devId || docId
+      } as Vehicle;
+    });
+  }, [firestoreDocs, supabaseVehicles]);
 
   return vehicles;
 }
@@ -201,7 +281,7 @@ export function useFirebaseTracking(initialVehicles: Vehicle[]) {
             return {
               ...v,
               ...updatedFields,
-              deviceId: v.deviceId || match.data.device_id || match.docId
+              deviceId: v.deviceId || (match.data.device_id != null ? String(match.data.device_id) : match.docId)
             };
           });
         });

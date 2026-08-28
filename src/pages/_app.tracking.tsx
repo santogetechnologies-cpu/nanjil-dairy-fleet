@@ -131,8 +131,13 @@ function TrackingPage() {
                       isSelected ? "bg-primary/10 border-l-4 border-l-primary" : "hover:bg-muted/40"
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="font-semibold text-sm text-foreground">{v.number}</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-400 text-black border border-black/80 font-mono font-black text-xs tracking-wide shadow-xs">
+                          <span className="text-[8px] bg-black text-amber-400 px-0.5 rounded-xs font-sans">IND</span>
+                          <span>{v.number}</span>
+                        </span>
+                      </div>
                       <div className="flex items-center gap-1">
                         <span
                           className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
@@ -148,7 +153,7 @@ function TrackingPage() {
                     </div>
                     
                     {v.deviceId && (
-                      <div className="text-[10px] text-muted-foreground font-mono mt-0.5 flex items-center gap-1">
+                      <div className="text-[10px] text-muted-foreground font-mono mt-1 flex items-center gap-1">
                         <Radio className="h-3 w-3 text-emerald-500 animate-pulse" />
                         <span>Device ID: {v.deviceId}</span>
                       </div>
@@ -162,7 +167,9 @@ function TrackingPage() {
                     </div>
                     <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground border-t border-border/40 pt-1.5">
                       <span>Speed: {v.speed} km/h • Temp: {v.temperature}°C</span>
-                      <span className="text-primary font-medium">Track Route →</span>
+                      <span className="text-primary font-medium flex items-center gap-0.5">
+                        {isSelected ? "Tracking Active" : "Track Route →"}
+                      </span>
                     </div>
                   </div>
                 );
