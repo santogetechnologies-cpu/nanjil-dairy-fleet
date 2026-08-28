@@ -42,65 +42,40 @@ function DashboardPage() {
     let channel: ReturnType<typeof supabase.channel> | null = null;
 
     async function load() {
-      let vRes: any = {}, aRes: any = {}, mRes: any = {}, effRes: any = {}, fuelRes: any = {};
       try {
-        [vRes, aRes, mRes, effRes, fuelRes] = await Promise.all([
+        const [vRes, aRes, mRes, effRes, fuelRes] = await Promise.all([
           supabase.from('v_vehicles').select('*'),
           supabase.from('alerts').select('*'),
           supabase.from('maintenance_records').select('*'),
           supabase.from('v_fuel_efficiency_by_vehicle').select('*').limit(10),
           supabase.from('v_daily_fuel_fleet').select('*')
         ]);
+
+        if (cancelled) return;
+
+        setVehicles(vRes.data || []);
+        setAlerts(aRes.data || []);
+        setMaintenance(mRes.data || []);
+
+        if (effRes.data && effRes.data.length > 0) {
+          setEff(effRes.data.map((e: any) => ({
+            vehicle: e.number ? e.number.split("-").slice(0, 2).join("-") : 'Unknown',
+            kmpl: Number(e.kmpl)
+          })));
+        } else {
+          setEff([]);
+        }
+
+        if (fuelRes.data && fuelRes.data.length > 0) {
+          setFuelData(fuelRes.data.map((f: any) => ({
+            day: f.log_date ? new Date(f.log_date).toLocaleDateString([], { weekday: 'short' }) : 'Unknown',
+            consumed: Number(f.total_consumed_l)
+          })));
+        } else {
+          setFuelData([]);
+        }
       } catch (err) {
-        // use fallback data
-      }
-      if (cancelled) return;
-      if (vRes.data && vRes.data.length > 0) setVehicles(vRes.data);
-      else setVehicles([]);
-
-      if (aRes.data && aRes.data.length > 0) setAlerts(aRes.data);
-      else setAlerts([
-        { id: 'a1', type: 'Fuel', severity: 'High', message: 'Sudden fuel drop detected (-15L)', time: '10 mins ago', vehicle_number: 'TN-74-V-1004' },
-        { id: 'a2', type: 'Temperature', severity: 'High', message: 'Temperature spike (8.5°C > 6.0°C target)', time: '25 mins ago', vehicle_number: 'TN-74-V-1003' },
-        { id: 'a3', type: 'Safety', severity: 'Medium', message: 'Harsh braking event detected', time: '1 hr ago', vehicle_number: 'TN-74-V-1002' }
-      ]);
-
-      if (mRes.data && mRes.data.length > 0) setMaintenance(mRes.data);
-      else setMaintenance([
-        { id: 'm1', vehicle_number: 'TN-74-V-1001', service: 'Oil & Filter Change', dueIn: '500 km', dueDate: '2026-07-30', status: 'Upcoming' },
-        { id: 'm2', vehicle_number: 'TN-74-V-1004', service: 'Brake Pad Inspection', dueIn: 'Overdue', dueDate: '2026-07-15', status: 'Overdue' }
-      ]);
-
-      if (effRes.data && effRes.data.length > 0) {
-        setEff(effRes.data.map(e => ({
-          vehicle: e.number ? e.number.split("-").slice(0, 2).join("-") : 'Unknown',
-          kmpl: Number(e.kmpl)
-        })));
-      } else {
-        setEff([
-          { vehicle: 'TN-74-V-1001', kmpl: 5.8 },
-          { vehicle: 'TN-74-V-1002', kmpl: 7.2 },
-          { vehicle: 'TN-74-V-1003', kmpl: 4.9 },
-          { vehicle: 'TN-74-V-1004', kmpl: 4.1 },
-          { vehicle: 'TN-74-V-1005', kmpl: 8.5 }
-        ]);
-      }
-
-      if (fuelRes.data && fuelRes.data.length > 0) {
-        setFuelData(fuelRes.data.map(f => ({
-          day: f.log_date ? new Date(f.log_date).toLocaleDateString([], { weekday: 'short' }) : 'Unknown',
-          consumed: Number(f.total_consumed_l)
-        })));
-      } else {
-        setFuelData([
-          { day: 'Mon', consumed: 420 },
-          { day: 'Tue', consumed: 390 },
-          { day: 'Wed', consumed: 480 },
-          { day: 'Thu', consumed: 510 },
-          { day: 'Fri', consumed: 440 },
-          { day: 'Sat', consumed: 490 },
-          { day: 'Sun', consumed: 380 }
-        ]);
+        console.warn('Dashboard load error:', err);
       }
     }
 
@@ -172,14 +147,14 @@ function DashboardPage() {
   });
 
   const kpiData = {
-    totalVehicles: mapVehicles.length,
+    totalVehicles: mappedVehicles.length,
     moving: mapVehicles.filter(v => v.status === 'Moving').length,
     idle: mapVehicles.filter(v => v.status === 'Idle').length,
     parked: mapVehicles.filter(v => v.status === 'Parked').length,
     offline: mapVehicles.filter(v => v.status === 'Offline').length,
     fuelAlerts: mappedAlerts.filter(a => a.type === 'Fuel' && !a.resolved).length,
     tempAlerts: mappedAlerts.filter(a => a.type === 'Temperature' && !a.resolved).length,
-    maintenanceDue: maintenance.filter(m => m.status !== 'Completed').length,
+    maintenanceDue: maintenance.filter((m: any) => m.status !== 'Completed').length,
     trackedLive: mapVehicles.length,
   };
 
@@ -254,32 +229,48 @@ function DashboardPage() {
       </div>
 
       <Card className="mt-4">
-        <CardHeader title="Daily Fuel Consumption" subtitle="Litres consumed across the fleet" />
+        <CardHeader title="Daily Fuel Consumption" subtitle="Litres consumed across the fleet · from refuel logs" />
         <div className="p-3" style={{ height: 260 }}>
-          <ResponsiveContainer>
-            <BarChart data={fuelData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
-              <XAxis dataKey="day" fontSize={12} />
-              <YAxis fontSize={12} />
-              <Tooltip />
-              <Bar dataKey="consumed" fill="oklch(0.45 0.15 255)" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          {fuelData.length > 0 ? (
+            <ResponsiveContainer>
+              <BarChart data={fuelData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
+                <XAxis dataKey="day" fontSize={12} />
+                <YAxis fontSize={12} />
+                <Tooltip />
+                <Bar dataKey="consumed" fill="oklch(0.45 0.15 255)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center gap-2 text-center">
+              <Fuel className="h-8 w-8 text-muted-foreground/30" />
+              <p className="text-sm text-muted-foreground">No fuel logs yet</p>
+              <p className="text-xs text-muted-foreground/60">Log fuel refills in the Fuel Intelligence section to see consumption trends.</p>
+            </div>
+          )}
         </div>
       </Card>
 
       <Card className="mt-4">
-        <CardHeader title="Fuel Efficiency by Vehicle" subtitle="km/L · top 10 vehicles" />
+        <CardHeader title="Fuel Efficiency by Vehicle" subtitle="km/L · calculated from fuel purchase logs" />
         <div className="p-3" style={{ height: 260 }}>
-          <ResponsiveContainer>
-            <BarChart data={eff}>
-              <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
-              <XAxis dataKey="vehicle" fontSize={12} />
-              <YAxis fontSize={12} />
-              <Tooltip />
-              <Bar dataKey="kmpl" fill="oklch(0.62 0.18 150)" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          {eff.length > 0 ? (
+            <ResponsiveContainer>
+              <BarChart data={eff}>
+                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
+                <XAxis dataKey="vehicle" fontSize={12} />
+                <YAxis fontSize={12} />
+                <Tooltip />
+                <Bar dataKey="kmpl" fill="oklch(0.62 0.18 150)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center gap-2 text-center">
+              <Sparkles className="h-8 w-8 text-muted-foreground/30" />
+              <p className="text-sm text-muted-foreground">No mileage data yet</p>
+              <p className="text-xs text-muted-foreground/60">Log fuel refills and complete trips to calculate km/L efficiency.</p>
+            </div>
+          )}
         </div>
       </Card>
     </div>

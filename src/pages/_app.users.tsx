@@ -404,10 +404,18 @@ function Page() {
         role: roleVal,
         status: 'Active',
         created_at: new Date().toISOString()
-      });
+      }, { onConflict: 'id' });
 
       if (profErr) {
-        throw new Error(`Profile creation failed: ${profErr.message}`);
+        if (profErr.code === '23505' || profErr.message?.includes('duplicate key') || profErr.message?.includes('conflict')) {
+          const { error: updErr } = await supabase
+            .from('profiles')
+            .update({ name: form.name, role: roleVal, status: 'Active' })
+            .ilike('email', form.email.toLowerCase().trim());
+          if (updErr) throw new Error(`Profile update failed: ${updErr.message}`);
+        } else {
+          throw new Error(`Profile creation failed: ${profErr.message}`);
+        }
       }
 
       // 4. Success Handling

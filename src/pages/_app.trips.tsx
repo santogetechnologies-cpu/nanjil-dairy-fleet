@@ -29,7 +29,7 @@ function TripsPage() {
 
   // Dispatch states
   const [showDispatchModal, setShowDispatchModal] = useState(false);
-  const [dispForm, setDispForm] = useState({ driverId: "", vehicleId: "", routeId: "", routeName: "", start: "", destination: "" });
+  const [dispForm, setDispForm] = useState({ driverId: "", vehicleId: "", routeId: "", routeName: "", start: "", destination: "", openingKm: "", fuelLitersStart: "" });
   const [savingDisp, setSavingDisp] = useState(false);
 
   const canManage = user?.role === "admin" || user?.role === "manager";
@@ -141,71 +141,52 @@ function TripsPage() {
 
   async function handleDeleteSchedule(id: string) {
     if (!confirm("Are you sure you want to delete this schedule slot?")) return;
-
     setSchedules(prev => prev.filter(s => s.id !== id));
-
-    const sess = await supabase.auth.getSession();
-    if (sess.data?.session) {
-      try {
-        await supabase
-          .from('driver_schedules')
-          .delete()
-          .eq('id', id);
-      } catch (err) {
-        // ignore
-      }
+    try {
+      await supabase.from('driver_schedules').delete().eq('id', id);
+    } catch (err) {
+      // ignore — optimistic UI already updated
     }
   }
 
   async function handleDeleteTrip(id: string) {
     if (!confirm("Are you sure you want to delete this trip record? This action is permanent.")) return;
-
     setTrips(prev => prev.filter(t => t.id !== id));
     if (playback?.id === id) setPlayback(null);
-
-    const sess = await supabase.auth.getSession();
-    if (sess.data?.session) {
-      try {
-        await supabase
-          .from('trips')
-          .delete()
-          .eq('id', id);
-      } catch (err) {
-        // ignore
-      }
+    try {
+      await supabase.from('trips').delete().eq('id', id);
+    } catch (err) {
+      // ignore — optimistic UI already updated
     }
   }
 
   async function handleDispatchTrip(e: React.FormEvent) {
     e.preventDefault();
-    if (!dispForm.driverId || !dispForm.vehicleId || !dispForm.routeName.trim() || !dispForm.start.trim() || !dispForm.destination.trim()) return;
+    if (!dispForm.driverId || !dispForm.vehicleId || !dispForm.routeName.trim() || !dispForm.start.trim() || !dispForm.destination.trim() || !dispForm.openingKm.trim()) return;
     setSavingDisp(true);
 
     try {
-      // Find starting odometer for the vehicle
-      const vObj = vehicles.find(x => x.id === dispForm.vehicleId);
-      const startingOdo = vObj ? (vObj.odometer || 0) : 0;
-      
       const fullStart = `${dispForm.routeName.trim()} · ${dispForm.start.trim()}`;
+      const insertData: Record<string, any> = {
+        vehicle_id: dispForm.vehicleId,
+        driver_id: dispForm.driverId,
+        route_id: null,
+        date: new Date().toISOString().split('T')[0],
+        start: fullStart,
+        destination: dispForm.destination.trim(),
+        start_km: Number(dispForm.openingKm),
+        status: 'Ongoing',
+        distance: 0,
+        duration: '0m'
+      };
+      if (dispForm.fuelLitersStart.trim()) {
+        insertData.fuel_liters_start = Number(dispForm.fuelLitersStart);
+      }
 
-      const { error } = await supabase
-        .from('trips')
-        .insert({
-          vehicle_id: dispForm.vehicleId,
-          driver_id: dispForm.driverId,
-          route_id: null,
-          date: new Date().toISOString().split('T')[0],
-          start: fullStart,
-          destination: dispForm.destination.trim(),
-          start_km: startingOdo,
-          status: 'Ongoing',
-          distance: 0,
-          duration: '0m'
-        });
-
+      const { error } = await supabase.from('trips').insert(insertData);
       if (error) throw error;
       setShowDispatchModal(false);
-      setDispForm({ driverId: "", vehicleId: "", routeId: "", routeName: "", start: "", destination: "" });
+      setDispForm({ driverId: "", vehicleId: "", routeId: "", routeName: "", start: "", destination: "", openingKm: "", fuelLitersStart: "" });
       load();
     } catch (err: any) {
       alert("Failed to dispatch trip: " + err.message);
@@ -315,7 +296,7 @@ function TripsPage() {
             { key: "actions", label: "", render: (s) => (
               canManage && (
                 <Button 
-                  size="xs" 
+                  size="sm" 
                   variant="destructive" 
                   onClick={() => handleDeleteSchedule(s.id)}
                   className="p-1.5 rounded-full"
@@ -394,8 +375,33 @@ function TripsPage() {
                   />
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Opening Odometer (km) *</label>
+                  <input 
+                    type="number"
+                    className="w-full p-2 border border-border bg-transparent rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={dispForm.openingKm}
+                    onChange={(e) => setDispForm({ ...dispForm, openingKm: e.target.value })}
+                    placeholder="e.g. 10250"
+                    required
+                    min={0}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Starting Fuel (Liters)</label>
+                  <input 
+                    type="number" step="0.01"
+                    className="w-full p-2 border border-border bg-transparent rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={dispForm.fuelLitersStart}
+                    onChange={(e) => setDispForm({ ...dispForm, fuelLitersStart: e.target.value })}
+                    placeholder="e.g. 55.0"
+                    min={0}
+                  />
+                </div>
+              </div>
               <div className="flex gap-2 pt-2 border-t border-border">
-                <Button type="button" variant="outline" onClick={() => { setShowDispatchModal(false); setDispForm({ driverId: "", vehicleId: "", routeId: "", routeName: "", start: "", destination: "" }); }} className="flex-1">Cancel</Button>
+                <Button type="button" variant="outline" onClick={() => { setShowDispatchModal(false); setDispForm({ driverId: "", vehicleId: "", routeId: "", routeName: "", start: "", destination: "", openingKm: "", fuelLitersStart: "" }); }} className="flex-1">Cancel</Button>
                 <Button type="submit" className="flex-1" disabled={savingDisp}>
                   {savingDisp ? <Loader2 className="animate-spin h-4 w-4" /> : "Dispatch"}
                 </Button>

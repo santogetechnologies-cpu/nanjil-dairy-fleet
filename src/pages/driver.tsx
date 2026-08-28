@@ -3,7 +3,7 @@ import { useAuth, REDIRECT_MAP } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
 import {
   Truck, Fuel, Thermometer, Gauge, MapPin, Bell, ShieldCheck, Play,
-  LogOut, Activity, Loader2, Calendar, Route, Home, StopCircle,
+  LogOut, Loader2, Calendar, Route, Home, StopCircle,
   CheckCircle2, ChevronRight, Droplets,
 } from "lucide-react";
 import { Badge } from "@/components/ui-kit";
@@ -40,14 +40,14 @@ function DriverPage() {
   // Pre-Trip Inspection states
   const [showInspectionModal, setShowInspectionModal] = useState(false);
   const [inspectionForm, setInspectionForm] = useState({
-    tyres: false, brakes: false, lights: false, cleanliness: false,
+    tyres: false, brakes: false, lights: false, cleanliness: false, openingKm: 0,
   });
   const [submittingInspection, setSubmittingInspection] = useState(false);
 
   // Scheduling & Dispatch states
   const [schedules, setSchedules] = useState<any[]>([]);
   const [ongoingTrip, setOngoingTrip] = useState<any>(null);
-  const [endTripForm, setEndTripForm] = useState({ endKm: 0 });
+  const [endTripForm, setEndTripForm] = useState({ endKm: 0, endFuelLiters: 0 });
   const [submittingTrip, setSubmittingTrip] = useState(false);
   const [assignedVehicles, setAssignedVehicles] = useState<any[]>([]);
 
@@ -66,9 +66,12 @@ function DriverPage() {
       const endKm = endTripForm.endKm;
       const distance = endKm - startKm;
 
+      const updateData: Record<string, any> = { status: 'Completed', end_km: endKm, distance, duration: durationStr };
+      if (endTripForm.endFuelLiters > 0) updateData.fuel_liters_end = endTripForm.endFuelLiters;
+
       const { error: tripErr } = await supabase
         .from('trips')
-        .update({ status: 'Completed', end_km: endKm, distance, duration: durationStr })
+        .update(updateData)
         .eq('id', ongoingTrip.id);
       if (tripErr) throw tripErr;
 
@@ -162,31 +165,73 @@ function DriverPage() {
       dData = data;
     }
 
-    const resolvedDriver = dData || { id: null, name: user.name, score: 0, rating: "Poor", trips: 0, total_km: 0, events: 0 };
+    const resolvedDriver = dData ? {
+      ...dData,
+      score: Number(dData.score ?? 100),
+      trips: Number(dData.trips ?? 0),
+      total_km: Number(dData.total_km ?? 0),
+      events: Number(dData.events ?? 0),
+      rating: dData.rating || "Good"
+    } : { id: null, name: user.name, score: 100, rating: "Good", trips: 0, total_km: 0, events: 0 };
     setDriver(resolvedDriver);
 
-    const { data: vList } = await supabase.from('v_vehicles').select('*').eq('driver_name', resolvedDriver.name);
-    const vehiclesArray = vList || [];
+    let vehiclesArray: any[] = [];
+    if (resolvedDriver.id) {
+      try {
+        const { data: assignments } = await supabase
+          .from('vehicle_assignments')
+          .select('vehicle_id, vehicles(*)')
+          .eq('driver_id', resolvedDriver.id)
+          .eq('is_active', true);
+
+        if (assignments && assignments.length > 0) {
+          vehiclesArray = assignments
+            .filter((a: any) => a.vehicles)
+            .map((a: any) => ({
+              ...a.vehicles,
+              driver_name: resolvedDriver.name,
+              driver_id: resolvedDriver.id,
+            }));
+        }
+      } catch (err) {
+        // fallback
+      }
+    }
+
+    if (vehiclesArray.length === 0) {
+      try {
+        const { data: vList } = await supabase
+          .from('v_vehicles')
+          .select('*')
+          .ilike('driver_name', resolvedDriver.name);
+        if (vList && vList.length > 0) {
+          vehiclesArray = vList;
+        }
+      } catch (err) {
+        // fallback
+      }
+    }
+
     setAssignedVehicles(vehiclesArray);
 
     const savedActiveId = localStorage.getItem("activeVehicleId");
     const activeV = vehiclesArray.find((x: any) => x.id === savedActiveId) || vehiclesArray[0];
 
     const resolvedVehicle = activeV ? {
-      id: activeV.id, number: activeV.number, type: activeV.type, model: activeV.model,
+      id: activeV.id, number: activeV.number || "Unassigned", type: activeV.type || "Tanker", model: activeV.model || "",
       route: activeV.route || '', insuranceExpiry: activeV.insurance_expiry || '',
-      lastService: activeV.last_service || '', nextServiceKm: activeV.next_service_km || 0,
-      odometer: activeV.odometer || 0, engineHours: Number(activeV.engine_hours || 0),
-      status: activeV.status, location: activeV.location || '',
+      lastService: activeV.last_service || '', nextServiceKm: Number(activeV.next_service_km || 0),
+      odometer: Number(activeV.odometer || 0), engineHours: Number(activeV.engine_hours || 0),
+      status: activeV.status || "Idle", location: activeV.location || '',
       lat: Number(activeV.lat || 0), lng: Number(activeV.lng || 0),
-      speed: activeV.speed || 0, fuel: activeV.fuel || 0,
-      temperature: Number(activeV.temperature || 0), humidity: activeV.humidity || 0,
+      speed: Number(activeV.speed || 0), fuel: Number(activeV.fuel || 0),
+      temperature: Number(activeV.temperature || 0), humidity: Number(activeV.humidity || 0),
       engineOn: activeV.engine_on || false, ignition: activeV.ignition || false,
-      driver: activeV.driver_name || '', driverId: activeV.driver_id || '',
+      driver: activeV.driver_name || resolvedDriver.name, driverId: activeV.driver_id || resolvedDriver.id,
       lastUpdate: activeV.last_update ? new Date(activeV.last_update).toLocaleTimeString() : 'sec ago',
     } : {
       id: null, number: "Unassigned", type: "No Assigned Vehicle",
-      status: "Offline", fuel: 0, speed: 0, temperature: 0, engineOn: false, route: "No route assigned",
+      status: "Offline", fuel: 0, speed: 0, temperature: 0, engineOn: false, route: "No route assigned", odometer: 0,
     };
     setVehicle(resolvedVehicle);
 
@@ -221,7 +266,7 @@ function DriverPage() {
         .eq('status', 'Ongoing').maybeSingle();
       if (activeTrip) {
         setOngoingTrip(activeTrip);
-        setEndTripForm({ endKm: (activeTrip.start_km || 0) + 1 });
+        setEndTripForm({ endKm: (activeTrip.start_km || 0) + 1, endFuelLiters: 0 });
       } else {
         setOngoingTrip(null);
       }
@@ -260,26 +305,76 @@ function DriverPage() {
 
   async function handleStartShiftWithInspection(e: React.FormEvent) {
     e.preventDefault();
-    if (!driver?.id) return;
+    if (!driver?.id) {
+      alert("Error: Driver profile not found. Please contact admin.");
+      return;
+    }
     setSubmittingInspection(true);
     try {
       const passed = inspectionForm.tyres && inspectionForm.brakes && inspectionForm.lights && inspectionForm.cleanliness;
-      const { error: inspError } = await supabase.from('pre_trip_inspections').insert({
-        driver_id: driver.id, vehicle_id: vehicle?.id || null,
-        tyres_ok: inspectionForm.tyres, brakes_ok: inspectionForm.brakes,
-        lights_ok: inspectionForm.lights, cleanliness_ok: inspectionForm.cleanliness, passed,
-      });
-      if (inspError) throw inspError;
+      
+      // If a vehicle is assigned, log the pre-trip inspection
+      if (vehicle?.id) {
+        try {
+          const { error: inspError } = await supabase.from('pre_trip_inspections').insert({
+            driver_id: driver.id,
+            vehicle_id: vehicle.id,
+            tyres_ok: inspectionForm.tyres,
+            brakes_ok: inspectionForm.brakes,
+            lights_ok: inspectionForm.lights,
+            cleanliness_ok: inspectionForm.cleanliness,
+            passed,
+            opening_km: inspectionForm.openingKm || null,
+          });
 
-      const { data, error: shiftError } = await supabase.from('driver_shifts')
-        .insert({ driver_id: driver.id, vehicle_id: vehicle?.id || null }).select().maybeSingle();
-      if (shiftError) throw shiftError;
-      if (data) setActiveShift(data);
+          // If opening_km column doesn't exist yet on remote DB, retry without opening_km
+          if (inspError && inspError.message?.includes('opening_km')) {
+            await supabase.from('pre_trip_inspections').insert({
+              driver_id: driver.id,
+              vehicle_id: vehicle.id,
+              tyres_ok: inspectionForm.tyres,
+              brakes_ok: inspectionForm.brakes,
+              lights_ok: inspectionForm.lights,
+              cleanliness_ok: inspectionForm.cleanliness,
+              passed,
+            });
+          }
+        } catch (err) {
+          console.warn("Pre-trip inspection notice:", err);
+        }
+      }
+
+      // Start the driver shift
+      let shiftData: any = null;
+      try {
+        const { data, error: shiftError } = await supabase.from('driver_shifts')
+          .insert({
+            driver_id: driver.id,
+            vehicle_id: vehicle?.id || null,
+            opening_km: inspectionForm.openingKm || null,
+          })
+          .select()
+          .maybeSingle();
+
+        if (shiftError && shiftError.message?.includes('opening_km')) {
+          const { data: fallbackData } = await supabase.from('driver_shifts')
+            .insert({ driver_id: driver.id, vehicle_id: vehicle?.id || null })
+            .select()
+            .maybeSingle();
+          shiftData = fallbackData;
+        } else {
+          shiftData = data;
+        }
+      } catch (err: any) {
+        throw new Error("Failed to start shift: " + err.message);
+      }
+
+      if (shiftData) setActiveShift(shiftData);
       setShowInspectionModal(false);
-      setInspectionForm({ tyres: false, brakes: false, lights: false, cleanliness: false });
+      setInspectionForm({ tyres: false, brakes: false, lights: false, cleanliness: false, openingKm: 0 });
       load();
     } catch (err: any) {
-      alert("Failed to start shift: " + err.message);
+      alert("Notice: " + (err.message || "Failed to start shift"));
     } finally {
       setSubmittingInspection(false);
     }
@@ -384,7 +479,7 @@ function DriverPage() {
               { icon: Fuel, label: "Fuel", value: `${vehicle.fuel}%` },
               { icon: Gauge, label: "Speed", value: `${vehicle.speed}km/h` },
               { icon: Thermometer, label: "Temp", value: `${vehicle.temperature}°C` },
-              { icon: Activity, label: "Engine", value: vehicle.engineOn ? "ON" : "OFF" },
+              { icon: Gauge, label: "Odometer", value: vehicle.odometer ? `${Number(vehicle.odometer).toLocaleString()}km` : '—' },
             ].map((s, i) => (
               <div key={i} className="flex flex-col items-center py-3 gap-0.5 border-r border-white/10 last:border-r-0">
                 <s.icon className="h-4 w-4 text-white/50" />
@@ -542,7 +637,7 @@ function DriverPage() {
             <form onSubmit={handleEndManualTrip} className="space-y-3 pt-4 border-t border-border/60">
               <div>
                 <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">
-                  Ending Odometer (km) *
+                  Closing Odometer (km) *
                 </label>
                 <input
                   type="number"
@@ -552,6 +647,19 @@ function DriverPage() {
                   value={endTripForm.endKm || ""}
                   onChange={(e) => setEndTripForm({ ...endTripForm, endKm: Number(e.target.value) })}
                   placeholder="e.g. 10300"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">
+                  Ending Fuel (Liters) <span className="text-muted-foreground/50 normal-case font-normal">– optional</span>
+                </label>
+                <input
+                  type="number" step="0.01"
+                  min={0}
+                  className="w-full h-12 px-4 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/60"
+                  value={endTripForm.endFuelLiters || ""}
+                  onChange={(e) => setEndTripForm({ ...endTripForm, endFuelLiters: Number(e.target.value) })}
+                  placeholder="e.g. 45.5"
                 />
               </div>
               <button
@@ -886,12 +994,27 @@ function DriverPage() {
                 </label>
               ))}
 
+              {/* Opening Odometer Field */}
+              <div className="p-3.5 rounded-xl border border-border bg-muted/30">
+                <label className="block text-sm font-semibold text-foreground mb-1">Opening Odometer (km) *</label>
+                <p className="text-xs text-muted-foreground mb-2">Enter current vehicle odometer reading before departure</p>
+                <input
+                  type="number"
+                  required
+                  min={0}
+                  className="w-full h-11 px-3 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/60"
+                  value={inspectionForm.openingKm || ""}
+                  onChange={(e) => setInspectionForm({ ...inspectionForm, openingKm: Number(e.target.value) })}
+                  placeholder="e.g. 10250"
+                />
+              </div>
+
               <div className="flex gap-2.5 pt-2">
                 <button
                   type="button"
                   onClick={() => {
                     setShowInspectionModal(false);
-                    setInspectionForm({ tyres: false, brakes: false, lights: false, cleanliness: false });
+                    setInspectionForm({ tyres: false, brakes: false, lights: false, cleanliness: false, openingKm: 0 });
                   }}
                   className="flex-1 h-12 rounded-xl text-sm font-semibold border border-border bg-card text-foreground hover:bg-muted/60 transition-all"
                 >

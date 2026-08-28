@@ -19,9 +19,9 @@ function TrackingPage() {
     setSelectedId(v.id);
 
     if (v.lat && v.lng) {
-      // Build route path leading from Nanjil Dairy Plant Base Point (8.2632, 77.3084) to current live position
-      const startLat = 8.2632;
-      const startLng = 77.3084;
+      // Build route path leading from Nanjil Dairy Plant Base Point (8.260765379365829, 77.28837309537465) to current live position
+      const startLat = 8.260765379365829;
+      const startLng = 77.28837309537465;
       const endLat = v.lat;
       const endLng = v.lng;
 
