@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect } from "react";
-import Map, { Marker, Popup, NavigationControl, ScaleControl, Source, Layer } from "react-map-gl/maplibre";
+import { useState, useMemo, useEffect, useRef } from "react";
+import Map, { Marker, Popup, NavigationControl, ScaleControl, Source, Layer, MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Vehicle } from "@/lib/types";
 import { Truck, Navigation, MapPin } from "lucide-react";
@@ -23,6 +23,8 @@ export default function VehicleMapImpl({
   onSelectVehicle,
   routeHistory
 }: Props) {
+  const mapRef = useRef<MapRef>(null);
+
   const [active, setActive] = useState<Vehicle | null>(
     selectedId ? vehicles.find((v) => v.id === selectedId) ?? null : null
   );
@@ -30,7 +32,16 @@ export default function VehicleMapImpl({
   useEffect(() => {
     if (selectedId) {
       const match = vehicles.find((v) => v.id === selectedId);
-      if (match) setActive(match);
+      if (match) {
+        setActive(match);
+        if (typeof match.lng === "number" && typeof match.lat === "number" && mapRef.current) {
+          mapRef.current.flyTo({
+            center: [match.lng, match.lat],
+            zoom: 13.5,
+            duration: 800
+          });
+        }
+      }
     }
   }, [selectedId, vehicles]);
 
@@ -163,6 +174,7 @@ export default function VehicleMapImpl({
       style={{ height }}
     >
       <Map
+        ref={mapRef}
         initialViewState={initial}
         mapStyle={MAP_STYLE}
         attributionControl={{ compact: true }}
@@ -227,9 +239,16 @@ export default function VehicleMapImpl({
                 e.originalEvent.stopPropagation();
                 setActive(v);
                 if (onSelectVehicle) onSelectVehicle(v);
+                if (typeof v.lng === "number" && typeof v.lat === "number" && mapRef.current) {
+                  mapRef.current.flyTo({
+                    center: [v.lng, v.lat],
+                    zoom: 14,
+                    duration: 800
+                  });
+                }
               }}
             >
-              <button className="group relative cursor-pointer focus:outline-none">
+              <button className="group relative cursor-pointer focus:outline-none flex flex-col items-center">
                 {v.status === "Moving" && (
                   <span
                     className="absolute -inset-1.5 rounded-full animate-ping"
@@ -243,6 +262,18 @@ export default function VehicleMapImpl({
                 >
                   <Truck className={isSelected ? "h-4 w-4" : "h-3.5 w-3.5"} />
                 </span>
+
+                {/* Vehicle Registration Number Tag on Pin */}
+                <span
+                  className={`mt-1 whitespace-nowrap px-1.5 py-0.5 rounded text-[10px] font-bold font-mono tracking-tight shadow-md border transition-all flex items-center gap-1 ${
+                    isSelected
+                      ? "bg-amber-400 text-black border-black ring-2 ring-amber-400/50 z-20 scale-105"
+                      : "bg-background/95 text-foreground border-border/80 group-hover:bg-amber-400 group-hover:text-black group-hover:border-black z-10"
+                  }`}
+                >
+                  <span className="text-[8px] bg-black text-amber-400 px-0.5 rounded-xs font-sans">IND</span>
+                  <span>{v.number}</span>
+                </span>
               </button>
             </Marker>
           );
@@ -253,49 +284,67 @@ export default function VehicleMapImpl({
             longitude={active.lng}
             latitude={active.lat}
             anchor="top"
-            offset={20}
+            offset={24}
             onClose={() => setActive(null)}
             closeOnClick={false}
             maxWidth="320px"
           >
-            <div className="w-64 p-1 space-y-2">
-              <div className="flex items-center justify-between">
+            <div className="w-68 p-1.5 space-y-2.5">
+              {/* Vehicle Registration Number Header */}
+              <div className="flex items-start justify-between gap-2 border-b border-border/60 pb-2">
                 <div>
-                  <div className="font-bold text-sm text-foreground">{active.number}</div>
-                  <div className="text-xs text-muted-foreground">{active.type} · {active.model}</div>
+                  <div className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground flex items-center gap-1">
+                    <Truck className="h-3 w-3 text-primary" />
+                    <span>Vehicle Registration No.</span>
+                  </div>
+                  <div className="mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-400 text-black border-2 border-black/80 font-mono font-black text-sm tracking-wider shadow-sm">
+                    <span className="text-[9px] font-sans font-bold bg-black text-amber-400 px-1 py-0.5 rounded-xs leading-none">IND</span>
+                    <span>{active.number}</span>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground mt-1">
+                    {active.type} · {active.model}
+                  </div>
                 </div>
                 <Badge status={active.status}>{active.status}</Badge>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 text-xs bg-muted/40 p-2 rounded border border-border">
+              {/* Telemetry Metrics */}
+              <div className="grid grid-cols-2 gap-2 text-xs bg-muted/40 p-2.5 rounded-md border border-border/60">
                 <div>
-                  <div className="text-muted-foreground">Driver</div>
+                  <div className="text-[10px] text-muted-foreground">Driver</div>
                   <div className="font-semibold text-foreground truncate">{active.driver || 'Unassigned'}</div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground">Speed</div>
+                  <div className="text-[10px] text-muted-foreground">Speed</div>
                   <div className="font-semibold text-foreground">{active.speed} km/h</div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground">Fuel Level</div>
+                  <div className="text-[10px] text-muted-foreground">Fuel Level</div>
                   <div className="font-semibold text-foreground">{active.fuel}%</div>
                 </div>
                 <div>
-                  <div className="text-muted-foreground">Cold Storage</div>
+                  <div className="text-[10px] text-muted-foreground">Cold Storage</div>
                   <div className="font-semibold text-foreground">{active.temperature}°C</div>
                 </div>
                 <div className="col-span-2">
-                  <div className="text-muted-foreground">Current Sector</div>
-                  <div className="font-medium text-foreground truncate">{active.location || 'Nanjil Route'}</div>
+                  <div className="text-[10px] text-muted-foreground">Current Sector</div>
+                  <div className="font-medium text-foreground truncate">{active.location || 'Live GPS Location'}</div>
                 </div>
+                {active.deviceId && (
+                  <div className="col-span-2 text-[10px] text-muted-foreground font-mono truncate border-t border-border/40 pt-1 mt-0.5 flex items-center gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
+                    <span>Device ID: {active.deviceId}</span>
+                  </div>
+                )}
               </div>
 
-              <div className="flex gap-2 pt-1">
+              {/* Action Links */}
+              <div className="flex gap-2 pt-0.5">
                 <Link
                   to={`/vehicles/${active.id}`}
-                  className="flex-1 text-center text-xs font-semibold bg-primary text-primary-foreground rounded-md py-1.5 hover:bg-primary/90 transition-colors"
+                  className="flex-1 text-center text-xs font-semibold bg-primary text-primary-foreground rounded-md py-1.5 hover:bg-primary/90 transition-colors shadow-sm"
                 >
-                  Inspect Telemetry
+                  Inspect Telemetry →
                 </Link>
               </div>
             </div>
@@ -314,7 +363,7 @@ export default function VehicleMapImpl({
         {active && (
           <div className="pl-2 border-l border-border text-primary font-semibold flex items-center gap-1">
             <Navigation className="h-3 w-3 animate-pulse" />
-            <span>Tracking Route: {active.number}</span>
+            <span>Tracking Route: <strong className="font-mono">{active.number}</strong></span>
           </div>
         )}
       </div>
