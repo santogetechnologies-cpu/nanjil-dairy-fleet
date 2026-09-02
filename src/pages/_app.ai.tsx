@@ -37,22 +37,6 @@ async function getAIResponse(q: string): Promise<string> {
       return "No driver safety records registered in the database.";
     }
 
-    if (/cold chain|temperature/i.test(query)) {
-      const { data: v } = await supabase
-        .from('v_vehicles')
-        .select('number, temperature')
-        .order('temperature', { ascending: false });
-
-      if (v && v.length > 0) {
-        const violations = v.filter(x => Number(x.temperature) < 2 || Number(x.temperature) > 6);
-        if (violations.length > 0) {
-          return `${violations.length} cold chain vehicles are currently outside the compliant 2°C – 6°C window. Example: ${violations[0].number} (${violations[0].temperature}°C).`;
-        }
-        return "All active cold chain vehicles are within target temperature limits (2°C – 6°C).";
-      }
-      return "No temperature telemetry records found.";
-    }
-
     if (/route|delay/i.test(query)) {
       const { data: r } = await supabase
         .from('collection_routes')
@@ -82,7 +66,7 @@ async function getAIResponse(q: string): Promise<string> {
       return "No active vehicle summaries could be compiled.";
     }
 
-    return "I analysed the latest database telemetry. No critical anomalies detected. Try asking about 'fuel consumption', 'driver safety', 'cold-chain compliance', 'route delays' or a 'fleet summary'.";
+    return "I analysed the latest database telemetry. No critical anomalies detected. Try asking about 'fuel consumption', 'driver safety', 'route delays' or a 'fleet summary'.";
   } catch (err: any) {
     return `An error occurred while compiling AI response: ${err?.message || err}`;
   }
@@ -90,7 +74,7 @@ async function getAIResponse(q: string): Promise<string> {
 
 function Page() {
   const [msgs, setMsgs] = useState<Msg[]>([
-    { role: "ai", text: "Hello, I'm Nanjil AI. I can analyse your fleet across fuel, driver safety, routes, cold chain and vehicle performance. What would you like to know?", time: "now" },
+    { role: "ai", text: "Hello, I'm Nanjil AI. I can analyse your fleet across fuel, driver safety, routes and vehicle performance. What would you like to know?", time: "now" },
   ]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -116,7 +100,7 @@ function Page() {
   const suggestions = [
     "Which vehicle consumed highest fuel this month?",
     "Show me drivers who need safety improvement",
-    "Are all cold chain vehicles compliant?",
+    "Are there any delayed collection routes?",
     "Summarise today's fleet performance",
   ];
 

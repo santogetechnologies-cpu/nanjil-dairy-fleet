@@ -1,6 +1,6 @@
 # Nanjil Vehicle Intelligence Platform
 
-AI-powered fleet, fuel, safety and cold chain management system for **Nanjil Integrated Dairy Development**.
+AI-powered fleet, fuel, safety and maintenance management system for **Nanjil Integrated Dairy Development**.
 
 Built with **React 19 + Vite 8 + TypeScript + Supabase** — deployable as a web application and as a native **Android & iOS** app via **Capacitor**.
 

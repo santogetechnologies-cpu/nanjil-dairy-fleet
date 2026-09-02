@@ -323,8 +323,8 @@ export default function VehicleMapImpl({
                   <div className="font-semibold text-foreground">{active.fuel}%</div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-muted-foreground">Cold Storage</div>
-                  <div className="font-semibold text-foreground">{active.temperature}°C</div>
+                  <div className="text-[10px] text-muted-foreground">Odometer</div>
+                  <div className="font-semibold text-foreground">{active.odometer ? `${active.odometer.toLocaleString()} km` : '—'}</div>
                 </div>
                 <div className="col-span-2">
                   <div className="text-[10px] text-muted-foreground">Current Sector</div>

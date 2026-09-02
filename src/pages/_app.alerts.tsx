@@ -10,14 +10,14 @@ import { supabase } from "@/lib/supabase";
 function Page() {
   const [params, setParams] = useSearchParams();
   const typeParam = params.get("type");
-  const initialType = (typeParam && ["Fuel", "Safety", "Temperature", "Vehicle", "Maintenance"].includes(typeParam)) ? typeParam : "All";
+  const initialType = (typeParam && ["Fuel", "Safety", "Vehicle", "Maintenance"].includes(typeParam)) ? typeParam : "All";
 
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [type, setType] = useState<string>(initialType);
 
   useEffect(() => {
     const typeParam = params.get("type");
-    const currentType = (typeParam && ["Fuel", "Safety", "Temperature", "Vehicle", "Maintenance"].includes(typeParam)) ? typeParam : "All";
+    const currentType = (typeParam && ["Fuel", "Safety", "Vehicle", "Maintenance"].includes(typeParam)) ? typeParam : "All";
     setType(currentType);
   }, [params]);
   const [severity, setSeverity] = useState<string>("All");
@@ -92,7 +92,7 @@ function Page() {
       <PageHeader title="Alerts Center" subtitle={`${alerts.filter((a) => !a.resolved).length} open · ${alerts.length} total`} />
 
       <div className="flex flex-wrap gap-2 mb-3">
-        {["All", "Fuel", "Safety", "Temperature", "Vehicle", "Maintenance"].map((t) => (
+        {["All", "Fuel", "Safety", "Vehicle", "Maintenance"].map((t) => (
           <button key={t} onClick={() => {
             setType(t);
             if (t === "All") {

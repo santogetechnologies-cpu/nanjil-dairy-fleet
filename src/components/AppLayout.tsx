@@ -3,7 +3,7 @@ import { useAuth } from "@/lib/auth";
 import { Logo } from "./Logo";
 import {
   LayoutDashboard, MapPin, Truck, Route as RouteIcon, Fuel,
-  ShieldCheck, Cog, Thermometer, Bell, Wrench, FileText, Sparkles,
+  ShieldCheck, Cog, Bell, Wrench, FileText, Sparkles,
   Users, Settings, LogOut, Search, Menu, X, ChevronDown, UserCircle2,
   ChevronRight,
 } from "lucide-react";
@@ -31,7 +31,6 @@ const NAV_GROUPS = [
     items: [
       { to: "/safety", label: "Driver Management", icon: ShieldCheck },
       { to: "/engine", label: "Vehicle Activity", icon: Cog },
-      { to: "/cold-chain", label: "Cold Chain", icon: Thermometer },
       { to: "/alerts", label: "Alerts Center", icon: Bell },
     ],
   },

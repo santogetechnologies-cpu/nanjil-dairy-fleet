@@ -164,14 +164,14 @@ function VehicleDetailPage() {
         // Auto-seed initial telemetry history for vehicle details page if no history exists yet
         const now = Date.now();
         const baseSpeed = vehicleData.status === 'Moving' ? 45 : 0;
-        const baseFuel = vehicleData.fuel || 80;
+        const baseFuel = vehicleData.fuel || 100;
         const baseTemp = Number(vehicleData.temperature || 4.2);
         const newHist = [];
 
         for (let i = 5; i >= 0; i--) {
           const timeAgo = new Date(now - i * 4 * 60 * 60 * 1000).toISOString();
           const speed = baseSpeed > 0 ? Math.max(10, baseSpeed + (i % 2 === 0 ? 5 : -5)) : 0;
-          const fuel = Math.max(15, baseFuel - i * 2);
+          const fuel = 100;
           const temp = Number((baseTemp + (i % 2 === 0 ? 0.3 : -0.2)).toFixed(1));
 
           const { data: created } = await supabase.from('telemetry_history').insert({

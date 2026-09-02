@@ -166,7 +166,7 @@ function TrackingPage() {
                       </span>
                     </div>
                     <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground border-t border-border/40 pt-1.5">
-                      <span>Speed: {v.speed} km/h • Temp: {v.temperature}°C</span>
+                      <span>Speed: {v.speed} km/h • Fuel: {v.fuel}%</span>
                       <span className="text-primary font-medium flex items-center gap-0.5">
                         {isSelected ? "Tracking Active" : "Track Route →"}
                       </span>

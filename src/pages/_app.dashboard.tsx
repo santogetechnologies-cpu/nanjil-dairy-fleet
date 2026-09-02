@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
-  Truck, Activity, ParkingSquare, Pause, Fuel, Thermometer, Wrench, Sparkles, ArrowUpRight, Radio,
+  Truck, Activity, ParkingSquare, Pause, Fuel, Wrench, Sparkles, ArrowUpRight, Radio,
 } from "lucide-react";
 import { Kpi, Card, CardHeader } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
@@ -153,7 +153,6 @@ function DashboardPage() {
     parked: mapVehicles.filter(v => v.status === 'Parked').length,
     offline: mapVehicles.filter(v => v.status === 'Offline').length,
     fuelAlerts: mappedAlerts.filter(a => a.type === 'Fuel' && !a.resolved).length,
-    tempAlerts: mappedAlerts.filter(a => a.type === 'Temperature' && !a.resolved).length,
     maintenanceDue: maintenance.filter((m: any) => m.status !== 'Completed').length,
     trackedLive: mapVehicles.length,
   };
@@ -177,13 +176,12 @@ function DashboardPage() {
         }
       />
 
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         <Kpi label="Total Vehicles" value={kpiData.totalVehicles} icon={<Truck className="h-5 w-5" />} hint="Live GPS units" to="/tracking" />
         <Kpi label="Currently Moving" value={kpiData.moving} accent="success" icon={<Activity className="h-5 w-5" />} hint={`${kpiData.totalVehicles > 0 ? Math.round((kpiData.moving/kpiData.totalVehicles)*100) : 0}% of fleet`} to="/tracking" />
         <Kpi label="Idle Vehicles" value={kpiData.idle} accent="warning" icon={<Pause className="h-5 w-5" />} hint="Engine on, no motion" to="/tracking" />
         <Kpi label="Parked Vehicles" value={kpiData.parked} icon={<ParkingSquare className="h-5 w-5" />} hint="Engine off" to="/tracking" />
         <Kpi label="Fuel Alerts" value={kpiData.fuelAlerts} accent="destructive" icon={<Fuel className="h-5 w-5" />} hint="Open issues" to="/alerts?type=Fuel" />
-        <Kpi label="Temperature Alerts" value={kpiData.tempAlerts} accent="info" icon={<Thermometer className="h-5 w-5" />} hint="Cold-chain" to="/cold-chain" />
         <Kpi label="Maintenance Due" value={kpiData.maintenanceDue} accent="warning" icon={<Wrench className="h-5 w-5" />} hint="Next 30 days" to="/maintenance" />
       </div>
 
