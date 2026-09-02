@@ -17,7 +17,6 @@ const CollectionRoutesPage = lazy(() => import("./pages/_app.collection-routes")
 const FuelPage = lazy(() => import("./pages/_app.fuel"));
 const SafetyPage = lazy(() => import("./pages/_app.safety"));
 const EnginePage = lazy(() => import("./pages/_app.engine"));
-const ColdChainPage = lazy(() => import("./pages/_app.cold-chain"));
 const AlertsPage = lazy(() => import("./pages/_app.alerts"));
 const MaintenancePage = lazy(() => import("./pages/_app.maintenance"));
 const ReportsPage = lazy(() => import("./pages/_app.reports"));
@@ -69,7 +68,6 @@ export default function App() {
           <Route path="/fuel" element={<FuelPage />} />
           <Route path="/safety" element={<SafetyPage />} />
           <Route path="/engine" element={<EnginePage />} />
-          <Route path="/cold-chain" element={<ColdChainPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/maintenance" element={<MaintenancePage />} />
           <Route path="/reports" element={<ReportsPage />} />

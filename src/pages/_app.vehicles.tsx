@@ -131,7 +131,7 @@ function VehiclesPage() {
       const statusOptions = ["Moving", "Moving", "Idle", "Parked"];
       const status = statusOptions[idx % statusOptions.length];
       const speed = status === "Moving" ? 35 + (idx * 3) % 25 : 0;
-      const fuel = Math.max(40, 95 - (idx * 4) % 50);
+      const fuel = 100;
       const temp = Number((3.6 + (idx % 4) * 0.3).toFixed(1));
       const humidity = 60 + (idx * 3) % 25;
 
@@ -160,7 +160,7 @@ function VehiclesPage() {
         for (let i = 4; i >= 0; i--) {
           const timeAgo = new Date(now - i * 3 * 60 * 60 * 1000).toISOString();
           const hSpeed = status === "Moving" ? Math.max(10, speed + (i % 2 === 0 ? 5 : -5)) : 0;
-          const hFuel = Math.max(15, fuel + i * 2);
+          const hFuel = 100;
           const hTemp = Number((temp + (i % 2 === 0 ? 0.2 : -0.2)).toFixed(1));
 
           await supabase.from("telemetry_history").insert({

@@ -111,13 +111,9 @@ function Page() {
 
         <Card className="lg:col-span-2">
           <CardHeader title="Alert Thresholds" subtitle="Adjust when alerts are triggered" />
-          <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
             <Field label="Overspeed threshold" suffix="km/h" value={prefs.overspeed}
               onChange={(v) => setPrefs({ ...prefs, overspeed: v })} />
-            <Field label="Cold chain min" suffix="°C" value={prefs.coldMin}
-              onChange={(v) => setPrefs({ ...prefs, coldMin: v })} />
-            <Field label="Cold chain max" suffix="°C" value={prefs.coldMax}
-              onChange={(v) => setPrefs({ ...prefs, coldMax: v })} />
             <Field label="Low fuel alert" suffix="%" value={prefs.fuelAlert}
               onChange={(v) => setPrefs({ ...prefs, fuelAlert: v })} />
           </div>

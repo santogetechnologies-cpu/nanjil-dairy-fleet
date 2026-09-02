@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useAuth, REDIRECT_MAP } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
 import {
-  Mail, Lock, Loader2, Shield, Snowflake, Fuel, MapPin,
+  Mail, Lock, Loader2, Shield, Wrench, Fuel, MapPin,
   Eye, EyeOff, ArrowRight, Zap, TrendingUp, Phone
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -70,9 +70,9 @@ function LoginPage() {
       desc: "Behaviour scoring & incident prevention",
     },
     {
-      icon: Snowflake,
-      label: "Cold-Chain Monitor",
-      desc: "Precision 2°C – 6°C temperature control",
+      icon: Wrench,
+      label: "Fleet Maintenance",
+      desc: "Preventative service schedules & automated alerts",
     },
   ];
 
@@ -125,7 +125,7 @@ function LoginPage() {
                 </span>
               </h1>
               <p className="mt-4 text-white/60 text-sm max-w-md leading-relaxed">
-                AI-powered fleet management, real-time telemetry, and cold-chain monitoring — all in one platform.
+                AI-powered fleet management, real-time telemetry, and predictive maintenance — all in one platform.
               </p>
             </motion.div>
 

@@ -9,7 +9,6 @@ const REPORTS = [
   { id: "fuel", name: "Fuel Report", desc: "Daily consumption, mileage and alerts across the fleet." },
   { id: "safety", name: "Driver Management Report", desc: "Driver scores, ranking and event breakdown." },
   { id: "trip", name: "Trip Report", desc: "Trip log including start/destination, distance and duration." },
-  { id: "cold-chain", name: "Cold Chain Report", desc: "Temperature & humidity compliance for milk transport." },
   { id: "maintenance", name: "Maintenance Report", desc: "Service history, upcoming services and cost summary." },
 ];
 
@@ -27,9 +26,6 @@ async function generateReport(id: string) {
     records = data || [];
   } else if (id === 'trip') {
     const { data } = await supabase.from('trips').select('*');
-    records = data || [];
-  } else if (id === 'cold-chain') {
-    const { data } = await supabase.from('v_vehicles').select('number, temperature, humidity');
     records = data || [];
   } else if (id === 'maintenance') {
     const { data } = await supabase.from('maintenance_records').select('*');

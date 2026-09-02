@@ -47,7 +47,7 @@ export function parseFirestoreTelemetry(data: FirestoreVehicleDoc, existing?: Ve
 
   const fuel = typeof data.fuel === "number"
     ? data.fuel
-    : (data.fuel != null ? parseFloat(String(data.fuel)) : (existing?.fuel ?? 80));
+    : (data.fuel != null ? parseFloat(String(data.fuel)) : (existing?.fuel ?? 100));
 
   const humidity = typeof data.humidity === "number"
     ? data.humidity
