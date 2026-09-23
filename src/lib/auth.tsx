@@ -85,22 +85,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    // 1. Check for persistent user session (Admin or Driver) in localStorage
-    const savedUserSession = localStorage.getItem("nanjil_user_session") || localStorage.getItem("nanjil_driver_session");
-    if (savedUserSession) {
-      try {
-        const parsed = JSON.parse(savedUserSession);
-        if (parsed && parsed.role) {
-          setUser(parsed);
-          setReady(true);
-          return;
-        }
-      } catch (e) {
-        console.error("Failed to restore saved session:", e);
-      }
-    }
+    // Purge any legacy insecure localStorage sessions
+    localStorage.removeItem("nanjil_user_session");
+    localStorage.removeItem("nanjil_driver_session");
 
-    // 2. Otherwise check Supabase Auth session
+    // Supabase Auth session is the sole authority
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (session?.user) {
         try {
@@ -116,7 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setReady(true);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         try {
           const u = await fetchProfile(session.user.id, session.user.email!, session.user.user_metadata);
@@ -126,10 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(null);
         }
       } else {
-        const savedUser = localStorage.getItem("nanjil_user_session") || localStorage.getItem("nanjil_driver_session");
-        if (!savedUser) {
-          setUser(null);
-        }
+        setUser(null);
       }
       setReady(true);
     });
@@ -139,209 +125,101 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const login = async (email: string, password: string) => {
+  const login = async (identifier: string, password: string) => {
+    // Purge any legacy keys
     localStorage.removeItem("nanjil_driver_session");
     localStorage.removeItem("nanjil_user_session");
 
-    const cleanInput = email.toLowerCase().trim();
-
-    // 1. If input is an email, attempt Supabase Auth
-    if (cleanInput.includes("@")) {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: cleanInput,
-        password,
-      });
-
-      if (!error && data?.user) {
-        try {
-          const u = await fetchProfile(data.user.id, data.user.email!, data.user.user_metadata);
-          setUser(u);
-          return { ok: true, role: u.role };
-        } catch (e: any) {
-          await supabase.auth.signOut();
-          return { ok: false, error: e.message };
-        }
-      }
-
-      // Admin fallback if Supabase auth credentials fail or user is demo admin
-      const isAdminIdentifier = cleanInput.includes("admin") || cleanInput.includes("wizzaswin") || cleanInput.includes("manager");
-      if (isAdminIdentifier) {
-        const authUser: AuthUser = {
-          id: "admin-session-id",
-          email: cleanInput,
-          name: cleanInput.includes("wizzaswin") ? "Aswin (Admin)" : "System Administrator",
-          role: cleanInput.includes("manager") ? "manager" : "admin",
-        };
-        localStorage.setItem("nanjil_user_session", JSON.stringify(authUser));
-        setUser(authUser);
-        return { ok: true, role: authUser.role };
-      }
-
-      return { ok: false, error: error?.message || "Invalid email or password." };
+    if (!identifier || !identifier.trim()) {
+      return { ok: false, error: "Please enter your email, username, or phone number." };
+    }
+    if (!password) {
+      return { ok: false, error: "Please enter your password." };
     }
 
-    // 2. If input is not an email (e.g. phone number or driver name), try driver login
-    const driverRes = await loginWithPhone(cleanInput, password);
-    if (driverRes.ok) {
-      return driverRes;
-    }
+    const cleanInput = identifier.toLowerCase().trim();
+    let targetEmail = cleanInput;
 
-    // Admin fallback for non-email username inputs (e.g. "admin", "manager")
-    if (cleanInput === "admin" || cleanInput === "manager" || cleanInput === "wizzaswin") {
-      const authUser: AuthUser = {
-        id: "admin-session-id",
-        email: cleanInput === "admin" ? "admin@nanjilmilk.com" : cleanInput === "manager" ? "manager@nanjilmilk.com" : "wizzaswin@gmail.com",
-        name: cleanInput === "wizzaswin" ? "Aswin (Admin)" : "System Administrator",
-        role: cleanInput === "manager" ? "manager" : "admin",
-      };
-      localStorage.setItem("nanjil_user_session", JSON.stringify(authUser));
-      setUser(authUser);
-      return { ok: true, role: authUser.role };
-    }
+    // If identifier is not an email, resolve it to the registered user's email
+    if (!cleanInput.includes("@")) {
+      const digitsOnly = cleanInput.replace(/[^0-9]/g, "");
+      let foundEmail: string | null = null;
 
-    return { ok: false, error: driverRes.error || "Invalid login credentials." };
-  };
-
-  const loginWithPhone = async (phoneInput: string, password?: string) => {
-    const rawInput = phoneInput.trim();
-    const digitsOnly = rawInput.replace(/[^0-9]/g, "");
-
-    if (!rawInput) {
-      return { ok: false, error: "Please enter your phone number, email, or driver name." };
-    }
-
-    // Query drivers table
-    const { data: drivers, error } = await supabase.from("drivers").select("*");
-    if (error) {
-      console.error("Error querying drivers by phone:", error);
-      return { ok: false, error: "Database error while verifying driver credentials." };
-    }
-
-    let matchedDriver: any = null;
-
-    // 1. Flexible phone number match if input has digits
-    if (digitsOnly.length >= 4) {
-      matchedDriver = drivers?.find((d: any) => {
-        if (!d.phone) return false;
-        const dDigits = d.phone.replace(/[^0-9]/g, "");
-        return (
-          dDigits === digitsOnly ||
-          dDigits.endsWith(digitsOnly) ||
-          digitsOnly.endsWith(dDigits)
-        );
-      });
-    }
-
-    // 2. Exact driver name match
-    if (!matchedDriver && drivers) {
-      matchedDriver = drivers.find(
-        (d: any) => d.name && d.name.toLowerCase().trim() === rawInput.toLowerCase()
-      );
-    }
-
-    // 3. Email match (generated email or stored email)
-    if (!matchedDriver && drivers) {
-      matchedDriver = drivers.find((d: any) => {
-        const genEmail = `${d.name?.toLowerCase().replace(/[^a-z0-9]/g, "")}@nanjilmilk.com`;
-        return (
-          genEmail === rawInput.toLowerCase() ||
-          (d.email && d.email.toLowerCase() === rawInput.toLowerCase())
-        );
-      });
-    }
-
-    // 4. Partial driver name match
-    if (!matchedDriver && drivers) {
-      matchedDriver = drivers.find(
-        (d: any) => d.name && d.name.toLowerCase().trim().includes(rawInput.toLowerCase())
-      );
-    }
-
-    if (!matchedDriver) {
-      // Check if input matches an admin profile or email
-      const cleanInput = rawInput.toLowerCase();
+      // 1. Check profiles by name
       const { data: prof } = await supabase
         .from("profiles")
-        .select("id, name, email, role, status")
-        .or(`email.ilike.%${cleanInput}%,role.eq.admin`)
-        .eq("status", "Active")
-        .limit(1)
+        .select("email, status")
+        .ilike("name", cleanInput)
         .maybeSingle();
 
-      if (prof) {
-        const authUser: AuthUser = {
-          id: prof.id,
-          email: prof.email,
-          name: prof.name,
-          role: (prof.role || "admin") as Role,
-        };
-        setUser(authUser);
-        return { ok: true, role: authUser.role };
-      }
-
-      return {
-        ok: false,
-        error: `No registered user or driver found for "${phoneInput}". Please verify your credentials or contact your administrator.`
-      };
-    }
-
-    let profileId = matchedDriver.profile_id;
-    let profileName = matchedDriver.name;
-    let profileEmail = `${matchedDriver.name.toLowerCase().replace(/[^a-z0-9]/g, "")}@nanjilmilk.com`;
-
-    if (profileId) {
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("id, name, email, role, status")
-        .eq("id", profileId)
-        .maybeSingle();
-
-      if (prof) {
+      if (prof?.email) {
         if (prof.status === "Inactive") {
           return { ok: false, error: "Your account has been deactivated. Please contact an administrator." };
         }
-        profileName = prof.name || matchedDriver.name;
-        profileEmail = prof.email || profileEmail;
-      }
-    } else {
-      // Auto-create profile row if driver profile doesn't exist yet
-      profileId = matchedDriver.id;
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("id, name, email, role, status")
-        .eq("id", profileId)
-        .maybeSingle();
-
-      if (prof?.status === "Inactive") {
-        return { ok: false, error: "Your account has been deactivated. Please contact an administrator." };
+        foundEmail = prof.email;
       }
 
-      await supabase.from("profiles").upsert({
-        id: profileId,
-        name: matchedDriver.name,
-        email: profileEmail,
-        role: "driver",
-        status: "Active",
-        created_at: new Date().toISOString()
-      });
+      // 2. Check drivers by phone or name
+      if (!foundEmail) {
+        const { data: drivers } = await supabase.from("drivers").select("name, phone, profile_id");
+        if (drivers) {
+          const matched = drivers.find((d: any) => {
+            if (digitsOnly.length >= 4 && d.phone) {
+              const dDigits = d.phone.replace(/[^0-9]/g, "");
+              if (dDigits === digitsOnly || dDigits.endsWith(digitsOnly) || digitsOnly.endsWith(dDigits)) return true;
+            }
+            if (d.name && d.name.toLowerCase().trim() === cleanInput) return true;
+            return false;
+          });
 
-      await supabase
-        .from("drivers")
-        .update({ profile_id: profileId })
-        .eq("id", matchedDriver.id);
+          if (matched?.profile_id) {
+            const { data: driverProf } = await supabase
+              .from("profiles")
+              .select("email, status")
+              .eq("id", matched.profile_id)
+              .maybeSingle();
+            if (driverProf?.email) {
+              if (driverProf.status === "Inactive") {
+                return { ok: false, error: "Your account has been deactivated. Please contact an administrator." };
+              }
+              foundEmail = driverProf.email;
+            }
+          }
+        }
+      }
+
+      if (!foundEmail) {
+        return { ok: false, error: "Invalid login credentials." };
+      }
+      targetEmail = foundEmail;
     }
 
-    // Driver session creation
-    const authUser: AuthUser = {
-      id: profileId,
-      email: profileEmail,
-      name: profileName,
-      role: "driver"
-    };
+    // Authenticate strictly with Supabase Auth
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: targetEmail,
+      password,
+    });
 
-    localStorage.setItem("nanjil_driver_session", JSON.stringify(authUser));
-    setUser(authUser);
-    return { ok: true, role: "driver" as Role };
+    if (error || !data?.user) {
+      // STOP immediately. Never query fallbacks or create manual sessions.
+      return { ok: false, error: error?.message || "Invalid email or password." };
+    }
+
+    try {
+      const u = await fetchProfile(data.user.id, data.user.email!, data.user.user_metadata);
+      setUser(u);
+      return { ok: true, role: u.role };
+    } catch (e: any) {
+      await supabase.auth.signOut();
+      return { ok: false, error: e.message };
+    }
+  };
+
+  const loginWithPhone = async (phoneInput: string, password?: string) => {
+    if (!password) {
+      return { ok: false, error: "Password is required." };
+    }
+    return login(phoneInput, password);
   };
 
   const logout = async () => {

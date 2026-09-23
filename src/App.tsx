@@ -19,7 +19,6 @@ const SafetyPage = lazy(() => import("./pages/_app.safety"));
 const EnginePage = lazy(() => import("./pages/_app.engine"));
 const AlertsPage = lazy(() => import("./pages/_app.alerts"));
 const MaintenancePage = lazy(() => import("./pages/_app.maintenance"));
-const ReportsPage = lazy(() => import("./pages/_app.reports"));
 const AiPage = lazy(() => import("./pages/_app.ai"));
 const UsersPage = lazy(() => import("./pages/_app.users"));
 const SettingsPage = lazy(() => import("./pages/_app.settings"));
@@ -70,7 +69,6 @@ export default function App() {
           <Route path="/engine" element={<EnginePage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/maintenance" element={<MaintenancePage />} />
-          <Route path="/reports" element={<ReportsPage />} />
           <Route path="/ai" element={<AiPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings" element={<SettingsPage />} />

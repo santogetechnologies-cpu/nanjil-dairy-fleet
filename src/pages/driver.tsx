@@ -22,7 +22,7 @@ const TABS: { id: TabId; label: string; icon: typeof Home }[] = [
 ];
 
 function DriverPage() {
-  const { user, logout } = useAuth();
+  const { user, logout, ready } = useAuth();
   const nav = useNavigate();
   const [activeTab, setActiveTab] = useState<TabId>("home");
   const [driver, setDriver] = useState<any>(null);
@@ -148,17 +148,13 @@ function DriverPage() {
   async function load() {
     if (!user) { setLoading(false); return; }
 
-    // Drivers use localStorage sessions — no Supabase auth session required
-    const { data: { session } } = await supabase.auth.getSession();
-
-    // Try to find driver record by profile_id (Supabase session) or by name (localStorage session)
+    // Find driver record by profile_id (authenticated user) or driver name
     let dData: any = null;
-    if (session?.user?.id) {
+    if (user.id) {
       const { data } = await supabase
-        .from('drivers').select('*').eq('profile_id', session.user.id).maybeSingle();
+        .from('drivers').select('*').eq('profile_id', user.id).maybeSingle();
       dData = data;
     }
-    // Fallback: match by driver name from auth context (localStorage session)
     if (!dData && user.name) {
       const { data } = await supabase
         .from('drivers').select('*').ilike('name', user.name).maybeSingle();
@@ -405,6 +401,7 @@ function DriverPage() {
     return `${h}:${m}:${s}`;
   };
 
+  if (!ready) return null;
   if (!user) return <Navigate to="/login" />;
   if (REDIRECT_MAP[user.role] !== "/driver") return <Navigate to={REDIRECT_MAP[user.role]} />;
 

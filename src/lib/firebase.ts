@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getAnalytics, isSupported, Analytics } from "firebase/analytics";
+import type { Analytics } from "firebase/analytics";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
@@ -23,16 +23,22 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-// Initialize Analytics conditionally
+// Initialize Analytics conditionally and lazily (resilient to ad-blockers / net::ERR_BLOCKED_BY_CLIENT)
 let analytics: Analytics | undefined;
-isSupported()
-  .then((supported) => {
-    if (supported) {
-      analytics = getAnalytics(app);
-    }
-  })
-  .catch((err) => {
-    console.warn("Firebase Analytics is not supported in this environment:", err);
-  });
+if (typeof window !== "undefined") {
+  import("firebase/analytics")
+    .then(({ getAnalytics, isSupported }) => {
+      isSupported()
+        .then((supported) => {
+          if (supported) {
+            analytics = getAnalytics(app);
+          }
+        })
+        .catch(() => {});
+    })
+    .catch(() => {
+      // Ignored if blocked by client (ad-blocker/privacy extension)
+    });
+}
 
 export { app, auth, db, storage, analytics };

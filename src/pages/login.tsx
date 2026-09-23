@@ -36,16 +36,12 @@ function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      if (isPhoneOrDriver) {
-        const r = await loginWithPhone(identifier, password);
-        setBusy(false);
-        if (!r.ok) setError(r.error ?? "Driver login failed");
-        else nav("/driver");
-      } else {
-        const r = await login(identifier, password);
-        setBusy(false);
-        if (!r.ok) setError(r.error ?? "Login failed");
-        else if (r.role) nav(REDIRECT_MAP[r.role as keyof typeof REDIRECT_MAP]);
+      const r = await login(identifier, password);
+      setBusy(false);
+      if (!r.ok) {
+        setError(r.error ?? "Invalid login credentials.");
+      } else if (r.role) {
+        nav(REDIRECT_MAP[r.role as keyof typeof REDIRECT_MAP] || "/dashboard");
       }
     } catch (err: any) {
       setBusy(false);
