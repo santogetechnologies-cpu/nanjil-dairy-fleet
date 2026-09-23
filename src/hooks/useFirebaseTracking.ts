@@ -47,11 +47,11 @@ export function parseFirestoreTelemetry(data: FirestoreVehicleDoc, existing?: Ve
 
   const fuel = typeof data.fuel === "number"
     ? data.fuel
-    : (data.fuel != null ? parseFloat(String(data.fuel)) : (existing?.fuel ?? 100));
+    : (data.fuel != null ? parseFloat(String(data.fuel)) : (existing?.fuel ?? 0));
 
   const humidity = typeof data.humidity === "number"
     ? data.humidity
-    : (data.humidity != null ? parseFloat(String(data.humidity)) : (existing?.humidity ?? 65));
+    : (data.humidity != null ? parseFloat(String(data.humidity)) : (existing?.humidity ?? 0));
 
   const engineOn = data.engine_on === true || data.engine_on === "true" || (data.engine_on as any) === 1;
   const ignition = data.ignition === true || data.ignition === "true" || (data.ignition as any) === 1;
@@ -72,12 +72,12 @@ export function parseFirestoreTelemetry(data: FirestoreVehicleDoc, existing?: Ve
     lng: isNaN(lng) ? (existing?.lng || 0) : lng,
     speed: isNaN(speed) ? (existing?.speed || 0) : speed,
     temperature: isNaN(temperature) ? (existing?.temperature || 0) : temperature,
-    fuel: isNaN(fuel) ? (existing?.fuel || 80) : fuel,
-    humidity: isNaN(humidity) ? (existing?.humidity || 65) : humidity,
+    fuel: isNaN(fuel) ? (existing?.fuel || 0) : fuel,
+    humidity: isNaN(humidity) ? (existing?.humidity || 0) : humidity,
     engineOn,
     ignition,
     status,
-    location: data.location || existing?.location || "Live GPS Location",
+    location: data.location || existing?.location || "",
     lastUpdate: "Just now (Firebase)"
   };
 }
@@ -184,14 +184,15 @@ export function usePureFirebaseTracking() {
       const vehicleNumber =
         matchedSupabase?.number ||
         rawFirebaseVehicleNumber ||
-        `TN-75-DEV-${devId.slice(-4) || docId.slice(-4)}`;
+        devId ||
+        docId;
 
       const vehicleId = matchedSupabase?.id || devId || docId;
-      const driverName = matchedSupabase?.driver_name || data.driver || "Assigned Driver";
+      const driverName = matchedSupabase?.driver_name || data.driver || "";
       const driverId = matchedSupabase?.driver_id || data.driver_id || "";
-      const vehicleType = matchedSupabase?.type || data.type || "Milk Tanker";
-      const vehicleModel = matchedSupabase?.model || data.model || "Firebase GPS Tracker";
-      const vehicleRoute = matchedSupabase?.route || "Milk Collection Route";
+      const vehicleType = matchedSupabase?.type || data.type || "";
+      const vehicleModel = matchedSupabase?.model || data.model || "";
+      const vehicleRoute = matchedSupabase?.route || "";
 
       return {
         id: vehicleId,
@@ -201,21 +202,21 @@ export function usePureFirebaseTracking() {
         driver: driverName,
         driverId: driverId,
         status: parsed.status || "Idle",
-        location: parsed.location || "Live GPS Location",
+        location: parsed.location || "",
         lat: parsed.lat || 0,
         lng: parsed.lng || 0,
         speed: parsed.speed || 0,
-        fuel: parsed.fuel || 80,
+        fuel: parsed.fuel || 0,
         temperature: parsed.temperature || 0,
-        humidity: parsed.humidity || 65,
+        humidity: parsed.humidity || 0,
         engineOn: parsed.engineOn || false,
         ignition: parsed.ignition || false,
         route: vehicleRoute,
-        insuranceExpiry: matchedSupabase?.insurance_expiry || "2026-12-31",
-        lastService: matchedSupabase?.last_service || "2026-01-15",
-        nextServiceKm: matchedSupabase?.next_service_km || 10000,
-        odometer: matchedSupabase?.odometer || 45000,
-        engineHours: matchedSupabase?.engine_hours ? Number(matchedSupabase.engine_hours) : 1200,
+        insuranceExpiry: matchedSupabase?.insurance_expiry || "",
+        lastService: matchedSupabase?.last_service || "",
+        nextServiceKm: matchedSupabase?.next_service_km || 0,
+        odometer: matchedSupabase?.odometer || 0,
+        engineHours: matchedSupabase?.engine_hours ? Number(matchedSupabase.engine_hours) : 0,
         lastUpdate: "Just now (Firebase)",
         deviceId: devId || docId
       } as Vehicle;

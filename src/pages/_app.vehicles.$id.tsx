@@ -160,43 +160,8 @@ function VehicleDetailPage() {
             temp: Number(h.temperature || 0)
           };
         }));
-      } else if (id) {
-        // Auto-seed initial telemetry history for vehicle details page if no history exists yet
-        const now = Date.now();
-        const baseSpeed = vehicleData.status === 'Moving' ? 45 : 0;
-        const baseFuel = vehicleData.fuel || 100;
-        const baseTemp = Number(vehicleData.temperature || 4.2);
-        const newHist = [];
-
-        for (let i = 5; i >= 0; i--) {
-          const timeAgo = new Date(now - i * 4 * 60 * 60 * 1000).toISOString();
-          const speed = baseSpeed > 0 ? Math.max(10, baseSpeed + (i % 2 === 0 ? 5 : -5)) : 0;
-          const fuel = 100;
-          const temp = Number((baseTemp + (i % 2 === 0 ? 0.3 : -0.2)).toFixed(1));
-
-          const { data: created } = await supabase.from('telemetry_history').insert({
-            vehicle_id: id,
-            speed: speed,
-            fuel: fuel,
-            temperature: temp,
-            humidity: vehicleData.humidity || 65,
-            recorded_at: timeAgo
-          }).select('*').single();
-
-          if (created) {
-            const d = new Date(created.recorded_at);
-            newHist.push({
-              t: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
-              day: d.toLocaleDateString([], { month: 'short', day: 'numeric' }),
-              speed: Number(created.speed || 0),
-              fuel: Number(created.fuel || 0),
-              temp: Number(created.temperature || 0)
-            });
-          }
-        }
-        if (newHist.length > 0) {
-          setHistory(newHist);
-        }
+      } else {
+        setHistory([]);
       }
       // 3. Fetch vehicle documents
       const { data: docData } = await supabase
@@ -558,15 +523,7 @@ function VehicleDetailPage() {
               vehicles={[v]}
               height={360}
               selectedId={v.id}
-              routeHistory={history.map((h, i) => {
-                const targetLat = (typeof v.lat === 'number' && !isNaN(v.lat) && v.lat !== 0) ? v.lat : 8.260765379365829;
-                const targetLng = (typeof v.lng === 'number' && !isNaN(v.lng) && v.lng !== 0) ? v.lng : 77.28837309537465;
-                const fraction = (i + 1) / (history.length || 1);
-                return {
-                  lat: 8.260765379365829 + (targetLat - 8.260765379365829) * fraction,
-                  lng: 77.28837309537465 + (targetLng - 77.28837309537465) * fraction
-                };
-              })}
+              routeHistory={[]}
             />
           </div>
         </Card>

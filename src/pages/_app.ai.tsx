@@ -38,16 +38,19 @@ async function getAIResponse(q: string): Promise<string> {
     }
 
     if (/route|delay/i.test(query)) {
-      const { data: r } = await supabase
+      const { data: allR } = await supabase
         .from('collection_routes')
-        .select('name, status')
-        .eq('status', 'Delayed')
-        .limit(2);
+        .select('name, status');
 
-      if (r && r.length > 0) {
-        return `Delayed collection routes: ${r.map(x => `"${x.name}"`).join(', ')}. Recommend checking with dispatchers.`;
+      if (!allR || allR.length === 0) {
+        return "No collection routes are currently configured in the database.";
       }
-      return "All routes are currently running on time or completed.";
+
+      const delayed = allR.filter(x => x.status === 'Delayed');
+      if (delayed.length > 0) {
+        return `Delayed collection routes: ${delayed.map(x => `"${x.name}"`).join(', ')}. Recommend checking with dispatchers.`;
+      }
+      return "All registered routes are currently on time or completed.";
     }
 
     if (/performance|summary|today/i.test(query)) {
@@ -66,7 +69,7 @@ async function getAIResponse(q: string): Promise<string> {
       return "No active vehicle summaries could be compiled.";
     }
 
-    return "I analysed the latest database telemetry. No critical anomalies detected. Try asking about 'fuel consumption', 'driver safety', 'route delays' or a 'fleet summary'.";
+    return "I am your fleet assistant. Try asking about 'fuel consumption', 'driver safety', 'route delays' or a 'fleet summary' to query live database metrics.";
   } catch (err: any) {
     return `An error occurred while compiling AI response: ${err?.message || err}`;
   }

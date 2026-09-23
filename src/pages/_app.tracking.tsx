@@ -17,25 +17,7 @@ function TrackingPage() {
 
   function handleSelectVehicle(v: Vehicle) {
     setSelectedId(v.id);
-
-    if (v.lat && v.lng) {
-      // Build route path leading from Nanjil Dairy Plant Base Point (8.260765379365829, 77.28837309537465) to current live position
-      const startLat = 8.260765379365829;
-      const startLng = 77.28837309537465;
-      const endLat = v.lat;
-      const endLng = v.lng;
-
-      const points = Array.from({ length: 5 }).map((_, idx, arr) => {
-        const fraction = (idx + 1) / arr.length;
-        return {
-          lat: startLat + (endLat - startLat) * fraction,
-          lng: startLng + (endLng - startLng) * fraction
-        };
-      });
-      setRouteHistory(points);
-    } else {
-      setRouteHistory([]);
-    }
+    setRouteHistory([]);
   }
 
   // Show ONLY vehicles that have a valid Device ID

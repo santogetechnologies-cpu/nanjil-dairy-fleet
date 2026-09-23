@@ -163,12 +163,12 @@ function DriverPage() {
 
     const resolvedDriver = dData ? {
       ...dData,
-      score: Number(dData.score ?? 100),
+      score: Number(dData.score ?? 0),
       trips: Number(dData.trips ?? 0),
       total_km: Number(dData.total_km ?? 0),
       events: Number(dData.events ?? 0),
-      rating: dData.rating || "Good"
-    } : { id: null, name: user.name, score: 100, rating: "Good", trips: 0, total_km: 0, events: 0 };
+      rating: dData.rating || "N/A"
+    } : { id: null, name: user.name, score: 0, rating: "N/A", trips: 0, total_km: 0, events: 0 };
     setDriver(resolvedDriver);
 
     let vehiclesArray: any[] = [];

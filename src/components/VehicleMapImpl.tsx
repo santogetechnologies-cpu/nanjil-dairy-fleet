@@ -79,8 +79,20 @@ export default function VehicleMapImpl({
     }
 
     let isSubscribed = true;
-    const startLng = (routeHistory && routeHistory.length > 0 && typeof routeHistory[0].lng === "number") ? routeHistory[0].lng : 77.28837309537465;
-    const startLat = (routeHistory && routeHistory.length > 0 && typeof routeHistory[0].lat === "number") ? routeHistory[0].lat : 8.260765379365829;
+
+    if (!routeHistory || routeHistory.length === 0) {
+      setRealRoadCoords(null);
+      return;
+    }
+
+    const firstPt = routeHistory[0];
+    if (!firstPt || typeof firstPt.lng !== "number" || typeof firstPt.lat !== "number" || isNaN(firstPt.lng) || isNaN(firstPt.lat)) {
+      setRealRoadCoords(null);
+      return;
+    }
+
+    const startLng = firstPt.lng;
+    const startLat = firstPt.lat;
     const endLng = targetVehicle.lng;
     const endLat = targetVehicle.lat;
 
@@ -127,24 +139,14 @@ export default function VehicleMapImpl({
         pt && typeof pt.lat === "number" && !isNaN(pt.lat) &&
         typeof pt.lng === "number" && !isNaN(pt.lng)
       );
-      coordinates = validPoints.map(pt => [pt.lng, pt.lat]);
-      coordinates.push([targetVehicle.lng, targetVehicle.lat]);
-    } else {
-      // Synthesize realistic route path waypoints leading from Nanjil Dairy Plant (77.28837309537465, 8.260765379365829) to vehicle's current location
-      const baseLng = 77.28837309537465;
-      const baseLat = 8.260765379365829;
-      const endLng = targetVehicle.lng;
-      const endLat = targetVehicle.lat;
-      const stepLng = (endLng - baseLng) / 4;
-      const stepLat = (endLat - baseLat) / 4;
+      if (validPoints.length > 0) {
+        coordinates = validPoints.map(pt => [pt.lng, pt.lat]);
+        coordinates.push([targetVehicle.lng, targetVehicle.lat]);
+      }
+    }
 
-      coordinates = [
-        [baseLng, baseLat], // Nanjil Dairy Plant Base Point
-        [baseLng + stepLng * 1, baseLat + stepLat * 1 + 0.005],
-        [baseLng + stepLng * 2 - 0.003, baseLat + stepLat * 2],
-        [baseLng + stepLng * 3, baseLat + stepLat * 3 + 0.002],
-        [endLng, endLat] // Current Live Location
-      ];
+    if (coordinates.length < 2) {
+      return null;
     }
 
     return {
