@@ -1,20 +1,22 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { PageHeader } from "@/components/AppLayout";
 import { Kpi, Card, CardHeader } from "@/components/ui-kit";
 import { Truck, Route, Fuel, Gauge } from "lucide-react";
 import { DataTable } from "@/components/DataTable";
 import { supabase } from "@/lib/supabase";
+import { calculateFleetFuelAnalysis, formatMileage, type RawFuelLog } from "@/lib/fuel-efficiency";
 
 function Page() {
   const [vehicles, setVehicles] = useState<any[]>([]);
   const [tripStats, setTripStats] = useState<Record<string, { count: number; totalKm: number; lastDate: string }>>({});
   const [fuelStats, setFuelStats] = useState<Record<string, { count: number; totalLiters: number }>>({});
+  const [fuelLogs, setFuelLogs] = useState<RawFuelLog[]>([]);
 
   async function load() {
     const [vRes, tRes, fRes] = await Promise.all([
       supabase.from('v_vehicles').select('*'),
       supabase.from('trips').select('vehicle_id, distance, date, status'),
-      supabase.from('fuel_purchase_logs').select('vehicle_id, liters')
+      supabase.from('fuel_purchase_logs').select('*').order('date', { ascending: true })
     ]);
 
     if (vRes.data) setVehicles(vRes.data);
@@ -34,14 +36,15 @@ function Page() {
     }
 
     if (fRes.data) {
-      const stats: Record<string, { count: number; totalLiters: number }> = {};
+      setFuelLogs(fRes.data as RawFuelLog[]);
+      const fStats: Record<string, { count: number; totalLiters: number }> = {};
       fRes.data.forEach((f: any) => {
         if (!f.vehicle_id) return;
-        if (!stats[f.vehicle_id]) stats[f.vehicle_id] = { count: 0, totalLiters: 0 };
-        stats[f.vehicle_id].count++;
-        stats[f.vehicle_id].totalLiters += Number(f.liters || 0);
+        if (!fStats[f.vehicle_id]) fStats[f.vehicle_id] = { count: 0, totalLiters: 0 };
+        fStats[f.vehicle_id].count++;
+        fStats[f.vehicle_id].totalLiters += Number(f.liters || 0);
       });
-      setFuelStats(stats);
+      setFuelStats(fStats);
     }
   }
 
@@ -64,27 +67,31 @@ function Page() {
     return () => { cancelled = true; channel?.unsubscribe(); };
   }, []);
 
+  // Aggregate fleet fuel analysis using standard full-tank mileage engine
+  const fleetFuel = useMemo(() => calculateFleetFuelAnalysis(fuelLogs, vehicles), [fuelLogs, vehicles]);
+
   // Aggregate KPIs from real data
   const totalTrips = Object.values(tripStats).reduce((s, t) => s + t.count, 0);
   const totalDistanceKm = Math.round(Object.values(tripStats).reduce((s, t) => s + t.totalKm, 0));
-  const totalFuelLiters = Math.round(Object.values(fuelStats).reduce((s, f) => s + f.totalLiters, 0));
+  const totalFuelLiters = Math.round(fleetFuel.totalFleetFuel * 10) / 10;
   const activeVehicles = vehicles.filter(v => tripStats[v.id]?.count > 0).length;
 
-  const tableData = vehicles.map(v => ({
-    id: v.id,
-    number: v.number,
-    driver: v.driver_name || 'Unassigned',
-    status: v.status,
-    odometer: Number(v.odometer || 0),
-    trips: tripStats[v.id]?.count || 0,
-    totalKm: Math.round(tripStats[v.id]?.totalKm || 0),
-    fuelFillUps: fuelStats[v.id]?.count || 0,
-    totalLiters: Math.round((fuelStats[v.id]?.totalLiters || 0) * 10) / 10,
-    lastTrip: tripStats[v.id]?.lastDate || '—',
-    kmpl: (fuelStats[v.id]?.totalLiters || 0) > 0 && (tripStats[v.id]?.totalKm || 0) > 0
-      ? Math.round(((tripStats[v.id]?.totalKm || 0) / (fuelStats[v.id]?.totalLiters || 1)) * 10) / 10
-      : null,
-  }));
+  const tableData = vehicles.map(v => {
+    const vFuel = fleetFuel.vehicleMap[v.id];
+    return {
+      id: v.id,
+      number: v.number,
+      driver: v.driver_name || 'Unassigned',
+      status: v.status,
+      odometer: Number(v.odometer || 0),
+      trips: tripStats[v.id]?.count || 0,
+      totalKm: Math.round(tripStats[v.id]?.totalKm || 0),
+      fuelFillUps: fuelStats[v.id]?.count || 0,
+      totalLiters: Math.round((fuelStats[v.id]?.totalLiters || 0) * 10) / 10,
+      lastTrip: tripStats[v.id]?.lastDate || '—',
+      mileage: vFuel?.averageMileage ?? null,
+    };
+  });
 
   return (
     <div>
@@ -124,7 +131,7 @@ function Page() {
             { key: "totalKm", label: "Distance (km)", render: (r: any) => r.totalKm > 0 ? `${r.totalKm.toLocaleString()} km` : '—' },
             { key: "fuelFillUps", label: "Fuel Fill-ups", render: (r: any) => r.fuelFillUps > 0 ? r.fuelFillUps : <span className="text-muted-foreground">—</span> },
             { key: "totalLiters", label: "Fuel (L)", render: (r: any) => r.totalLiters > 0 ? `${r.totalLiters} L` : '—' },
-            { key: "kmpl", label: "Mileage (km/L)", render: (r: any) => r.kmpl !== null ? <span className="font-semibold text-primary">{r.kmpl}</span> : <span className="text-muted-foreground">—</span> },
+            { key: "mileage", label: "Mileage (km/L)", render: (r: any) => r.mileage !== null ? <span className="font-semibold text-primary">{r.mileage} km/L</span> : <span className="text-muted-foreground text-xs">Insufficient data</span> },
             { key: "lastTrip", label: "Last Trip", render: (r: any) => r.lastTrip !== '—' ? new Date(r.lastTrip).toLocaleDateString() : '—' },
           ]}
         />

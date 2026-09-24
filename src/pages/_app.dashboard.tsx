@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import { supabase } from "@/lib/supabase";
 import { usePureFirebaseTracking } from "@/hooks/useFirebaseTracking";
+import { calculateFleetFuelAnalysis, type RawFuelLog } from "@/lib/fuel-efficiency";
 
 const STATUS_COLORS: Record<string, string> = {
   Moving: "oklch(0.62 0.16 150)",
@@ -43,37 +44,35 @@ function DashboardPage() {
 
     async function load() {
       try {
-        const [vRes, aRes, mRes, effRes, fuelRes] = await Promise.all([
+        const [vRes, aRes, mRes, logRes] = await Promise.all([
           supabase.from('v_vehicles').select('*'),
           supabase.from('alerts').select('*'),
           supabase.from('maintenance_records').select('*'),
-          supabase.from('v_fuel_efficiency_by_vehicle').select('*').limit(10),
-          supabase.from('v_daily_fuel_fleet').select('*')
+          supabase.from('fuel_purchase_logs').select('*, vehicles(number), drivers(name)').order('logged_at', { ascending: true })
         ]);
 
         if (cancelled) return;
 
-        setVehicles(vRes.data || []);
+        const vList = vRes.data || [];
+        setVehicles(vList);
         setAlerts(aRes.data || []);
         setMaintenance(mRes.data || []);
 
-        if (effRes.data && effRes.data.length > 0) {
-          setEff(effRes.data.map((e: any) => ({
-            vehicle: e.number ? e.number.split("-").slice(0, 2).join("-") : 'Unknown',
-            kmpl: Number(e.kmpl)
-          })));
-        } else {
-          setEff([]);
-        }
+        const rawLogs: RawFuelLog[] = logRes.data || [];
+        const analysis = calculateFleetFuelAnalysis(rawLogs, vList);
 
-        if (fuelRes.data && fuelRes.data.length > 0) {
-          setFuelData(fuelRes.data.map((f: any) => ({
-            day: f.log_date ? new Date(f.log_date).toLocaleDateString([], { weekday: 'short' }) : 'Unknown',
-            consumed: Number(f.total_consumed_l)
-          })));
-        } else {
-          setFuelData([]);
-        }
+        const realEff = Object.values(analysis.vehicleMap)
+          .filter(va => va.hasSufficientData && va.averageMileage !== null)
+          .map(va => ({
+            vehicle: va.vehicleNumber ? va.vehicleNumber.split("-").slice(0, 2).join("-") : 'Unknown',
+            kmpl: va.averageMileage!
+          }))
+          .slice(0, 10);
+        setEff(realEff);
+
+        // Daily manual refill consumption
+        const realFuelTrend = analysis.dailyConsumption.filter(d => d.consumed > 0);
+        setFuelData(realFuelTrend);
       } catch (err) {
         console.warn('Dashboard load error:', err);
       }
@@ -92,6 +91,7 @@ function DashboardPage() {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'maintenance_records' }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'fuel_purchase_logs' }, () => { if (!cancelled) load(); })
         .subscribe();
     }
 
@@ -266,7 +266,7 @@ function DashboardPage() {
             <div className="h-full flex flex-col items-center justify-center gap-2 text-center">
               <Sparkles className="h-8 w-8 text-muted-foreground/30" />
               <p className="text-sm text-muted-foreground">No mileage data yet</p>
-              <p className="text-xs text-muted-foreground/60">Log fuel refills and complete trips to calculate km/L efficiency.</p>
+              <p className="text-xs text-muted-foreground/60">Log at least two full-tank fuel refills for a vehicle in Fuel Intelligence to calculate verified km/L efficiency.</p>
             </div>
           )}
         </div>

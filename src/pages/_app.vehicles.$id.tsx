@@ -6,13 +6,19 @@ import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
 } from "recharts";
 import {
-  ChevronLeft, Gauge, Activity, Loader2, X, Plus, Radio,
+  ChevronLeft, Gauge, Activity, Loader2, X, Plus, Radio, AlertTriangle,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { type Vehicle } from "@/lib/types";
 import { useAuth } from "@/lib/auth";
 import { useSingleVehicleFirebaseTracking } from "@/hooks/useFirebaseTracking";
+import {
+  calculateVehicleFuelAnalysis,
+  formatMileage,
+  formatCostPerKm,
+  type VehicleFuelAnalysis,
+} from "@/lib/fuel-efficiency";
 
 interface HistoryPoint {
   t: string;
@@ -45,6 +51,9 @@ function VehicleDetailPage() {
   const [showAddDoc, setShowAddDoc] = useState(false);
   const [docForm, setDocForm] = useState({ type: "Insurance", number: "", expiryDate: "" });
   const [savingDoc, setSavingDoc] = useState(false);
+
+  // Fuel efficiency analysis state
+  const [fuelAnalysis, setFuelAnalysis] = useState<VehicleFuelAnalysis | null>(null);
 
   const canManage = user?.role === "admin" || user?.role === "manager";
 
@@ -172,6 +181,21 @@ function VehicleDetailPage() {
       if (docData) {
         setDocuments(docData);
       }
+
+      // 4. Fetch fuel purchase logs to calculate real mileage
+      const { data: fuelLogs } = await supabase
+        .from('fuel_purchase_logs')
+        .select('*')
+        .eq('vehicle_id', id)
+        .order('logged_at', { ascending: true });
+
+      const analysis = calculateVehicleFuelAnalysis(
+        id || '',
+        fuelLogs || [],
+        vehicleData.number,
+        vehicleData.odometer
+      );
+      setFuelAnalysis(analysis);
     } else {
       setInitialV(null);
     }
@@ -192,6 +216,7 @@ function VehicleDetailPage() {
         .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry', filter: `vehicle_id=eq.${id}` }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'telemetry_history', filter: `vehicle_id=eq.${id}` }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_documents', filter: `vehicle_id=eq.${id}` }, () => { if (!cancelled) load(); })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'fuel_purchase_logs', filter: `vehicle_id=eq.${id}` }, () => { if (!cancelled) load(); })
         .subscribe();
     }
 
@@ -541,7 +566,17 @@ function VehicleDetailPage() {
               <Field label="Last Service" value={v.lastService || 'N/A'} />
               <Field label="Odometer" value={`${v.odometer.toLocaleString()} km`} />
               <Field label="Next Service" value={`${v.nextServiceKm} km`} />
+              <Field label="Latest Mileage" value={formatMileage(fuelAnalysis?.latestMileage)} />
+              <Field label="Average Mileage" value={formatMileage(fuelAnalysis?.averageMileage)} />
+              <Field label="Fuel Cost / km" value={formatCostPerKm(fuelAnalysis?.fuelCostPerKm)} />
+              <Field label="Distance Since Refill" value={fuelAnalysis?.distanceSinceLastRefill !== null && fuelAnalysis?.distanceSinceLastRefill !== undefined ? `${fuelAnalysis.distanceSinceLastRefill.toLocaleString()} km` : '—'} />
             </dl>
+            {fuelAnalysis?.efficiencyWarning && (
+              <div className="mx-4 mb-3 p-2.5 bg-warning/10 border border-warning/20 rounded text-xs text-warning-foreground flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+                <span>{fuelAnalysis.efficiencyWarning}</span>
+              </div>
+            )}
           </Card>
 
           <Card>
