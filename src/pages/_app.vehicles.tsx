@@ -7,7 +7,7 @@ import { DataTable } from "@/components/DataTable";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { Plus, X, Loader2, Trash2, AlertTriangle, Pencil, Radio } from "lucide-react";
-import { useFirebaseTracking } from "@/hooks/useFirebaseTracking";
+import { useVehicleList } from "@/hooks/useVehicleTracking";
 
 function VehiclesPage() {
   const { user } = useAuth();
@@ -25,8 +25,8 @@ function VehiclesPage() {
   }, [params]);
 
   const [rawVehicles, setRawVehicles] = useState<Vehicle[]>([]);
-  // Real-time Firebase Firestore tracking (matches vehicles strictly by deviceId)
-  const vehicles = useFirebaseTracking(rawVehicles);
+  // Real-time tracking (source determined by VITE_TELEMETRY_SOURCE)
+  const vehicles = useVehicleList(rawVehicles);
 
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ 

@@ -12,7 +12,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { type Vehicle } from "@/lib/types";
 import { useAuth } from "@/lib/auth";
-import { useSingleVehicleFirebaseTracking } from "@/hooks/useFirebaseTracking";
+import { useSingleVehicle } from "@/hooks/useVehicleTracking";
 import {
   calculateVehicleFuelAnalysis,
   formatMileage,
@@ -33,8 +33,8 @@ function VehicleDetailPage() {
   const { user } = useAuth();
   const [initialV, setInitialV] = useState<Vehicle | null>(null);
 
-  // Real-time Firebase Firestore tracking (matches vehicle by deviceId)
-  const v = useSingleVehicleFirebaseTracking(initialV);
+  // Real-time tracking (source determined by VITE_TELEMETRY_SOURCE)
+  const v = useSingleVehicle(initialV);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
   

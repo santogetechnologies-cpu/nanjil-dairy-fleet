@@ -1,10 +1,10 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { type Vehicle, type VehicleStatus } from "@/lib/types";
-import { Card, Badge } from "@/components/ui-kit";
+import { Card } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { VehicleMap } from "@/components/VehicleMap";
 import { Search, MapPin, Radio } from "lucide-react";
-import { usePureFirebaseTracking } from "@/hooks/useFirebaseTracking";
+import { useVehicles, TELEMETRY_SOURCE, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
 
 function TrackingPage() {
   const [filter, setFilter] = useState<VehicleStatus | "All">("All");
@@ -12,8 +12,9 @@ function TrackingPage() {
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [routeHistory, setRouteHistory] = useState<Array<{ lat: number; lng: number }>>([]);
 
-  // Stream live vehicle tracking 100% directly and exclusively from Firebase Firestore ("vechile" collection)
-  const vehicles = usePureFirebaseTracking();
+  // Stream live vehicle tracking from the configured telemetry source.
+  // Source is controlled by VITE_TELEMETRY_SOURCE ("firebase" | "supabase").
+  const vehicles = useVehicles();
 
   function handleSelectVehicle(v: Vehicle) {
     setSelectedId(v.id);
@@ -24,11 +25,40 @@ function TrackingPage() {
   const data = vehicles.filter((v) => {
     if (!v.deviceId || !v.deviceId.trim()) return false;
     if (filter !== "All" && v.status !== filter) return false;
-    if (q && !`${v.number} ${v.driver} ${v.location} ${v.deviceId}`.toLowerCase().includes(q.toLowerCase())) return false;
+    if (
+      q &&
+      !`${v.number} ${v.driver} ${v.location} ${v.deviceId}`.toLowerCase().includes(q.toLowerCase())
+    )
+      return false;
     return true;
   });
 
-  const selectedVehicle = vehicles.find(v => v.id === selectedId);
+  const selectedVehicle = vehicles.find((v) => v.id === selectedId);
+
+  // Source-aware badge colour: amber for Firebase, emerald for EMQX/Supabase
+  const badgeClass =
+    TELEMETRY_SOURCE === "supabase"
+      ? "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+      : "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20";
+
+  const pulseClass =
+    TELEMETRY_SOURCE === "supabase"
+      ? "h-3 w-3 text-emerald-500 animate-pulse"
+      : "h-3 w-3 text-amber-500 animate-pulse";
+
+  // Empty-state hint text
+  const emptyHint =
+    TELEMETRY_SOURCE === "supabase"
+      ? "Ensure the vehicle has a Device ID and EMQX is publishing to fleet/vehicle/{device_id}/telemetry."
+      : 'Ensure documents exist in Firebase Firestore "vechile" collection.';
+
+  const emptyLabel =
+    TELEMETRY_SOURCE === "supabase"
+      ? "No active EMQX devices found"
+      : "No active Firebase devices found";
+
+  // Device list panel heading
+  const deviceListLabel = TELEMETRY_SOURCE === "supabase" ? "EMQX Devices" : "Firebase Devices";
 
   return (
     <div>
@@ -38,12 +68,12 @@ function TrackingPage() {
           <div className="flex items-center gap-2">
             <span>
               {selectedVehicle
-                ? `Tracking Route for ${selectedVehicle.number} (${selectedVehicle.driver || 'Driver'})`
-                : `Real-time positions · ${vehicles.length} active (Direct Firebase Stream)`}
+                ? `Tracking Route for ${selectedVehicle.number} (${selectedVehicle.driver || "Driver"})`
+                : `Real-time positions · ${vehicles.length} active`}
             </span>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-              <Radio className="h-3 w-3 text-amber-500 animate-pulse" />
-              100% Firebase Firestore (vechile)
+            <span className={badgeClass}>
+              <Radio className={pulseClass} />
+              {TELEMETRY_LABEL}
             </span>
           </div>
         }
@@ -81,10 +111,13 @@ function TrackingPage() {
                   key={s}
                   onClick={() => setFilter(s)}
                   className={`px-3 h-8 text-xs rounded-md border transition-colors ${
-                    filter === s ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"
+                    filter === s
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-card border-border hover:bg-muted"
                   }`}
                 >
-                  {s} ({s === "All" ? vehicles.length : vehicles.filter((v) => v.status === s).length})
+                  {s} (
+                  {s === "All" ? vehicles.length : vehicles.filter((v) => v.status === s).length})
                 </button>
               ))}
             </div>
@@ -92,10 +125,15 @@ function TrackingPage() {
 
           <Card>
             <div className="px-3 py-2 border-b border-border text-sm font-medium flex items-center justify-between">
-              <span>Firebase Devices ({data.length})</span>
+              <span>
+                {deviceListLabel} ({data.length})
+              </span>
               {selectedId && (
                 <button
-                  onClick={() => { setSelectedId(undefined); setRouteHistory([]); }}
+                  onClick={() => {
+                    setSelectedId(undefined);
+                    setRouteHistory([]);
+                  }}
                   className="text-[11px] text-primary hover:underline"
                 >
                   Show All Vehicles
@@ -116,24 +154,29 @@ function TrackingPage() {
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5">
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-400 text-black border border-black/80 font-mono font-black text-xs tracking-wide shadow-xs">
-                          <span className="text-[8px] bg-black text-amber-400 px-0.5 rounded-xs font-sans">IND</span>
+                          <span className="text-[8px] bg-black text-amber-400 px-0.5 rounded-xs font-sans">
+                            IND
+                          </span>
                           <span>{v.number}</span>
                         </span>
                       </div>
                       <div className="flex items-center gap-1">
                         <span
                           className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                            v.status === "Moving" ? "bg-success/10 text-success" :
-                            v.status === "Idle" ? "bg-warning/15 text-warning-foreground" :
-                            v.status === "Parked" ? "bg-muted text-muted-foreground" :
-                            "bg-destructive/10 text-destructive"
+                            v.status === "Moving"
+                              ? "bg-success/10 text-success"
+                              : v.status === "Idle"
+                                ? "bg-warning/15 text-warning-foreground"
+                                : v.status === "Parked"
+                                  ? "bg-muted text-muted-foreground"
+                                  : "bg-destructive/10 text-destructive"
                           }`}
                         >
                           {v.status}
                         </span>
                       </div>
                     </div>
-                    
+
                     {v.deviceId && (
                       <div className="text-[10px] text-muted-foreground font-mono mt-1 flex items-center gap-1">
                         <Radio className="h-3 w-3 text-emerald-500 animate-pulse" />
@@ -142,13 +185,15 @@ function TrackingPage() {
                     )}
 
                     <div className="flex items-center justify-between text-xs text-muted-foreground mt-1">
-                      <span>{v.driver || 'No Driver'}</span>
+                      <span>{v.driver || "No Driver"}</span>
                       <span className="flex items-center gap-0.5">
-                        <MapPin className="h-3 w-3" /> {v.location || 'Live Location'}
+                        <MapPin className="h-3 w-3" /> {v.location || "Live Location"}
                       </span>
                     </div>
                     <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground border-t border-border/40 pt-1.5">
-                      <span>Speed: {v.speed} km/h • Fuel: {v.fuel}%</span>
+                      <span>
+                        Speed: {v.speed} km/h • Fuel: {v.fuel}%
+                      </span>
                       <span className="text-primary font-medium flex items-center gap-0.5">
                         {isSelected ? "Tracking Active" : "Track Route →"}
                       </span>
@@ -158,8 +203,8 @@ function TrackingPage() {
               })}
               {data.length === 0 && (
                 <div className="p-6 text-center text-xs text-muted-foreground space-y-1">
-                  <div className="font-medium text-foreground">No active Firebase devices found</div>
-                  <div>Ensure documents exist in Firebase Firestore "vechile" collection.</div>
+                  <div className="font-medium text-foreground">{emptyLabel}</div>
+                  <div>{emptyHint}</div>
                 </div>
               )}
             </div>
