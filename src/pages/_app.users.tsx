@@ -147,19 +147,7 @@ function Page() {
       });
 
     const combined = [...profileRows, ...phoneOnlyDrivers];
-    if (combined.length > 0) {
-      setUsers(combined);
-    } else {
-      setUsers([
-        { id: 'u1', name: 'Aswin (Admin)', email: 'wizzaswin@gmail.com', role: 'Administrator', status: 'Active', lastLogin: 'Just now' },
-        { id: 'u2', name: 'Fleet Manager', email: 'manager@nanjilmilk.com', role: 'Fleet Manager', status: 'Active', lastLogin: '5 mins ago' },
-        { id: 'u3', name: 'Muthu Kumar', email: '9876543210', role: 'Driver', status: 'Active', lastLogin: '10 mins ago' },
-        { id: 'u4', name: 'Selvan P', email: '9876543211', role: 'Driver', status: 'Active', lastLogin: '25 mins ago' },
-        { id: 'u5', name: 'Rajan S', email: '9876543212', role: 'Driver', status: 'Active', lastLogin: '1 hr ago' },
-        { id: 'u6', name: 'Karthik M', email: '9876543213', role: 'Driver', status: 'Active', lastLogin: '2 hrs ago' },
-        { id: 'u7', name: 'Arun V', email: '9876543214', role: 'Driver', status: 'Active', lastLogin: 'Yesterday' }
-      ]);
-    }
+    setUsers(combined);
   }
 
   useEffect(() => {

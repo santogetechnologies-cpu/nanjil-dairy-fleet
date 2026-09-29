@@ -27,6 +27,7 @@ export interface Vehicle {
   engineHours: number;
   lastUpdate: string;
   deviceId?: string;
+  averageSpeed?: number | null;
 }
 
 export interface Driver {

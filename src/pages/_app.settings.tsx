@@ -140,24 +140,24 @@ function Page() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <span className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">JSON Payload Structure</span>
+                  <span className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">JSON Payload Structure (Documentation Reference Only)</span>
                   <pre className="p-3 bg-muted rounded border border-border font-mono text-xs text-foreground overflow-x-auto h-48">
 {`{
   "status": "Moving",
-  "lat": 8.252300,
-  "lng": 77.453200,
-  "speed": 42,
-  "fuel": 85,
-  "temperature": 4.2,
-  "humidity": 65,
+  "lat": 0.000000,
+  "lng": 0.000000,
+  "speed": 0,
+  "fuel": 0,
+  "temperature": 0.0,
+  "humidity": 0,
   "engine_on": true,
   "ignition": true,
-  "device_id": 123456789012345
+  "device_id": "DEVICE_IMEI_OR_ID"
 }`}
                   </pre>
                 </div>
                 <div>
-                  <span className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Arduino C++ Code Snippet (HTTPClient)</span>
+                  <span className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Arduino C++ Code Snippet (Documentation Reference Only)</span>
                   <pre className="p-3 bg-muted rounded border border-border font-mono text-xs text-foreground overflow-x-auto h-48">
 {`#include <WiFi.h>
 #include <HTTPClient.h>
@@ -171,7 +171,7 @@ void postTelemetry() {
   http.addHeader("apikey", "YOUR_SUPABASE_ANON_KEY");
   http.addHeader("Authorization", "Bearer YOUR_SUPABASE_ANON_KEY");
   
-  String payload = "{\\"status\\":\\"Moving\\",\\"lat\\":8.2523,\\"lng\\":77.4532,\\"speed\\":45,\\"fuel\\":80,\\"temperature\\":3.8,\\"humidity\\":62,\\"device_id\\":123456789012345}";
+  String payload = "{\\"status\\":\\"Moving\\",\\"lat\\":0.0000,\\"lng\\":0.0000,\\"speed\\":0,\\"fuel\\":0,\\"temperature\\":0.0,\\"humidity\\":0,\\"device_id\\":\\"DEVICE_IMEI_OR_ID\\"}";
   int httpResponseCode = http.PATCH(payload);
   http.end();
 }`}

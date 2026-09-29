@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getAnalytics, isSupported, Analytics } from "firebase/analytics";
+import type { Analytics } from "firebase/analytics";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
@@ -23,16 +23,8 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-// Initialize Analytics conditionally
-let analytics: Analytics | undefined;
-isSupported()
-  .then((supported) => {
-    if (supported) {
-      analytics = getAnalytics(app);
-    }
-  })
-  .catch((err) => {
-    console.warn("Firebase Analytics is not supported in this environment:", err);
-  });
+// Analytics is optional and safely stubbed to prevent browser ad-blockers
+// (e.g. uBlock, Brave Shields) from logging net::ERR_BLOCKED_BY_CLIENT in DevTools
+const analytics: Analytics | undefined = undefined;
 
 export { app, auth, db, storage, analytics };

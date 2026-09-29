@@ -7,6 +7,11 @@ import {
 import { DataTable } from "@/components/DataTable";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
+import {
+  calculateFleetFuelAnalysis,
+  type FleetFuelAnalysis,
+  type RawFuelLog,
+} from "@/lib/fuel-efficiency";
 
 function Page() {
   const [vehicles, setVehicles] = useState<any[]>([]);
@@ -14,11 +19,12 @@ function Page() {
   const [eff, setEff] = useState<any[]>([]);
   const [effMap, setEffMap] = useState<Record<string, number>>({});
   const [trend, setTrend] = useState<any[]>([]);
+  const [fleetAnalysis, setFleetAnalysis] = useState<FleetFuelAnalysis | null>(null);
   
   // Fuel logging states
   const [purchaseLogs, setPurchaseLogs] = useState<any[]>([]);
   const [showLogModal, setShowLogModal] = useState(false);
-  const [form, setForm] = useState({ vehicleId: "", liters: 0, cost: 0, odometer: 0 });
+  const [form, setForm] = useState({ vehicleId: "", liters: 0, cost: 0, odometer: 0, isFullTank: true });
   const [saving, setSaving] = useState(false);
 
   async function handleLogRefill(e: React.FormEvent) {
@@ -27,18 +33,28 @@ function Page() {
     setSaving(true);
 
     try {
+      const payload: any = {
+        vehicle_id: form.vehicleId,
+        liters: form.liters,
+        cost: form.cost,
+        odometer: form.odometer,
+        is_full_tank: form.isFullTank
+      };
+
       const { error } = await supabase
         .from('fuel_purchase_logs')
-        .insert({
-          vehicle_id: form.vehicleId,
-          liters: form.liters,
-          cost: form.cost,
-          odometer: form.odometer
-        });
+        .insert(payload);
 
-      if (error) throw error;
+      if (error && error.message?.includes('is_full_tank')) {
+        delete payload.is_full_tank;
+        const { error: retryError } = await supabase.from('fuel_purchase_logs').insert(payload);
+        if (retryError) throw retryError;
+      } else if (error) {
+        throw error;
+      }
+
       setShowLogModal(false);
-      setForm({ vehicleId: "", liters: 0, cost: 0, odometer: 0 });
+      setForm({ vehicleId: "", liters: 0, cost: 0, odometer: 0, isFullTank: true });
       load();
     } catch (err: any) {
       alert("Failed to log fuel refill: " + err.message);
@@ -48,49 +64,58 @@ function Page() {
   }
 
   async function load() {
-    const [vRes, aRes, effRes, trendRes, logRes] = await Promise.all([
+    const [vRes, aRes, logRes] = await Promise.all([
       supabase.from('v_vehicles').select('*'),
       supabase.from('alerts').select('*'),
-      supabase.from('v_fuel_efficiency_by_vehicle').select('*').limit(10),
-      supabase.from('v_daily_fuel_fleet').select('*'),
-      supabase.from('fuel_purchase_logs').select('*, vehicles(number), drivers(name)').order('logged_at', { ascending: false })
+      supabase.from('fuel_purchase_logs').select('*, vehicles(number), drivers(name)').order('logged_at', { ascending: true })
     ]);
 
-    if (vRes.data) setVehicles(vRes.data);
+    const vList = vRes.data || [];
+    if (vRes.data) setVehicles(vList);
     if (aRes.data) setAlerts(aRes.data);
     
-    if (effRes.data) {
-      const mapping: Record<string, number> = {};
-      effRes.data.forEach(e => {
-        if (e.number) mapping[e.number] = Number(e.kmpl || 0);
+    const rawLogs: RawFuelLog[] = logRes.data || [];
+    const analysis = calculateFleetFuelAnalysis(rawLogs, vList);
+    setFleetAnalysis(analysis);
+
+    const mapping: Record<string, number> = {};
+    Object.values(analysis.vehicleMap).forEach(va => {
+      if (va.vehicleNumber && va.averageMileage !== null) {
+        mapping[va.vehicleNumber] = va.averageMileage;
+      }
+    });
+    setEffMap(mapping);
+
+    const realEff = Object.values(analysis.vehicleMap)
+      .filter(va => va.hasSufficientData && va.averageMileage !== null)
+      .map(va => ({
+        vehicle: va.vehicleNumber ? va.vehicleNumber.split("-").slice(0, 2).join("-") : 'Unknown',
+        kmpl: va.averageMileage!
+      }));
+    setEff(realEff);
+
+    setTrend(analysis.dailyConsumption);
+
+    // Map interval mileage to specific log records that completed full-tank intervals
+    const intervalMileageByLogId = new Map<string, number>();
+    Object.values(analysis.vehicleMap).forEach(va => {
+      va.intervals.forEach(inv => {
+        intervalMileageByLogId.set(inv.intervalId, inv.mileageKmpl);
       });
-      setEffMap(mapping);
+    });
 
-      setEff(effRes.data.map(e => ({ 
-        vehicle: e.number ? e.number.split("-").slice(0, 2).join("-") : 'Unknown', 
-        kmpl: Number(e.kmpl) 
-      })));
-    }
-    
-    if (trendRes.data) {
-      setTrend(trendRes.data.map(f => ({
-        day: f.log_date ? new Date(f.log_date).toLocaleDateString([], { weekday: 'short' }) : 'Unknown',
-        consumed: Number(f.total_consumed_l || 0),
-        mileage: Number(f.avg_mileage_kmpl || 0)
-      })));
-    }
-
-    if (logRes.data) {
-      setPurchaseLogs(logRes.data.map(l => ({
-        id: l.id,
-        vehicle: l.vehicles?.number || 'Unknown',
-        driver: l.drivers?.name || 'Admin Log',
-        liters: Number(l.liters || 0),
-        cost: Number(l.cost || 0),
-        odometer: Number(l.odometer || 0),
-        date: new Date(l.logged_at).toLocaleDateString()
-      })));
-    }
+    const displayLogs = [...rawLogs].reverse().map(l => ({
+      id: l.id,
+      vehicle: l.vehicles?.number || 'Unknown',
+      driver: l.drivers?.name || 'Admin Log',
+      liters: Number(l.liters || 0),
+      cost: Number(l.cost || 0),
+      odometer: Number(l.odometer || 0),
+      isFullTank: l.is_full_tank !== false,
+      intervalMileage: intervalMileageByLogId.get(l.id) ?? null,
+      date: new Date(l.logged_at).toLocaleDateString()
+    }));
+    setPurchaseLogs(displayLogs);
   }
 
   useEffect(() => {
@@ -191,8 +216,20 @@ function Page() {
                   required
                 />
               </div>
+              <div className="flex items-center gap-2 pt-1">
+                <input 
+                  type="checkbox" 
+                  id="isFullTank"
+                  checked={form.isFullTank}
+                  onChange={(e) => setForm({ ...form, isFullTank: e.target.checked })}
+                  className="h-4 w-4 rounded border-border text-primary focus:ring-primary cursor-pointer"
+                />
+                <label htmlFor="isFullTank" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer">
+                  Full Tank Refill (Enables Full-Tank Mileage Calculation)
+                </label>
+              </div>
               <div className="flex gap-2 pt-2 border-t border-border">
-                <Button type="button" variant="outline" onClick={() => { setShowLogModal(false); setForm({ vehicleId: "", liters: 0, cost: 0, odometer: 0 }); }} className="flex-1">Cancel</Button>
+                <Button type="button" variant="outline" onClick={() => { setShowLogModal(false); setForm({ vehicleId: "", liters: 0, cost: 0, odometer: 0, isFullTank: true }); }} className="flex-1">Cancel</Button>
                 <Button type="submit" className="flex-1" disabled={saving}>
                   {saving ? <Loader2 className="animate-spin h-4 w-4" /> : "Save Refill"}
                 </Button>
@@ -212,11 +249,18 @@ function Page() {
       <div className="rounded-lg border border-info/40 bg-gradient-to-br from-info/5 to-primary/5 p-4 mt-4">
         <div className="flex items-center gap-2">
           <div className="h-8 w-8 rounded-md bg-primary text-primary-foreground flex items-center justify-center"><Sparkles className="h-4 w-4" /></div>
-          <div className="font-medium">AI Fuel Analysis</div>
+          <div className="font-medium">Fuel Efficiency Analysis</div>
         </div>
         <p className="text-sm mt-2 leading-relaxed">
-          The database reports <span className="font-semibold">{fuelAlerts.filter((a) => !a.resolved).length} active fuel alerts</span>.
-          Vehicles underperforming average fuel efficiency thresholds are highlighted in comparison details below.
+          {fleetAnalysis?.fleetAvgMileage !== null && fleetAnalysis?.fleetAvgMileage !== undefined ? (
+            <>
+              Evaluated fleet average is <span className="font-semibold text-primary">{fleetAnalysis.fleetAvgMileage} km/L</span> across {fleetAnalysis.vehiclesWithDataCount} vehicles with validated full-tank intervals.
+            </>
+          ) : (
+            <>
+              Mileage is calculated using the full-tank-to-full-tank methodology from manual refill records. Log at least two full-tank refills for a vehicle to calculate verified km/L efficiency.
+            </>
+          )}
         </p>
       </div>
 
@@ -296,10 +340,22 @@ function Page() {
               { key: "date", label: "Date" },
               { key: "vehicle", label: "Vehicle" },
               { key: "driver", label: "Logged By" },
+              { key: "isFullTank", label: "Type", render: (r: any) => (
+                <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${r.isFullTank ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                  {r.isFullTank ? "Full Tank" : "Partial"}
+                </span>
+              )},
               { key: "liters", label: "Liters", render: (r: any) => `${r.liters} L` },
               { key: "cost", label: "Total Cost", render: (r: any) => `₹${r.cost.toLocaleString()}` },
               { key: "odometer", label: "Odometer", render: (r: any) => `${r.odometer.toLocaleString()} km` },
               { key: "pricePerL", label: "Price / L", render: (r: any) => `₹${(r.cost / r.liters).toFixed(2)}/L` },
+              { key: "intervalMileage", label: "Interval Mileage", render: (r: any) => (
+                r.intervalMileage !== null ? (
+                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">{r.intervalMileage} km/L</span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )
+              )},
             ]}
           />
         </div>
@@ -308,13 +364,14 @@ function Page() {
       <div className="mt-4">
         <DataTable
           data={vehicles.slice(0, 20).map((v) => {
-            const mileage = effMap[v.number] || 0;
+            const vAnalysis = fleetAnalysis?.vehicleMap[v.id];
+            const mileageVal = vAnalysis?.averageMileage ?? null;
             return {
               number: v.number,
               driver: v.driver_name || 'Unassigned',
               fuel: v.fuel || 0,
               odometer: v.odometer || 0,
-              mileage: mileage,
+              mileage: mileageVal !== null ? `${mileageVal} km/L` : 'Insufficient data',
               status: v.fuel < 25 ? "Low Fuel" : v.fuel < 50 ? "Half Tank" : "OK",
             };
           })}
@@ -331,7 +388,13 @@ function Page() {
               </div>
             )},
             { key: "odometer", label: "Odometer", render: (r: any) => `${r.odometer.toLocaleString()} km` },
-            { key: "mileage", label: "Mileage", render: (r: any) => r.mileage > 0 ? `${r.mileage} km/L` : '—' },
+            { key: "mileage", label: "Mileage (km/L)", render: (r: any) => (
+              r.mileage === 'Insufficient data' ? (
+                <span className="text-muted-foreground text-xs italic">Insufficient data</span>
+              ) : (
+                <span className="font-semibold text-primary">{r.mileage}</span>
+              )
+            )},
             { key: "status", label: "Status", render: (r: any) => (
               <Badge status={r.status === "Low Fuel" ? "High" : r.status === "Half Tank" ? "Medium" : "Low"}>{r.status}</Badge>
             )},

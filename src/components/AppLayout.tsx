@@ -3,7 +3,7 @@ import { useAuth } from "@/lib/auth";
 import { Logo } from "./Logo";
 import {
   LayoutDashboard, MapPin, Truck, Route as RouteIcon, Fuel,
-  ShieldCheck, Cog, Bell, Wrench, FileText, Sparkles,
+  ShieldCheck, Cog, Bell, Wrench, Sparkles,
   Users, Settings, LogOut, Search, Menu, X, ChevronDown, UserCircle2,
   ChevronRight,
 } from "lucide-react";
@@ -38,7 +38,6 @@ const NAV_GROUPS = [
     label: "Management",
     items: [
       { to: "/maintenance", label: "Maintenance", icon: Wrench },
-      { to: "/reports", label: "Reports", icon: FileText },
       { to: "/ai", label: "AI Intelligence", icon: Sparkles },
     ],
   },
