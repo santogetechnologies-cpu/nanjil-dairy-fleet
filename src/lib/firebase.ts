@@ -23,22 +23,8 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-// Initialize Analytics conditionally and lazily (resilient to ad-blockers / net::ERR_BLOCKED_BY_CLIENT)
-let analytics: Analytics | undefined;
-if (typeof window !== "undefined") {
-  import("firebase/analytics")
-    .then(({ getAnalytics, isSupported }) => {
-      isSupported()
-        .then((supported) => {
-          if (supported) {
-            analytics = getAnalytics(app);
-          }
-        })
-        .catch(() => {});
-    })
-    .catch(() => {
-      // Ignored if blocked by client (ad-blocker/privacy extension)
-    });
-}
+// Analytics is optional and safely stubbed to prevent browser ad-blockers
+// (e.g. uBlock, Brave Shields) from logging net::ERR_BLOCKED_BY_CLIENT in DevTools
+const analytics: Analytics | undefined = undefined;
 
 export { app, auth, db, storage, analytics };

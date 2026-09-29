@@ -169,7 +169,7 @@ export function useRealtimeAllVehicles(): Vehicle[] {
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
           console.log("[EMQX/Supabase] Realtime channel subscribed — live tracking active");
-        } else if (status === "CLOSED" || status === "CHANNEL_ERROR") {
+        } else if (status === "CHANNEL_ERROR" || (status === "CLOSED" && isMountedRef.current)) {
           console.warn("[EMQX/Supabase] Realtime channel status:", status);
         }
       });
