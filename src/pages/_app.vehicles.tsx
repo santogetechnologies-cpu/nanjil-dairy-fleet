@@ -13,14 +13,20 @@ function VehiclesPage() {
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
   const q = params.get("q") ?? "";
-  
+
   const statusParam = params.get("status") as VehicleStatus | null;
-  const initialFilter = (statusParam && ["Moving", "Idle", "Parked", "Offline"].includes(statusParam)) ? statusParam : "All";
+  const initialFilter =
+    statusParam && ["Moving", "Idle", "Parked", "Offline"].includes(statusParam)
+      ? statusParam
+      : "All";
   const [filter, setFilter] = useState<VehicleStatus | "All">(initialFilter);
 
   useEffect(() => {
     const statusParam = params.get("status") as VehicleStatus | null;
-    const currentFilter = (statusParam && ["Moving", "Idle", "Parked", "Offline"].includes(statusParam)) ? statusParam : "All";
+    const currentFilter =
+      statusParam && ["Moving", "Idle", "Parked", "Offline"].includes(statusParam)
+        ? statusParam
+        : "All";
     setFilter(currentFilter);
   }, [params]);
 
@@ -29,15 +35,15 @@ function VehiclesPage() {
   const vehicles = useVehicleList(rawVehicles);
 
   const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState({ 
-    number: "", 
+  const [form, setForm] = useState({
+    number: "",
     deviceId: "",
-    type: "Tanker", 
+    type: "Tanker",
     tankerCapacity: "10000",
     customTankerCapacity: "",
-    model: "", 
-    odometer: 0, 
-    engineHours: 0 
+    model: "",
+    odometer: 0,
+    engineHours: 0,
   });
   const [loading, setLoading] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -55,7 +61,7 @@ function VehiclesPage() {
     route: "",
     insuranceExpiry: "",
     odometer: 0,
-    engineHours: 0
+    engineHours: 0,
   });
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState("");
@@ -68,21 +74,37 @@ function VehiclesPage() {
   const canAdd = user?.role === "admin";
 
   async function load() {
-    const { data } = await supabase.from('v_vehicles').select('*');
-    if (data && data.length > 0) {
-      const mapped = data.map(v => ({
+    let list: any[] = [];
+    try {
+      const { data: vData, error } = await supabase.from("v_vehicles").select("*");
+      if (vData && vData.length > 0) {
+        list = vData;
+      }
+      if (error || !vData || vData.length === 0) {
+        const { data: baseData } = await supabase.from("vehicles").select("*");
+        if (baseData && baseData.length > 0) {
+          list = baseData;
+        }
+      }
+    } catch {
+      const { data: baseData } = await supabase.from("vehicles").select("*");
+      if (baseData) list = baseData;
+    }
+
+    if (list && list.length > 0) {
+      const mapped = list.map((v) => ({
         id: v.id,
         number: v.number,
         type: v.type,
         model: v.model,
-        route: v.route || '',
-        insuranceExpiry: v.insurance_expiry || '',
-        lastService: v.last_service || '',
+        route: v.route || "",
+        insuranceExpiry: v.insurance_expiry || "",
+        lastService: v.last_service || "",
         nextServiceKm: v.next_service_km || 0,
         odometer: v.odometer || 0,
         engineHours: Number(v.engine_hours || 0),
         status: v.status,
-        location: v.location || '',
+        location: v.location || "",
         lat: Number(v.lat || 0),
         lng: Number(v.lng || 0),
         speed: v.speed || 0,
@@ -91,10 +113,10 @@ function VehiclesPage() {
         humidity: v.humidity || 0,
         engineOn: v.engine_on || false,
         ignition: v.ignition || false,
-        driver: v.driver_name || '',
-        driverId: v.driver_id || '',
-        lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : 'sec ago',
-        deviceId: v.device_id || ''
+        driver: v.driver_name || "",
+        driverId: v.driver_id || "",
+        lastUpdate: v.last_update ? new Date(v.last_update).toLocaleTimeString() : "sec ago",
+        deviceId: v.device_id || "",
       }));
 
       setRawVehicles(mapped);
@@ -113,10 +135,24 @@ function VehiclesPage() {
       load();
 
       channel = supabase
-        .channel('vehicles-realtime')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => { if (!cancelled) load(); })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => { if (!cancelled) load(); })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => { if (!cancelled) load(); })
+        .channel("vehicles-realtime")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "vehicle_telemetry" },
+          () => {
+            if (!cancelled) load();
+          },
+        )
+        .on("postgres_changes", { event: "*", schema: "public", table: "vehicles" }, () => {
+          if (!cancelled) load();
+        })
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "vehicle_assignments" },
+          () => {
+            if (!cancelled) load();
+          },
+        )
         .subscribe();
     }
 
@@ -155,29 +191,32 @@ function VehiclesPage() {
     try {
       let finalType = form.type;
       if (form.type === "Tanker") {
-        const capLitres = form.tankerCapacity === "custom"
-          ? (Number(form.customTankerCapacity) || 10000)
-          : (Number(form.tankerCapacity) || 10000);
+        const capLitres =
+          form.tankerCapacity === "custom"
+            ? Number(form.customTankerCapacity) || 10000
+            : Number(form.tankerCapacity) || 10000;
         const klStr = capLitres >= 1000 && capLitres % 1000 === 0 ? `${capLitres / 1000}KL` : "";
-        finalType = klStr ? `Tanker ${klStr} (${capLitres.toLocaleString()} L)` : `Tanker (${capLitres.toLocaleString()} L)`;
+        finalType = klStr
+          ? `Tanker ${klStr} (${capLitres.toLocaleString()} L)`
+          : `Tanker (${capLitres.toLocaleString()} L)`;
       }
 
       const { data: inserted, error: insertError } = await supabase
-        .from('vehicles')
+        .from("vehicles")
         .insert({
           number: vehicleNumber,
           type: finalType,
           model: form.model.trim() || "Unknown Model",
           odometer: Number(form.odometer) || 0,
           engine_hours: Number(form.engineHours) || 0,
-          device_id: devId || null
+          device_id: devId || null,
         })
         .select()
         .single();
 
       if (insertError) {
-        if (insertError.code === '23505') {
-          if (insertError.message?.includes('device_id')) {
+        if (insertError.code === "23505") {
+          if (insertError.message?.includes("device_id")) {
             throw new Error(`Device ID "${devId}" is already assigned to another vehicle.`);
           }
           throw new Error(`Vehicle number "${vehicleNumber}" already exists.`);
@@ -189,16 +228,16 @@ function VehiclesPage() {
         const sess = await supabase.auth.getSession();
         if (sess.data?.session) {
           try {
-            await supabase.from('vehicle_telemetry').insert({
+            await supabase.from("vehicle_telemetry").insert({
               vehicle_id: inserted.id,
-              status: 'Parked',
+              status: "Parked",
               speed: 0,
               fuel: 100,
               temperature: 4.0,
               humidity: 85,
               engine_on: false,
               ignition: false,
-              location: 'Main Yard, Nanjil Dairy, Nagercoil'
+              location: "Main Yard, Nanjil Dairy, Nagercoil",
             });
           } catch (tErr) {
             console.warn("Telemetry insert notice:", tErr);
@@ -207,7 +246,16 @@ function VehiclesPage() {
       }
 
       setShowNew(false);
-      setForm({ number: "", deviceId: "", type: "Tanker", tankerCapacity: "10000", customTankerCapacity: "", model: "", odometer: 0, engineHours: 0 });
+      setForm({
+        number: "",
+        deviceId: "",
+        type: "Tanker",
+        tankerCapacity: "10000",
+        customTankerCapacity: "",
+        model: "",
+        odometer: 0,
+        engineHours: 0,
+      });
       load();
     } catch (err: any) {
       setSubmitError(err.message || "Failed to add vehicle.");
@@ -218,7 +266,7 @@ function VehiclesPage() {
 
   function openEditModal(v: Vehicle) {
     setEditTarget(v);
-    
+
     let baseType = "Tanker";
     let capPreset = "10000";
     let customCap = "";
@@ -257,7 +305,7 @@ function VehiclesPage() {
       route: v.route || "",
       insuranceExpiry: v.insuranceExpiry || "",
       odometer: v.odometer || 0,
-      engineHours: v.engineHours || 0
+      engineHours: v.engineHours || 0,
     });
     setEditError("");
   }
@@ -284,15 +332,18 @@ function VehiclesPage() {
     try {
       let finalType = editForm.type;
       if (editForm.type === "Tanker") {
-        const capLitres = editForm.tankerCapacity === "custom"
-          ? (Number(editForm.customTankerCapacity) || 10000)
-          : (Number(editForm.tankerCapacity) || 10000);
+        const capLitres =
+          editForm.tankerCapacity === "custom"
+            ? Number(editForm.customTankerCapacity) || 10000
+            : Number(editForm.tankerCapacity) || 10000;
         const klStr = capLitres >= 1000 && capLitres % 1000 === 0 ? `${capLitres / 1000}KL` : "";
-        finalType = klStr ? `Tanker ${klStr} (${capLitres.toLocaleString()} L)` : `Tanker (${capLitres.toLocaleString()} L)`;
+        finalType = klStr
+          ? `Tanker ${klStr} (${capLitres.toLocaleString()} L)`
+          : `Tanker (${capLitres.toLocaleString()} L)`;
       }
 
       const { error } = await supabase
-        .from('vehicles')
+        .from("vehicles")
         .update({
           number: vehicleNumber,
           type: finalType,
@@ -302,13 +353,13 @@ function VehiclesPage() {
           odometer: Number(editForm.odometer) || 0,
           engine_hours: Number(editForm.engineHours) || 0,
           device_id: devId || null,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
-        .eq('id', editTarget.id);
+        .eq("id", editTarget.id);
 
       if (error) {
-        if (error.code === '23505') {
-          if (error.message?.includes('device_id')) {
+        if (error.code === "23505") {
+          if (error.message?.includes("device_id")) {
             throw new Error(`Device ID "${devId}" is already assigned to another vehicle.`);
           }
         }
@@ -336,10 +387,7 @@ function VehiclesPage() {
     setDeleteTarget(null);
 
     try {
-      await supabase
-        .from('vehicles')
-        .delete()
-        .eq('id', targetId);
+      await supabase.from("vehicles").delete().eq("id", targetId);
     } catch (err) {
       // Ignore DB permission errors for local fallback
     } finally {
@@ -349,9 +397,9 @@ function VehiclesPage() {
 
   return (
     <div>
-      <PageHeader 
-        title="Vehicles" 
-        subtitle={`${vehicles.length} vehicles in the fleet`} 
+      <PageHeader
+        title="Vehicles"
+        subtitle={`${vehicles.length} vehicles in the fleet`}
         actions={
           canAdd && (
             <Button onClick={() => setShowNew(true)}>
@@ -375,10 +423,17 @@ function VehiclesPage() {
               setParams(params);
             }}
             className={`px-3 h-8 rounded-md text-sm border transition-colors ${
-              filter === s ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"
+              filter === s
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-card border-border hover:bg-muted"
             }`}
           >
-            {s} {s !== "All" && <span className="opacity-60 ml-1">({vehicles.filter((v) => v.status === s).length})</span>}
+            {s}{" "}
+            {s !== "All" && (
+              <span className="opacity-60 ml-1">
+                ({vehicles.filter((v) => v.status === s).length})
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -388,48 +443,101 @@ function VehiclesPage() {
         initialQuery={q}
         searchKeys={["number", "driver", "type", "location", "route", "deviceId"]}
         columns={[
-          { key: "number", label: "Vehicle #", render: (v) => (
-            <Link to={`/vehicles/${v.id}`} className="font-medium text-primary hover:underline">{v.number}</Link>
-          )},
+          {
+            key: "number",
+            label: "Vehicle #",
+            render: (v) => (
+              <Link to={`/vehicles/${v.id}`} className="font-medium text-primary hover:underline">
+                {v.number}
+              </Link>
+            ),
+          },
           { key: "type", label: "Type" },
-          { key: "driver", label: "Driver", render: (v) => v.driver || <span className="text-muted-foreground">Unassigned</span> },
-          { key: "status", label: "Status", render: (v) => <Badge status={v.status}>{v.status}</Badge> },
-          { key: "location", label: "Location", render: (v) => v.location || <span className="text-muted-foreground">—</span> },
-          { key: "route", label: "Route", render: (v) => v.route || <span className="text-muted-foreground">—</span> },
-          { key: "odometer", label: "Odometer", render: (v) => v.odometer ? `${v.odometer.toLocaleString()} km` : <span className="text-muted-foreground">—</span> },
+          {
+            key: "driver",
+            label: "Driver",
+            render: (v) => v.driver || <span className="text-muted-foreground">Unassigned</span>,
+          },
+          {
+            key: "status",
+            label: "Status",
+            render: (v) => <Badge status={v.status}>{v.status}</Badge>,
+          },
+          {
+            key: "location",
+            label: "Location",
+            render: (v) => v.location || <span className="text-muted-foreground">—</span>,
+          },
+          {
+            key: "route",
+            label: "Route",
+            render: (v) => v.route || <span className="text-muted-foreground">—</span>,
+          },
+          {
+            key: "odometer",
+            label: "Odometer",
+            render: (v) =>
+              v.odometer ? (
+                `${v.odometer.toLocaleString()} km`
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              ),
+          },
           { key: "lastUpdate", label: "Updated" },
-          ...(canAdd ? [{
-            key: "actions",
-            label: "Actions",
-            render: (v: Vehicle) => (
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={(e) => { e.stopPropagation(); openEditModal(v); }}
-                  className="p-1.5 rounded-md text-muted-foreground hover:bg-muted hover:text-primary transition-colors"
-                  title="Edit vehicle"
-                >
-                  <Pencil className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setDeleteTarget(v); setDeleteError(""); }}
-                  className="p-1.5 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-                  title="Delete vehicle"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            )
-          }] : []),
+          ...(canAdd
+            ? [
+                {
+                  key: "actions",
+                  label: "Actions",
+                  render: (v: Vehicle) => (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditModal(v);
+                        }}
+                        className="p-1.5 rounded-md text-muted-foreground hover:bg-muted hover:text-primary transition-colors"
+                        title="Edit vehicle"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteTarget(v);
+                          setDeleteError("");
+                        }}
+                        className="p-1.5 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                        title="Delete vehicle"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ),
+                },
+              ]
+            : []),
         ]}
       />
 
       {/* Add New Vehicle Modal */}
       {showNew && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowNew(false)}>
-          <div className="bg-card rounded-lg shadow-xl max-w-md w-full p-5 border border-border" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={() => setShowNew(false)}
+        >
+          <div
+            className="bg-card rounded-lg shadow-xl max-w-md w-full p-5 border border-border"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="font-semibold text-lg">Add New Vehicle</h3>
-              <button onClick={() => setShowNew(false)} className="p-1 hover:bg-muted rounded text-muted-foreground"><X className="h-4 w-4" /></button>
+              <button
+                onClick={() => setShowNew(false)}
+                className="p-1 hover:bg-muted rounded text-muted-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
 
             <form onSubmit={handleAdd} className="mt-4 space-y-4">
@@ -440,11 +548,13 @@ function VehiclesPage() {
               )}
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Number (Registration) *</label>
-                <input 
-                  type="text" 
-                  value={form.number} 
-                  onChange={(e) => setForm({ ...form, number: e.target.value })} 
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Vehicle Number (Registration) *
+                </label>
+                <input
+                  type="text"
+                  value={form.number}
+                  onChange={(e) => setForm({ ...form, number: e.target.value })}
                   placeholder="e.g. TN-74-Z-1234"
                   className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary uppercase"
                   required
@@ -452,11 +562,15 @@ function VehiclesPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Device ID</label>
-                <input 
-                  type="text" 
-                  value={form.deviceId} 
-                  onChange={(e) => setForm({ ...form, deviceId: e.target.value.replace(/\D/g, '') })} 
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Device ID
+                </label>
+                <input
+                  type="text"
+                  value={form.deviceId}
+                  onChange={(e) =>
+                    setForm({ ...form, deviceId: e.target.value.replace(/\D/g, "") })
+                  }
                   placeholder="e.g. 123456789012345"
                   maxLength={15}
                   pattern="[0-9]{15}"
@@ -466,10 +580,12 @@ function VehiclesPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Type *</label>
-                <select 
-                  value={form.type} 
-                  onChange={(e) => setForm({ ...form, type: e.target.value })} 
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Vehicle Type *
+                </label>
+                <select
+                  value={form.type}
+                  onChange={(e) => setForm({ ...form, type: e.target.value })}
                   className="h-9 px-3 w-full rounded-md border border-border bg-card text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                   required
                 >
@@ -486,7 +602,9 @@ function VehiclesPage() {
                   <div>
                     <label className="block text-xs font-semibold text-primary uppercase tracking-wider mb-1.5 flex items-center justify-between">
                       <span>Tanker Litre Capacity *</span>
-                      <span className="text-[10px] text-muted-foreground font-normal lowercase">(milk volume)</span>
+                      <span className="text-[10px] text-muted-foreground font-normal lowercase">
+                        (milk volume)
+                      </span>
                     </label>
                     <select
                       value={form.tankerCapacity}
@@ -526,28 +644,37 @@ function VehiclesPage() {
               )}
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Model</label>
-                <input 
-                  type="text" 
-                  value={form.model} 
-                  onChange={(e) => setForm({ ...form, model: e.target.value })} 
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Vehicle Model
+                </label>
+                <input
+                  type="text"
+                  value={form.model}
+                  onChange={(e) => setForm({ ...form, model: e.target.value })}
                   placeholder="e.g. Ashok Leyland Ecomet"
                   className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Initial Odometer (km)</label>
-                <input 
-                  type="number" 
-                  value={form.odometer} 
-                  onChange={(e) => setForm({ ...form, odometer: Number(e.target.value) })} 
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Initial Odometer (km)
+                </label>
+                <input
+                  type="number"
+                  value={form.odometer}
+                  onChange={(e) => setForm({ ...form, odometer: Number(e.target.value) })}
                   className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
 
               <div className="pt-3 border-t border-border flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setShowNew(false)} disabled={loading}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowNew(false)}
+                  disabled={loading}
+                >
                   Cancel
                 </Button>
                 <Button type="submit" disabled={loading}>
@@ -567,14 +694,26 @@ function VehiclesPage() {
 
       {/* Edit Vehicle Modal */}
       {editTarget && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => !editLoading && setEditTarget(null)}>
-          <div className="bg-card rounded-lg shadow-xl max-w-md w-full p-5 border border-border" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={() => !editLoading && setEditTarget(null)}
+        >
+          <div
+            className="bg-card rounded-lg shadow-xl max-w-md w-full p-5 border border-border"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <div className="flex items-center gap-2 font-semibold text-lg">
                 <Pencil className="h-5 w-5 text-primary" />
                 Edit Vehicle Details
               </div>
-              <button onClick={() => setEditTarget(null)} disabled={editLoading} className="p-1 hover:bg-muted rounded text-muted-foreground"><X className="h-4 w-4" /></button>
+              <button
+                onClick={() => setEditTarget(null)}
+                disabled={editLoading}
+                className="p-1 hover:bg-muted rounded text-muted-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
 
             <form onSubmit={handleEditSubmit} className="mt-4 space-y-4">
@@ -585,11 +724,15 @@ function VehiclesPage() {
               )}
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Device ID</label>
-                <input 
-                  type="text" 
-                  value={editForm.deviceId} 
-                  onChange={(e) => setEditForm({ ...editForm, deviceId: e.target.value.replace(/\D/g, '') })} 
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Device ID
+                </label>
+                <input
+                  type="text"
+                  value={editForm.deviceId}
+                  onChange={(e) =>
+                    setEditForm({ ...editForm, deviceId: e.target.value.replace(/\D/g, "") })
+                  }
                   placeholder="e.g. 123456789012345"
                   maxLength={15}
                   pattern="[0-9]{15}"
@@ -599,11 +742,13 @@ function VehiclesPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Number (Registration) *</label>
-                <input 
-                  type="text" 
-                  value={editForm.number} 
-                  onChange={(e) => setEditForm({ ...editForm, number: e.target.value })} 
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Vehicle Number (Registration) *
+                </label>
+                <input
+                  type="text"
+                  value={editForm.number}
+                  onChange={(e) => setEditForm({ ...editForm, number: e.target.value })}
                   placeholder="e.g. TN-74-Z-1234"
                   className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary uppercase"
                   required
@@ -611,10 +756,12 @@ function VehiclesPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Type *</label>
-                <select 
-                  value={editForm.type} 
-                  onChange={(e) => setEditForm({ ...editForm, type: e.target.value })} 
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Vehicle Type *
+                </label>
+                <select
+                  value={editForm.type}
+                  onChange={(e) => setEditForm({ ...editForm, type: e.target.value })}
                   className="h-9 px-3 w-full rounded-md border border-border bg-card text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                   required
                 >
@@ -631,7 +778,9 @@ function VehiclesPage() {
                   <div>
                     <label className="block text-xs font-semibold text-primary uppercase tracking-wider mb-1.5 flex items-center justify-between">
                       <span>Tanker Litre Capacity *</span>
-                      <span className="text-[10px] text-muted-foreground font-normal lowercase">(milk volume)</span>
+                      <span className="text-[10px] text-muted-foreground font-normal lowercase">
+                        (milk volume)
+                      </span>
                     </label>
                     <select
                       value={editForm.tankerCapacity}
@@ -659,7 +808,9 @@ function VehiclesPage() {
                       <input
                         type="number"
                         value={editForm.customTankerCapacity}
-                        onChange={(e) => setEditForm({ ...editForm, customTankerCapacity: e.target.value })}
+                        onChange={(e) =>
+                          setEditForm({ ...editForm, customTankerCapacity: e.target.value })
+                        }
                         placeholder="e.g. 8500"
                         min="100"
                         className="h-9 px-3 w-full rounded-md border border-border bg-card text-sm focus:outline-none focus:ring-1 focus:ring-primary"
@@ -671,39 +822,50 @@ function VehiclesPage() {
               )}
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Vehicle Model</label>
-                <input 
-                  type="text" 
-                  value={editForm.model} 
-                  onChange={(e) => setEditForm({ ...editForm, model: e.target.value })} 
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Vehicle Model
+                </label>
+                <input
+                  type="text"
+                  value={editForm.model}
+                  onChange={(e) => setEditForm({ ...editForm, model: e.target.value })}
                   placeholder="e.g. Ashok Leyland Ecomet"
                   className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Assigned Route</label>
-                <input 
-                  type="text" 
-                  value={editForm.route} 
-                  onChange={(e) => setEditForm({ ...editForm, route: e.target.value })} 
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Assigned Route
+                </label>
+                <input
+                  type="text"
+                  value={editForm.route}
+                  onChange={(e) => setEditForm({ ...editForm, route: e.target.value })}
                   placeholder="e.g. Route A (Nagercoil - Thuckalay)"
                   className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Odometer (km)</label>
-                <input 
-                  type="number" 
-                  value={editForm.odometer} 
-                  onChange={(e) => setEditForm({ ...editForm, odometer: Number(e.target.value) })} 
+                <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                  Odometer (km)
+                </label>
+                <input
+                  type="number"
+                  value={editForm.odometer}
+                  onChange={(e) => setEditForm({ ...editForm, odometer: Number(e.target.value) })}
                   className="h-9 px-3 w-full rounded-md border border-border bg-transparent text-sm focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
 
               <div className="pt-3 border-t border-border flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setEditTarget(null)} disabled={editLoading}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setEditTarget(null)}
+                  disabled={editLoading}
+                >
                   Cancel
                 </Button>
                 <Button type="submit" disabled={editLoading}>
@@ -723,8 +885,19 @@ function VehiclesPage() {
 
       {/* Delete Confirmation Dialog */}
       {deleteTarget && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => { if (!deleting) { setDeleteTarget(null); setDeleteError(""); } }}>
-          <div className="bg-card rounded-lg shadow-2xl max-w-sm w-full p-6 border border-border" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={() => {
+            if (!deleting) {
+              setDeleteTarget(null);
+              setDeleteError("");
+            }
+          }}
+        >
+          <div
+            className="bg-card rounded-lg shadow-2xl max-w-sm w-full p-6 border border-border"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-start gap-3 mb-4">
               <div className="flex-shrink-0 w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
                 <AlertTriangle className="h-5 w-5 text-destructive" />
@@ -733,8 +906,8 @@ function VehiclesPage() {
                 <h3 className="font-semibold text-base">Delete Vehicle</h3>
                 <p className="text-sm text-muted-foreground mt-1">
                   Are you sure you want to permanently delete{" "}
-                  <span className="font-semibold text-foreground">{deleteTarget.number}</span>?
-                  This will remove all telemetry data and cannot be undone.
+                  <span className="font-semibold text-foreground">{deleteTarget.number}</span>? This
+                  will remove all telemetry data and cannot be undone.
                 </p>
               </div>
             </div>
@@ -749,7 +922,10 @@ function VehiclesPage() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => { setDeleteTarget(null); setDeleteError(""); }}
+                onClick={() => {
+                  setDeleteTarget(null);
+                  setDeleteError("");
+                }}
                 disabled={deleting}
               >
                 Cancel
@@ -760,9 +936,13 @@ function VehiclesPage() {
                 className="inline-flex items-center gap-2 h-9 px-4 rounded-md bg-destructive text-white text-sm font-medium hover:bg-destructive/90 disabled:opacity-50 transition-colors"
               >
                 {deleting ? (
-                  <><Loader2 className="h-4 w-4 animate-spin" /> Deleting…</>
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" /> Deleting…
+                  </>
                 ) : (
-                  <><Trash2 className="h-4 w-4" /> Delete Vehicle</>
+                  <>
+                    <Trash2 className="h-4 w-4" /> Delete Vehicle
+                  </>
                 )}
               </button>
             </div>

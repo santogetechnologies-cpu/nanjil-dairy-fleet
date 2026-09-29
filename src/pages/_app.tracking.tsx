@@ -1,10 +1,12 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { type Vehicle, type VehicleStatus } from "@/lib/types";
 import { Card } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { VehicleMap } from "@/components/VehicleMap";
-import { Search, MapPin, Radio } from "lucide-react";
+import { Search, MapPin, Radio, AlertTriangle, AlertCircle } from "lucide-react";
 import { useVehicles, TELEMETRY_SOURCE, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
+import { getOverspeedStatus } from "@/lib/overspeed";
+import { useOverspeedMonitor } from "@/hooks/useOverspeed";
 
 function TrackingPage() {
   const [filter, setFilter] = useState<VehicleStatus | "All">("All");
@@ -15,6 +17,9 @@ function TrackingPage() {
   // Stream live vehicle tracking from the configured telemetry source.
   // Source is controlled by VITE_TELEMETRY_SOURCE ("firebase" | "supabase").
   const vehicles = useVehicles();
+
+  // Real-time overspeed detection, transition tracking, and alert persistence
+  const { activeWarnings, activeCriticals } = useOverspeedMonitor(vehicles);
 
   function handleSelectVehicle(v: Vehicle) {
     setSelectedId(v.id);
@@ -79,13 +84,48 @@ function TrackingPage() {
         }
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-        <div className="lg:col-span-3 space-y-3">
+      {/* Page-level live overspeed warning banner */}
+      {(activeWarnings.length > 0 || activeCriticals.length > 0) && (
+        <div
+          className={`mb-4 px-4 py-2.5 rounded-xl border flex items-center justify-between gap-3 text-xs sm:text-sm font-medium transition-all shadow-xs ${
+            activeCriticals.length > 0
+              ? "bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300"
+              : "bg-orange-500/10 border-orange-500/30 text-orange-700 dark:text-orange-300"
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            {activeCriticals.length > 0 ? (
+              <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400 shrink-0 animate-pulse" />
+            ) : (
+              <AlertTriangle className="h-4 w-4 text-orange-600 dark:text-orange-400 shrink-0 animate-pulse" />
+            )}
+            <span className="truncate">
+              {activeCriticals.length > 0 ? (
+                <>
+                  <strong>Critical Overspeed (≥100 km/h):</strong>{" "}
+                  {activeCriticals.map((v) => `${v.number} (${v.speed} km/h)`).join(", ")}
+                </>
+              ) : (
+                <>
+                  <strong>Overspeed Warning (≥80 km/h):</strong>{" "}
+                  {activeWarnings.map((v) => `${v.number} (${v.speed} km/h)`).join(", ")}
+                </>
+              )}
+            </span>
+          </div>
+          <div className="text-[11px] opacity-75 shrink-0 hidden md:block font-mono">
+            Safety Monitor · 80 / 100 km/h
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_310px] xl:grid-cols-[minmax(0,1fr)_320px] gap-5">
+        <div className="min-w-0 space-y-3">
           <Card>
             <div className="p-3">
               <VehicleMap
                 vehicles={data}
-                height={620}
+                height={725}
                 selectedId={selectedId}
                 onSelectVehicle={handleSelectVehicle}
                 routeHistory={routeHistory}
@@ -94,7 +134,7 @@ function TrackingPage() {
           </Card>
         </div>
 
-        <div className="space-y-3">
+        <div className="min-w-0 space-y-3">
           <Card className="p-3">
             <div className="flex items-center gap-2 px-3 h-9 bg-muted rounded-md mb-3">
               <Search className="h-4 w-4 text-muted-foreground" />
@@ -110,7 +150,7 @@ function TrackingPage() {
                 <button
                   key={s}
                   onClick={() => setFilter(s)}
-                  className={`px-3 h-8 text-xs rounded-md border transition-colors ${
+                  className={`px-2.5 h-8 text-xs rounded-md border transition-colors truncate ${
                     filter === s
                       ? "bg-primary text-primary-foreground border-primary"
                       : "bg-card border-border hover:bg-muted"
@@ -140,15 +180,23 @@ function TrackingPage() {
                 </button>
               )}
             </div>
-            <div className="max-h-[480px] overflow-y-auto divide-y divide-border">
+            <div className="max-h-[555px] overflow-y-auto divide-y divide-border">
               {data.map((v) => {
                 const isSelected = v.id === selectedId;
+                const overspeed = getOverspeedStatus(v.speed);
+
                 return (
                   <div
                     key={v.id}
                     onClick={() => handleSelectVehicle(v)}
                     className={`px-3 py-2.5 cursor-pointer transition-colors ${
-                      isSelected ? "bg-primary/10 border-l-4 border-l-primary" : "hover:bg-muted/40"
+                      isSelected
+                        ? "bg-primary/10 border-l-4 border-l-primary"
+                        : overspeed.level === "critical"
+                          ? "bg-red-500/5 hover:bg-red-500/10 border-l-4 border-l-red-500"
+                          : overspeed.level === "warning"
+                            ? "bg-orange-500/5 hover:bg-orange-500/10 border-l-4 border-l-orange-500"
+                            : "hover:bg-muted/40"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -160,7 +208,7 @@ function TrackingPage() {
                           <span>{v.number}</span>
                         </span>
                       </div>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
                         <span
                           className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
                             v.status === "Moving"
@@ -174,6 +222,18 @@ function TrackingPage() {
                         >
                           {v.status}
                         </span>
+                        {overspeed.level === "warning" && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400 border border-orange-500/30 animate-pulse">
+                            <AlertTriangle className="h-3 w-3 shrink-0" />
+                            <span>Overspeed Warning</span>
+                          </span>
+                        )}
+                        {overspeed.level === "critical" && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/40 animate-pulse">
+                            <AlertCircle className="h-3 w-3 shrink-0" />
+                            <span>Critical Overspeed</span>
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -190,11 +250,23 @@ function TrackingPage() {
                         <MapPin className="h-3 w-3" /> {v.location || "Live Location"}
                       </span>
                     </div>
-                    <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground border-t border-border/40 pt-1.5">
-                      <span>
-                        Speed: {v.speed} km/h • Fuel: {v.fuel}%
+                    <div className="mt-2 flex items-center justify-between flex-wrap gap-y-1 text-[11px] text-muted-foreground border-t border-border/40 pt-1.5">
+                      <span className="truncate mr-1">
+                        Speed:{" "}
+                        <span
+                          className={
+                            overspeed.level === "critical"
+                              ? "text-red-600 font-bold"
+                              : overspeed.level === "warning"
+                                ? "text-orange-600 font-semibold"
+                                : "text-foreground font-medium"
+                          }
+                        >
+                          {v.speed} km/h
+                        </span>
+                        {" "}• Avg: {v.averageSpeed != null ? `${v.averageSpeed.toFixed(1)}` : "N/A"} km/h • Fuel: {v.fuel}%
                       </span>
-                      <span className="text-primary font-medium flex items-center gap-0.5">
+                      <span className="text-primary font-medium flex items-center gap-0.5 shrink-0">
                         {isSelected ? "Tracking Active" : "Track Route →"}
                       </span>
                     </div>

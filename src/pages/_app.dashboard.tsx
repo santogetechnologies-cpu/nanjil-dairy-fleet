@@ -73,7 +73,11 @@ function DashboardPage() {
 
         if (cancelled) return;
 
-        const vList = vRes.data || [];
+        let vList = vRes.data || [];
+        if (vList.length === 0 || vRes.error) {
+          const { data: baseV } = await supabase.from("vehicles").select("*");
+          if (baseV) vList = baseV;
+        }
         setVehicles(vList);
         setAlerts(aRes.data || []);
         setMaintenance(mRes.data || []);
