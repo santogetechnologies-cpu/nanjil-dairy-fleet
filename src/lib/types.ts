@@ -88,3 +88,30 @@ export interface MaintenanceRecord {
   status: "Upcoming" | "Overdue" | "Completed";
   cost: number;
 }
+
+export type ComplianceStatus = "VALID" | "EXPIRING_SOON" | "EXPIRED" | "NOT_APPLICABLE";
+
+export interface VehicleComplianceRecord {
+  id?: string;
+  vehicleId: string;
+  vehicleNo: string;
+  model: string;
+  type: string;
+  vehicleGroup: string;
+  fcInspectionDate: string | null;
+  fcExpiryDate: string | null;
+  tnPermitExpiry: string | null;
+  klPermitExpiry: string | null;
+  tnTaxExpiry: string | null;
+  klTaxExpiry: string | null;
+  pollutionExpiry: string | null;
+  foodSafetyExpiry: string | null;
+  insuranceExpiry: string | null;
+  advertisementExpiry: string | null;
+  overallStatus: ComplianceStatus;
+  createdAt?: string;
+  updatedAt?: string;
+  createdBy?: string | null;
+  updatedBy?: string | null;
+}
+
