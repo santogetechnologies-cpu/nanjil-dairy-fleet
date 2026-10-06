@@ -132,8 +132,14 @@ export function ComplianceEditModal({
         .single();
 
       if (error) {
-        // Check if table missing in schema cache
-        if (error.message?.includes("vehicle_compliance") && error.message?.includes("schema cache")) {
+        const errMsg = error.message || "";
+        const errCode = (error as any).code || "";
+        const isTableNotFound =
+          (errMsg.includes("vehicle_compliance") && (errMsg.includes("schema cache") || errMsg.includes("does not exist"))) ||
+          errCode === "PGRST205" ||
+          errCode === "42P01";
+
+        if (isTableNotFound) {
           throw new Error(
             "The vehicle_compliance table is not yet created in the database. Please run migration 20261006130000_create_vehicle_compliance.sql in your Supabase SQL editor."
           );

@@ -94,35 +94,35 @@ END $$;
 -- 6. Add compliance warning threshold column to settings if not exists
 ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS compliance_warning_days INTEGER NOT NULL DEFAULT 30 CHECK (compliance_warning_days BETWEEN 1 AND 180);
 
--- 7. Security & Row Level Security (RLS) - Least Privilege
+-- 7. Security & Row Level Security (RLS)
 -- First, revoke any broad grants inherited from historical migrations
 REVOKE ALL ON public.vehicle_compliance FROM anon;
 REVOKE ALL ON public.vehicle_compliance FROM authenticated;
 
--- Grant explicit table permissions to authenticated role only
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.vehicle_compliance TO authenticated;
+-- Grant read permission to anon and authenticated (consistent with fleet read policy)
+GRANT SELECT ON public.vehicle_compliance TO anon, authenticated;
+GRANT SELECT ON public.v_vehicle_compliance TO anon, authenticated;
 
--- Grant read permission on view to authenticated
-GRANT SELECT ON public.v_vehicle_compliance TO authenticated;
+-- Grant write permissions to authenticated role only
+GRANT INSERT, UPDATE, DELETE ON public.vehicle_compliance TO authenticated;
 
 -- Enable RLS on vehicle_compliance
 ALTER TABLE public.vehicle_compliance ENABLE ROW LEVEL SECURITY;
 
 -- Drop any existing policies
 DROP POLICY IF EXISTS "compliance_select_authenticated" ON public.vehicle_compliance;
+DROP POLICY IF EXISTS "compliance_select_anon" ON public.vehicle_compliance;
 DROP POLICY IF EXISTS "compliance_insert_admin_manager" ON public.vehicle_compliance;
 DROP POLICY IF EXISTS "compliance_update_admin_manager" ON public.vehicle_compliance;
 DROP POLICY IF EXISTS "compliance_delete_admin" ON public.vehicle_compliance;
 
--- Policy 1: SELECT
--- Admins/Managers can view all fleet compliance records.
--- Drivers can only view compliance for their assigned active vehicle.
+-- Policy 1a: SELECT for authenticated users
 CREATE POLICY "compliance_select_authenticated"
     ON public.vehicle_compliance
     FOR SELECT
     TO authenticated
     USING (
-        public.get_user_role() IN ('admin', 'manager', 'supervisor', 'operations')
+        public.get_user_role() IN ('admin', 'manager', 'supervisor', 'operations', 'qa', 'logistics', 'accounts')
         OR vehicle_id IN (
             SELECT va.vehicle_id
             FROM public.vehicle_assignments va
@@ -130,6 +130,13 @@ CREATE POLICY "compliance_select_authenticated"
             WHERE d.profile_id = auth.uid() AND va.is_active = true
         )
     );
+
+-- Policy 1b: SELECT for anon role (matches fleet-wide read policy)
+CREATE POLICY "compliance_select_anon"
+    ON public.vehicle_compliance
+    FOR SELECT
+    TO anon
+    USING (true);
 
 -- Policy 2: INSERT
 -- Only admins and managers may create compliance entries.

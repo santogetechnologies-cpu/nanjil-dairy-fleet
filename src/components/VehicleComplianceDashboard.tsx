@@ -100,15 +100,19 @@ export function VehicleComplianceDashboard() {
       let complianceRows: any[] = [];
 
       if (complianceRes.error) {
-        // Check if table missing in schema cache (migration pending)
-        if (
-          complianceRes.error.message?.includes("vehicle_compliance") &&
-          (complianceRes.error.message?.includes("schema cache") || complianceRes.error.message?.includes("does not exist"))
-        ) {
+        const errMsg = complianceRes.error.message || "";
+        const errCode = (complianceRes.error as any).code || "";
+        const isTableNotFound =
+          (errMsg.includes("vehicle_compliance") && (errMsg.includes("schema cache") || errMsg.includes("does not exist"))) ||
+          errCode === "PGRST205" ||
+          errCode === "42P01";
+
+        if (isTableNotFound) {
           setIsMigrationPending(true);
           console.warn("[Compliance] vehicle_compliance table not found in schema cache. Migration pending.");
         } else {
-          console.warn("[Compliance] Compliance query warning:", complianceRes.error.message);
+          setIsMigrationPending(false);
+          console.warn("[Compliance] Compliance query warning:", errMsg);
         }
       } else {
         complianceRows = complianceRes.data || [];
@@ -406,6 +410,30 @@ export function VehicleComplianceDashboard() {
           </div>
           <Button size="sm" variant="outline" onClick={() => loadData(true)}>
             Retry
+          </Button>
+        </div>
+      )}
+
+      {/* Migration Pending Banner */}
+      {isMigrationPending && (
+        <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-start sm:items-center gap-2.5">
+            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
+            <div>
+              <span className="font-semibold text-amber-950 dark:text-amber-100">Database Migration Pending: </span>
+              <span>
+                The <code className="font-mono bg-amber-500/20 px-1 py-0.5 rounded">vehicle_compliance</code> table and settings column are not yet created in Supabase.
+                Run <code className="font-mono bg-amber-500/20 px-1 py-0.5 rounded">supabase/migrations/20261006130000_create_vehicle_compliance.sql</code> in your Supabase SQL Editor.
+              </span>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-amber-500/40 hover:bg-amber-500/15 text-amber-950 dark:text-amber-100 shrink-0"
+            onClick={() => loadData(true)}
+          >
+            Check Again
           </Button>
         </div>
       )}
