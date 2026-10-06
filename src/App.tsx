@@ -69,6 +69,7 @@ export default function App() {
           <Route path="/engine" element={<EnginePage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/maintenance" element={<MaintenancePage />} />
+          <Route path="/compliance" element={<MaintenancePage />} />
           <Route path="/ai" element={<AiPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/settings" element={<SettingsPage />} />
