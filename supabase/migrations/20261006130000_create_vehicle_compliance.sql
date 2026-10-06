@@ -122,7 +122,7 @@ CREATE POLICY "compliance_select_authenticated"
     FOR SELECT
     TO authenticated
     USING (
-        public.get_user_role() IN ('admin', 'manager', 'supervisor', 'operations')
+        public.get_user_role() IN ('admin', 'manager', 'supervisor', 'operations', 'qa', 'logistics', 'accounts')
         OR vehicle_id IN (
             SELECT va.vehicle_id
             FROM public.vehicle_assignments va
