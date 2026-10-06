@@ -100,19 +100,18 @@ export function VehicleComplianceDashboard() {
       let complianceRows: any[] = [];
 
       if (complianceRes.error) {
-        // Check if table missing in schema cache (migration pending)
         const errMsg = complianceRes.error.message || "";
         const errCode = (complianceRes.error as any).code || "";
-        if (
-          errMsg.includes("vehicle_compliance") ||
-          errMsg.includes("schema cache") ||
-          errMsg.includes("does not exist") ||
+        const isTableNotFound =
+          (errMsg.includes("vehicle_compliance") && (errMsg.includes("schema cache") || errMsg.includes("does not exist"))) ||
           errCode === "PGRST205" ||
-          errCode === "42P01"
-        ) {
+          errCode === "42P01";
+
+        if (isTableNotFound) {
           setIsMigrationPending(true);
           console.warn("[Compliance] vehicle_compliance table not found in schema cache. Migration pending.");
         } else {
+          setIsMigrationPending(false);
           console.warn("[Compliance] Compliance query warning:", errMsg);
         }
       } else {
