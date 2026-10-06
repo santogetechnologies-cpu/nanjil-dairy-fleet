@@ -775,20 +775,22 @@ export function VehicleComplianceDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => setViewRecord(row)}
-                                className="h-7 px-2 text-[11px]"
+                                className="h-7 w-7 p-0 flex items-center justify-center shrink-0"
                                 title="View detailed compliance summary"
+                                aria-label="View"
                               >
-                                <Eye className="h-3 w-3 mr-1" /> View
+                                <Eye className="h-3.5 w-3.5" />
                               </Button>
                               {canManage && (
                                 <Button
                                   size="sm"
                                   variant="primary"
                                   onClick={() => setEditRecord(row)}
-                                  className="h-7 px-2 text-[11px]"
+                                  className="h-7 w-7 p-0 flex items-center justify-center shrink-0"
                                   title="Edit compliance dates"
+                                  aria-label="Edit"
                                 >
-                                  <Edit2 className="h-3 w-3 mr-1" /> Edit
+                                  <Edit2 className="h-3.5 w-3.5" />
                                 </Button>
                               )}
                             </div>
