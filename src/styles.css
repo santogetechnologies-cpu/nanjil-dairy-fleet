@@ -252,6 +252,25 @@ html, body {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Thin, sleek scrollbar for horizontal scroll containers (tables) */
+.overflow-x-auto::-webkit-scrollbar {
+  height: 5px;
+}
+.overflow-x-auto::-webkit-scrollbar-track {
+  background: transparent;
+}
+.overflow-x-auto::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 9999px;
+}
+.overflow-x-auto::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
+}
+.overflow-x-auto {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
 button, a, [role="button"] {
   min-height: 44px;
   min-width: 44px;
