@@ -48,7 +48,7 @@ export function VehicleComplianceDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [groupFilter, setGroupFilter] = useState<string>("ALL");
-  const [sortBy, setSortBy] = useState<"number" | "fcExpiry" | "pollution" | "insurance" | "status">("number");
+  const [sortBy, setSortBy] = useState<"number" | "fcExpiry" | "pollution" | "insurance">("number");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [groupByCategory, setGroupByCategory] = useState(true);
 
@@ -348,14 +348,6 @@ export function VehicleComplianceDashboard() {
         const da = a.insuranceExpiry || "9999-99-99";
         const db = b.insuranceExpiry || "9999-99-99";
         cmp = da.localeCompare(db);
-      } else if (sortBy === "status") {
-        const orderWeight: Record<ComplianceStatus, number> = {
-          EXPIRED: 1,
-          EXPIRING_SOON: 2,
-          VALID: 3,
-          NOT_APPLICABLE: 4,
-        };
-        cmp = orderWeight[a.overallStatus] - orderWeight[b.overallStatus];
       }
       return sortOrder === "asc" ? cmp : -cmp;
     });
@@ -687,15 +679,6 @@ export function VehicleComplianceDashboard() {
                         </div>
                       </th>
                       <th className="py-3 px-3">Advertisement</th>
-                      <th
-                        className="py-3 px-3 cursor-pointer hover:text-foreground text-center"
-                        onClick={() => toggleSort("status")}
-                      >
-                        <div className="flex items-center justify-center gap-1">
-                          <span>Overall Status</span>
-                          <ArrowUpDown className="h-3 w-3 opacity-60" />
-                        </div>
-                      </th>
                       <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
@@ -710,8 +693,6 @@ export function VehicleComplianceDashboard() {
                       const foodStatus = calculateItemStatus(row.foodSafetyExpiry, warningDays);
                       const insuranceStatus = calculateItemStatus(row.insuranceExpiry, warningDays);
                       const advStatus = calculateItemStatus(row.advertisementExpiry, warningDays);
-
-                      const overallUi = COMPLIANCE_STATUS_UI[row.overallStatus];
 
                       return (
                         <tr
@@ -787,16 +768,6 @@ export function VehicleComplianceDashboard() {
                             <ComplianceCell dateStr={row.advertisementExpiry} status={advStatus} />
                           </td>
 
-                          {/* Overall Status */}
-                          <td className="py-3 px-3 text-center">
-                            <span
-                              className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded-full border ring-1 ring-inset ${overallUi.badgeCls}`}
-                            >
-                              <span className={`h-1.5 w-1.5 rounded-full ${overallUi.dotCls}`} />
-                              {overallUi.label}
-                            </span>
-                          </td>
-
                           {/* Actions */}
                           <td className="py-3 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
@@ -804,20 +775,22 @@ export function VehicleComplianceDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => setViewRecord(row)}
-                                className="h-7 px-2 text-[11px]"
+                                className="h-7 w-7 p-0 flex items-center justify-center shrink-0"
                                 title="View detailed compliance summary"
+                                aria-label="View"
                               >
-                                <Eye className="h-3 w-3 mr-1" /> View
+                                <Eye className="h-3.5 w-3.5" />
                               </Button>
                               {canManage && (
                                 <Button
                                   size="sm"
                                   variant="primary"
                                   onClick={() => setEditRecord(row)}
-                                  className="h-7 px-2 text-[11px]"
+                                  className="h-7 w-7 p-0 flex items-center justify-center shrink-0"
                                   title="Edit compliance dates"
+                                  aria-label="Edit"
                                 >
-                                  <Edit2 className="h-3 w-3 mr-1" /> Edit
+                                  <Edit2 className="h-3.5 w-3.5" />
                                 </Button>
                               )}
                             </div>

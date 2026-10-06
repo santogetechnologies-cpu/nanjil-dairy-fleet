@@ -84,8 +84,6 @@ export function ComplianceDetailModal({
     },
   ];
 
-  const overallUi = COMPLIANCE_STATUS_UI[record.overallStatus];
-
   return (
     <div
       className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
@@ -104,12 +102,6 @@ export function ComplianceDetailModal({
               </h2>
               <span className="px-2 py-0.5 text-xs font-semibold rounded-md bg-primary/10 text-primary border border-primary/20">
                 {record.vehicleGroup}
-              </span>
-              <span
-                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-semibold rounded-full border ring-1 ring-inset ${overallUi.badgeCls}`}
-              >
-                <span className={`h-1.5 w-1.5 rounded-full ${overallUi.dotCls}`} />
-                {overallUi.label}
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
