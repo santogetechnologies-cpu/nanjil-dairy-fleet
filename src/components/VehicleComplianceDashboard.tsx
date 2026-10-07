@@ -51,7 +51,6 @@ export function VehicleComplianceDashboard() {
 
   // Filters, search, sort, and display state
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [groupFilter, setGroupFilter] = useState<string>("ALL");
   const [sortBy, setSortBy] = useState<"number" | "fcExpiry" | "pollution" | "insurance">("number");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
@@ -280,25 +279,7 @@ export function VehicleComplianceDashboard() {
 
 
 
-  // ── 4. Dynamic Summary Counts (Calculated dynamically) ────────────
-  const summaryCounts = useMemo(() => {
-    const total = records.length;
-    let compliant = 0;
-    let expiring = 0;
-    let expired = 0;
-    let notApplicable = 0;
-
-    for (const r of records) {
-      if (r.overallStatus === "VALID") compliant++;
-      else if (r.overallStatus === "EXPIRING_SOON") expiring++;
-      else if (r.overallStatus === "EXPIRED") expired++;
-      else notApplicable++;
-    }
-
-    return { total, compliant, expiring, expired, notApplicable };
-  }, [records]);
-
-  // ── 5. Distinct Vehicle Groups ────────────────────────────────────
+  // ── 4. Distinct Vehicle Groups ────────────────────────────────────
   const distinctGroups = useMemo(() => {
     const set = new Set<string>();
     records.forEach((r) => {
@@ -307,14 +288,9 @@ export function VehicleComplianceDashboard() {
     return Array.from(set).sort();
   }, [records]);
 
-  // ── 6. Filtering & Searching ──────────────────────────────────────
+  // ── 5. Filtering & Searching ──────────────────────────────────────
   const filteredRecords = useMemo(() => {
     return records.filter((r) => {
-      // Status filter
-      if (statusFilter !== "ALL" && r.overallStatus !== statusFilter) {
-        return false;
-      }
-
       // Group filter
       if (groupFilter !== "ALL" && r.vehicleGroup !== groupFilter) {
         return false;
@@ -334,7 +310,7 @@ export function VehicleComplianceDashboard() {
 
       return true;
     });
-  }, [records, statusFilter, groupFilter, searchQuery]);
+  }, [records, groupFilter, searchQuery]);
 
   // ── 7. Deterministic Sorting ──────────────────────────────────────
   const sortedRecords = useMemo(() => {
@@ -411,7 +387,6 @@ export function VehicleComplianceDashboard() {
       "Food Safety Expiry",
       "Insurance Expiry",
       "Advertisement Expiry",
-      "Overall Compliance Status",
     ];
 
     const rows = sortedRecords.map((r) => [
@@ -429,7 +404,6 @@ export function VehicleComplianceDashboard() {
       formatComplianceDate(r.foodSafetyExpiry),
       formatComplianceDate(r.insuranceExpiry),
       formatComplianceDate(r.advertisementExpiry),
-      COMPLIANCE_STATUS_UI[r.overallStatus]?.label || r.overallStatus,
     ]);
 
     const csvContent = [
@@ -488,87 +462,36 @@ export function VehicleComplianceDashboard() {
         </div>
       )}
 
-      {/* ── Summary KPI Cards (Clickable Interactive Filters) ────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      {/* ── Fleet Overview Summary Cards ─────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Kpi
           label="Total Vehicles"
-          value={loading ? "…" : summaryCounts.total}
+          value={loading ? "…" : records.length}
           icon={<Truck className="h-5 w-5" />}
-          hint={statusFilter === "ALL" ? "✓ Currently showing all" : "Click to view all fleet"}
-          active={statusFilter === "ALL"}
-          onClick={() => setStatusFilter("ALL")}
+          hint="Active fleet units"
         />
         <Kpi
-          label="Compliant"
-          value={loading ? "…" : summaryCounts.compliant}
-          accent="success"
-          icon={<ShieldCheck className="h-5 w-5" />}
-          hint={statusFilter === "VALID" ? "✓ All statutory items valid" : "Click to filter compliant"}
-          active={statusFilter === "VALID"}
-          onClick={() => setStatusFilter(statusFilter === "VALID" ? "ALL" : "VALID")}
-        />
-        <Kpi
-          label="Expiring Soon"
-          value={loading ? "…" : summaryCounts.expiring}
-          accent="warning"
-          icon={<AlertTriangle className="h-5 w-5" />}
-          hint={
-            statusFilter === "EXPIRING_SOON"
-              ? `✓ Within ≤${warningDays}d window`
-              : `Within ${warningDays}d · Click to filter`
-          }
-          active={statusFilter === "EXPIRING_SOON"}
-          onClick={() => setStatusFilter(statusFilter === "EXPIRING_SOON" ? "ALL" : "EXPIRING_SOON")}
-        />
-        <Kpi
-          label="Expired"
-          value={loading ? "…" : summaryCounts.expired}
-          accent="destructive"
-          icon={<AlertCircle className="h-5 w-5" />}
-          hint={statusFilter === "EXPIRED" ? "✓ Action required" : "Action required · Click to filter"}
-          active={statusFilter === "EXPIRED"}
-          onClick={() => setStatusFilter(statusFilter === "EXPIRED" ? "ALL" : "EXPIRED")}
-        />
-        <Kpi
-          label="Pending Setup"
-          value={loading ? "…" : summaryCounts.notApplicable}
+          label="Fleet Categories"
+          value={loading ? "…" : distinctGroups.length}
           accent="info"
-          icon={<Clock className="h-5 w-5" />}
-          hint={statusFilter === "NOT_APPLICABLE" ? "✓ Awaiting date setup" : "Needs dates · Click to filter"}
-          active={statusFilter === "NOT_APPLICABLE"}
-          onClick={() => setStatusFilter(statusFilter === "NOT_APPLICABLE" ? "ALL" : "NOT_APPLICABLE")}
+          icon={<Layers className="h-5 w-5" />}
+          hint="Vehicle model groups"
+        />
+        <Kpi
+          label="Statutory Checks"
+          value="10"
+          accent="primary"
+          icon={<ShieldCheck className="h-5 w-5" />}
+          hint="FC, Permits, Tax, PUC, Ins."
+        />
+        <Kpi
+          label="Renewal Window"
+          value={`${warningDays} Days`}
+          accent="warning"
+          icon={<Calendar className="h-5 w-5" />}
+          hint="Expiring soon window"
         />
       </div>
-
-
-
-      {/* ── Active Status Filter Notice ───────────────────────────────── */}
-      {statusFilter !== "ALL" && (
-        <div className="flex items-center justify-between px-4 py-2.5 rounded-xl bg-primary/10 border border-primary/25 text-xs text-primary font-medium">
-          <div className="flex items-center gap-2">
-            <Filter className="h-4 w-4 shrink-0" />
-            <span>
-              Filtering by:{" "}
-              <strong>
-                {statusFilter === "VALID"
-                  ? `Compliant (${summaryCounts.compliant})`
-                  : statusFilter === "EXPIRING_SOON"
-                  ? `Expiring Soon within ≤${warningDays}d (${summaryCounts.expiring})`
-                  : statusFilter === "EXPIRED"
-                  ? `Expired (${summaryCounts.expired})`
-                  : `Pending Setup (${summaryCounts.notApplicable})`}
-              </strong>{" "}
-              — Showing {filteredRecords.length} of {records.length} vehicles
-            </span>
-          </div>
-          <button
-            onClick={() => setStatusFilter("ALL")}
-            className="hover:underline font-bold text-[11px] text-primary shrink-0 ml-3 cursor-pointer"
-          >
-            Show All Fleet ({records.length})
-          </button>
-        </div>
-      )}
 
       {/* ── Filter Bar & Controls ───────────────────────────────────── */}
       <Card className="p-4 space-y-3.5">
@@ -682,44 +605,6 @@ export function VehicleComplianceDashboard() {
             </Button>
           </div>
         </div>
-
-        {/* Status Filter Tabs */}
-        <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-border/60">
-          <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mr-1">
-            Status:
-          </span>
-          {[
-            { key: "ALL", label: `All (${summaryCounts.total})` },
-            { key: "VALID", label: `Valid (${summaryCounts.compliant})` },
-            { key: "EXPIRING_SOON", label: `Expiring Soon (${summaryCounts.expiring})` },
-            { key: "EXPIRED", label: `Expired (${summaryCounts.expired})` },
-            { key: "NOT_APPLICABLE", label: `Pending Setup (${summaryCounts.notApplicable})` },
-          ].map((tab) => {
-            const isActive = statusFilter === tab.key;
-            return (
-              <button
-                key={tab.key}
-                onClick={() => setStatusFilter(tab.key)}
-                className={`px-3 py-1 text-xs rounded-lg font-medium transition-all cursor-pointer ${
-                  isActive
-                    ? "bg-primary text-primary-foreground shadow-xs font-semibold"
-                    : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                }`}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-
-          {statusFilter !== "ALL" && (
-            <button
-              onClick={() => setStatusFilter("ALL")}
-              className="text-[11px] text-primary hover:underline ml-auto font-medium"
-            >
-              Reset filter
-            </button>
-          )}
-        </div>
       </Card>
 
       {/* ── Main Compliance Table ───────────────────────────────────── */}
@@ -742,14 +627,13 @@ export function VehicleComplianceDashboard() {
           <Filter className="h-10 w-10 text-muted-foreground/40 mx-auto" />
           <h3 className="text-base font-semibold text-foreground">No matching compliance records</h3>
           <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-            No vehicles match the selected filter ({statusFilter !== "ALL" ? statusFilter : "active criteria"}).
+            No vehicles match the selected search or group criteria.
           </p>
           <Button
             size="sm"
             variant="outline"
             onClick={() => {
               setSearchQuery("");
-              setStatusFilter("ALL");
               setGroupFilter("ALL");
             }}
           >
@@ -823,9 +707,6 @@ export function VehicleComplianceDashboard() {
                         </div>
                       </th>
                       <th className="py-3 px-3">Advertisement</th>
-                      <th className="py-3 px-3 text-center">
-                        <span>Overall Status</span>
-                      </th>
                       <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
@@ -840,9 +721,7 @@ export function VehicleComplianceDashboard() {
                       const foodStatus = calculateItemStatus(row.foodSafetyExpiry, warningDays);
                       const insuranceStatus = calculateItemStatus(row.insuranceExpiry, warningDays);
                       const advStatus = calculateItemStatus(row.advertisementExpiry, warningDays);
-
-                      const isPending = row.overallStatus === "NOT_APPLICABLE";
-                      const overallUi = COMPLIANCE_STATUS_UI[row.overallStatus];
+                      const hasDates = Boolean(row.fcExpiryDate || row.insuranceExpiry || row.pollutionExpiry);
 
                       return (
                         <tr
@@ -918,20 +797,6 @@ export function VehicleComplianceDashboard() {
                             <ComplianceCell dateStr={row.advertisementExpiry} status={advStatus} />
                           </td>
 
-                          {/* Overall Status */}
-                          <td className="py-3 px-3 text-center">
-                            <span
-                              className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded-full border ring-1 ring-inset ${
-                                isPending
-                                  ? "bg-slate-100 text-slate-600 border-slate-200 ring-slate-200"
-                                  : overallUi.badgeCls
-                              }`}
-                            >
-                              <span className={`h-1.5 w-1.5 rounded-full ${isPending ? "bg-slate-400" : overallUi.dotCls}`} />
-                              {isPending ? "Pending Setup" : overallUi.label}
-                            </span>
-                          </td>
-
                           {/* Actions */}
                           <td className="py-3 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
@@ -939,27 +804,23 @@ export function VehicleComplianceDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => setViewRecord(row)}
-                                className="h-7 px-2 text-[11px]"
+                                className="h-7 w-7 p-0 flex items-center justify-center rounded-lg"
                                 title="View detailed compliance summary"
                               >
-                                <Eye className="h-3 w-3 mr-1" /> View
+                                <Eye className="h-3.5 w-3.5" />
                               </Button>
                               {canManage && (
                                 <Button
                                   size="sm"
-                                  variant={isPending ? "primary" : "outline"}
+                                  variant={hasDates ? "outline" : "primary"}
                                   onClick={() => setEditRecord(row)}
-                                  className="h-7 px-2 text-[11px]"
-                                  title={isPending ? "Set compliance dates" : "Edit compliance dates"}
+                                  className="h-7 w-7 p-0 flex items-center justify-center rounded-lg"
+                                  title={hasDates ? "Edit compliance dates" : "Set compliance dates"}
                                 >
-                                  {isPending ? (
-                                    <>
-                                      <Plus className="h-3 w-3 mr-1" /> Set Dates
-                                    </>
+                                  {hasDates ? (
+                                    <Edit2 className="h-3.5 w-3.5" />
                                   ) : (
-                                    <>
-                                      <Edit2 className="h-3 w-3 mr-1" /> Edit
-                                    </>
+                                    <Plus className="h-3.5 w-3.5" />
                                   )}
                                 </Button>
                               )}
@@ -1039,7 +900,6 @@ export function VehicleComplianceDashboard() {
                 </div>
               ) : (
                 quickSelectVehicles.map((v) => {
-                  const statusUi = COMPLIANCE_STATUS_UI[v.overallStatus];
                   return (
                     <div
                       key={v.vehicleId}
@@ -1064,12 +924,6 @@ export function VehicleComplianceDashboard() {
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-full border ring-1 ring-inset ${statusUi.badgeCls}`}
-                        >
-                          <span className={`h-1.5 w-1.5 rounded-full ${statusUi.dotCls}`} />
-                          {statusUi.label}
-                        </span>
                         <Button size="sm" variant="primary" className="h-7 text-xs">
                           Edit
                         </Button>
