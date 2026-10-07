@@ -10,6 +10,7 @@ import {
   DEFAULT_COMPLIANCE_WARNING_DAYS,
 } from "@/lib/compliance";
 
+
 interface Props {
   record: VehicleComplianceRecord | null;
   warningDays?: number;

@@ -88,7 +88,7 @@ const ACCENT_CONFIG: Record<string, { icon: string; value: string; hint: string 
 };
 
 export function Kpi({
-  label, value, hint, accent = "primary", icon, to,
+  label, value, hint, accent = "primary", icon, to, onClick, active,
 }: {
   label: string;
   value: ReactNode;
@@ -96,6 +96,8 @@ export function Kpi({
   accent?: "primary" | "success" | "warning" | "destructive" | "info";
   icon?: ReactNode;
   to?: string;
+  onClick?: () => void;
+  active?: boolean;
 }) {
   const cfg = ACCENT_CONFIG[accent];
   const content = (
@@ -120,6 +122,29 @@ export function Kpi({
       <Link to={to} className="kpi-card kpi-card-hover block cursor-pointer select-none no-underline">
         {content}
       </Link>
+    );
+  }
+
+  if (onClick) {
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick();
+          }
+        }}
+        className={`kpi-card kpi-card-hover cursor-pointer select-none text-left transition-all ${
+          active
+            ? "ring-2 ring-primary ring-offset-2 shadow-md bg-primary/5 dark:bg-primary/10"
+            : ""
+        }`}
+      >
+        {content}
+      </div>
     );
   }
 
