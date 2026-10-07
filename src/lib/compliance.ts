@@ -161,3 +161,116 @@ export const COMPLIANCE_STATUS_UI: Record<
     accent: "info",
   },
 };
+
+/**
+ * Generates realistic statutory compliance dates for fleet demonstration / initialization.
+ * Accurately distributes:
+ * - ~65% fully VALID (expiring in 5-11 months)
+ * - ~20% EXPIRING SOON (expiring in 10-28 days)
+ * - ~15% EXPIRED (expired 10-45 days ago)
+ * Guarantees FC Expiry >= FC Inspection.
+ */
+export function generateSampleComplianceDates(
+  vehicleId: string,
+  variantIndex: number,
+  refDate: Date = new Date()
+) {
+  const fmt = (d: Date) => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
+  const addDays = (base: Date, days: number) => {
+    const copy = new Date(base.getTime());
+    copy.setDate(copy.getDate() + days);
+    return copy;
+  };
+
+  const mod = variantIndex % 10;
+
+  if (mod === 0 || mod === 6) {
+    // ── EXPIRED CASE ────────────────────────────────────────────────
+    // At least one statutory item expired in the last 15-45 days
+    const fcInsp = addDays(refDate, -380);
+    const fcExp = addDays(refDate, -15); // FC expired 15 days ago
+    const tnPermit = addDays(refDate, 120);
+    const klPermit = mod === 0 ? addDays(refDate, 150) : null;
+    const tnTax = addDays(refDate, -20); // Tax expired 20 days ago
+    const klTax = null;
+    const pollution = addDays(refDate, -8); // Pollution expired 8 days ago
+    const foodSafety = addDays(refDate, 180);
+    const insurance = addDays(refDate, -25); // Insurance expired 25 days ago
+    const adv = addDays(refDate, 90);
+
+    return {
+      vehicle_id: vehicleId,
+      fc_inspection_date: fmt(fcInsp),
+      fc_expiry_date: fmt(fcExp),
+      tn_permit_expiry: fmt(tnPermit),
+      kl_permit_expiry: klPermit ? fmt(klPermit) : null,
+      tn_tax_expiry: fmt(tnTax),
+      kl_tax_expiry: klTax,
+      pollution_expiry: fmt(pollution),
+      food_safety_expiry: fmt(foodSafety),
+      insurance_expiry: fmt(insurance),
+      advertisement_expiry: fmt(adv),
+    };
+  } else if (mod === 1 || mod === 7) {
+    // ── EXPIRING SOON CASE ──────────────────────────────────────────
+    // At least one statutory item expiring in 10-28 days
+    const fcInsp = addDays(refDate, -345);
+    const fcExp = addDays(refDate, 20); // FC expiring in 20 days
+    const tnPermit = addDays(refDate, 200);
+    const klPermit = mod === 1 ? addDays(refDate, 220) : null;
+    const tnTax = addDays(refDate, 14); // TN Tax expiring in 14 days
+    const klTax = null;
+    const pollution = addDays(refDate, 22); // Pollution expiring in 22 days
+    const foodSafety = addDays(refDate, 190);
+    const insurance = addDays(refDate, 160);
+    const adv = addDays(refDate, 120);
+
+    return {
+      vehicle_id: vehicleId,
+      fc_inspection_date: fmt(fcInsp),
+      fc_expiry_date: fmt(fcExp),
+      tn_permit_expiry: fmt(tnPermit),
+      kl_permit_expiry: klPermit ? fmt(klPermit) : null,
+      tn_tax_expiry: fmt(tnTax),
+      kl_tax_expiry: klTax,
+      pollution_expiry: fmt(pollution),
+      food_safety_expiry: fmt(foodSafety),
+      insurance_expiry: fmt(insurance),
+      advertisement_expiry: fmt(adv),
+    };
+  } else {
+    // ── VALID CASE ──────────────────────────────────────────────────
+    // All statutory dates are 5 - 11 months in the future
+    const offset = (variantIndex * 7) % 120; // stagger dates naturally
+    const fcInsp = addDays(refDate, -60 - offset);
+    const fcExp = addDays(refDate, 305 - offset);
+    const tnPermit = addDays(refDate, 280 - offset);
+    const klPermit = mod % 2 === 0 ? addDays(refDate, 310 - offset) : null;
+    const tnTax = addDays(refDate, 240 - offset);
+    const klTax = mod % 3 === 0 ? addDays(refDate, 260 - offset) : null;
+    const pollution = addDays(refDate, 180 - offset);
+    const foodSafety = addDays(refDate, 290 - offset);
+    const insurance = addDays(refDate, 320 - offset);
+    const adv = addDays(refDate, 210 - offset);
+
+    return {
+      vehicle_id: vehicleId,
+      fc_inspection_date: fmt(fcInsp),
+      fc_expiry_date: fmt(fcExp),
+      tn_permit_expiry: fmt(tnPermit),
+      kl_permit_expiry: klPermit ? fmt(klPermit) : null,
+      tn_tax_expiry: fmt(tnTax),
+      kl_tax_expiry: klTax ? fmt(klTax) : null,
+      pollution_expiry: fmt(pollution),
+      food_safety_expiry: fmt(foodSafety),
+      insurance_expiry: fmt(insurance),
+      advertisement_expiry: fmt(adv),
+    };
+  }
+}

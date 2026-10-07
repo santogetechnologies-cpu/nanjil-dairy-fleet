@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, Loader2, Save, AlertCircle, CheckCircle2 } from "lucide-react";
+import { X, Loader2, Save, AlertCircle, CheckCircle2, Sparkles } from "lucide-react";
 import { type VehicleComplianceRecord } from "@/lib/types";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
@@ -191,6 +191,46 @@ export function ComplianceEditModal({
     }
   };
 
+  const handleQuickPresetValid = () => {
+    const today = new Date();
+    const addMonths = (m: number) => {
+      const d = new Date(today);
+      d.setMonth(d.getMonth() + m);
+      return d.toISOString().split("T")[0];
+    };
+    const todayStr = today.toISOString().split("T")[0];
+
+    setForm({
+      fcInspectionDate: todayStr,
+      fcExpiryDate: addMonths(12),
+      tnPermitExpiry: addMonths(60),
+      klPermitExpiry: addMonths(60),
+      tnTaxExpiry: addMonths(12),
+      klTaxExpiry: addMonths(12),
+      pollutionExpiry: addMonths(6),
+      foodSafetyExpiry: addMonths(12),
+      insuranceExpiry: addMonths(12),
+      advertisementExpiry: addMonths(12),
+    });
+    setErrorMsg(null);
+  };
+
+  const handleClearAll = () => {
+    setForm({
+      fcInspectionDate: "",
+      fcExpiryDate: "",
+      tnPermitExpiry: "",
+      klPermitExpiry: "",
+      tnTaxExpiry: "",
+      klTaxExpiry: "",
+      pollutionExpiry: "",
+      foodSafetyExpiry: "",
+      insuranceExpiry: "",
+      advertisementExpiry: "",
+    });
+    setErrorMsg(null);
+  };
+
   return (
     <div
       className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
@@ -251,8 +291,29 @@ export function ComplianceEditModal({
               </div>
             </div>
 
-            <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground pt-1">
-              Compliance Expiry Schedules
+            <div className="flex items-center justify-between gap-2 pt-1 border-b border-border/50 pb-2">
+              <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                Compliance Expiry Schedules
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleQuickPresetValid}
+                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 border border-emerald-500/25 transition-all flex items-center gap-1 cursor-pointer"
+                  title="Auto-fill 1-year standard validity dates from today"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  Auto-Fill Valid (1 Yr)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearAll}
+                  className="text-[11px] font-medium px-2 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
+                  title="Clear all fields to NULL"
+                >
+                  Clear All
+                </button>
+              </div>
             </div>
 
             {/* FC Dates */}
