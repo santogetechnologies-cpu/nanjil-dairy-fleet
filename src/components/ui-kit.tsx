@@ -136,7 +136,7 @@ export function Kpi({
 
   if (to) {
     return (
-      <Link to={to} className={`kpi-card kpi-card-hover block cursor-pointer select-none no-underline ${activeClass} ${className}`}>
+      <Link to={to} className={`kpi-card kpi-card-hover block cursor-pointer select-none no-underline ${activeClass} ${className || ""}`}>
         {content}
       </Link>
     );
@@ -147,7 +147,7 @@ export function Kpi({
       <button
         type="button"
         onClick={onClick}
-        className={`kpi-card kpi-card-hover text-left block w-full cursor-pointer select-none transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${activeClass} ${className}`}
+        className={`kpi-card kpi-card-hover text-left block w-full cursor-pointer select-none transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${activeClass} ${className || ""}`}
       >
         {content}
       </button>

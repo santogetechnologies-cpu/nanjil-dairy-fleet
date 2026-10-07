@@ -21,6 +21,7 @@ import {
   X,
   Sparkles,
   Trash2,
+  HelpCircle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
@@ -38,6 +39,7 @@ import {
 import { Kpi, Card, Button } from "@/components/ui-kit";
 import { ComplianceDetailModal } from "./ComplianceDetailModal";
 import { ComplianceEditModal } from "./ComplianceEditModal";
+import { BatchComplianceModal } from "./BatchComplianceModal";
 
 export function VehicleComplianceDashboard() {
   const { user } = useAuth();
@@ -56,7 +58,7 @@ export function VehicleComplianceDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [groupFilter, setGroupFilter] = useState<string>("ALL");
-  const [sortBy, setSortBy] = useState<"number" | "fcExpiry" | "pollution" | "insurance" | "status">("number");
+  const [sortBy, setSortBy] = useState<"number" | "fcExpiry" | "pollution" | "insurance">("number");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [groupByCategory, setGroupByCategory] = useState(true);
 
@@ -65,6 +67,7 @@ export function VehicleComplianceDashboard() {
   const [editRecord, setEditRecord] = useState<VehicleComplianceRecord | null>(null);
   const [showQuickSelect, setShowQuickSelect] = useState(false);
   const [quickSelectSearch, setQuickSelectSearch] = useState("");
+  const [showBatchModal, setShowBatchModal] = useState(false);
 
   // Toast / notification banner state
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -347,6 +350,11 @@ export function VehicleComplianceDashboard() {
     }
   };
 
+  const handleBatchApplied = (updatedList: VehicleComplianceRecord[]) => {
+    setRecords(updatedList);
+    showToast(`Batch compliance updated successfully!`);
+  };
+
   // ── 4. Dynamic Summary Counts (Calculated dynamically) ────────────
   const summaryCounts = useMemo(() => {
     const total = records.length;
@@ -365,7 +373,7 @@ export function VehicleComplianceDashboard() {
     return { total, compliant, expiring, expired, notApplicable };
   }, [records]);
 
-  // ── 5. Distinct Vehicle Groups from Real Dataset ──────────────────
+  // ── 5. Distinct Vehicle Groups ────────────────────────────────────
   const distinctGroups = useMemo(() => {
     const set = new Set<string>();
     records.forEach((r) => {
@@ -421,20 +429,12 @@ export function VehicleComplianceDashboard() {
         const da = a.insuranceExpiry || "9999-99-99";
         const db = b.insuranceExpiry || "9999-99-99";
         cmp = da.localeCompare(db);
-      } else if (sortBy === "status") {
-        const orderWeight: Record<ComplianceStatus, number> = {
-          EXPIRED: 1,
-          EXPIRING_SOON: 2,
-          VALID: 3,
-          NOT_APPLICABLE: 4,
-        };
-        cmp = orderWeight[a.overallStatus] - orderWeight[b.overallStatus];
       }
       return sortOrder === "asc" ? cmp : -cmp;
     });
   }, [filteredRecords, sortBy, sortOrder]);
 
-  // ── 8. Grouping by Vehicle Category (Reference Checklist Style) ───
+  // ── 8. Grouping by Vehicle Category ───────────────────────────────
   const groupedData = useMemo(() => {
     if (!groupByCategory) {
       return [{ group: "All Vehicles", items: sortedRecords }];
@@ -465,7 +465,7 @@ export function VehicleComplianceDashboard() {
   };
 
   // ── 9. Export to CSV Function ─────────────────────────────────────
-  const exportComplianceCsv = () => {
+  const exportToCsv = () => {
     if (records.length === 0) {
       showToast("No records available to export.");
       return;
@@ -494,16 +494,16 @@ export function VehicleComplianceDashboard() {
       r.model || "",
       r.type || "",
       r.vehicleGroup || "",
-      r.fcInspectionDate || "",
-      r.fcExpiryDate || "",
-      r.tnPermitExpiry || "",
-      r.klPermitExpiry || "",
-      r.tnTaxExpiry || "",
-      r.klTaxExpiry || "",
-      r.pollutionExpiry || "",
-      r.foodSafetyExpiry || "",
-      r.insuranceExpiry || "",
-      r.advertisementExpiry || "",
+      formatComplianceDate(r.fcInspectionDate),
+      formatComplianceDate(r.fcExpiryDate),
+      formatComplianceDate(r.tnPermitExpiry),
+      formatComplianceDate(r.klPermitExpiry),
+      formatComplianceDate(r.tnTaxExpiry),
+      formatComplianceDate(r.klTaxExpiry),
+      formatComplianceDate(r.pollutionExpiry),
+      formatComplianceDate(r.foodSafetyExpiry),
+      formatComplianceDate(r.insuranceExpiry),
+      formatComplianceDate(r.advertisementExpiry),
       COMPLIANCE_STATUS_UI[r.overallStatus]?.label || r.overallStatus,
     ]);
 
@@ -526,6 +526,8 @@ export function VehicleComplianceDashboard() {
     showToast("Compliance report exported to CSV successfully.");
   };
 
+  const exportComplianceCsv = exportToCsv;
+
   // Quick Select list for adding/editing any vehicle
   const quickSelectVehicles = useMemo(() => {
     if (!quickSelectSearch.trim()) return records;
@@ -537,6 +539,8 @@ export function VehicleComplianceDashboard() {
         (r.vehicleGroup || "").toLowerCase().includes(q)
     );
   }, [records, quickSelectSearch]);
+
+  const allPending = summaryCounts.notApplicable === records.length && records.length > 0;
 
   return (
     <div className="space-y-6">
@@ -561,7 +565,38 @@ export function VehicleComplianceDashboard() {
         </div>
       )}
 
-      {/* ── Summary KPI Cards (Interactive Filters) ────────────────────── */}
+      {/* Helpful Setup Guide if all vehicles have no dates entered yet */}
+      {allPending && !loading && (
+        <div className="p-4 rounded-xl border border-primary/25 bg-primary/5 text-foreground flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <Sparkles className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+            <div className="text-xs">
+              <span className="font-semibold text-foreground">
+                Fleet Setup Ready ({records.length} Vehicles Loaded):
+              </span>{" "}
+              Compliance dates have not been entered yet. Click{" "}
+              <span className="font-semibold text-primary underline cursor-pointer" onClick={() => setShowBatchModal(true)}>
+                Batch Setup
+              </span>{" "}
+              to initialize compliance cycles for your fleet, or click <strong>+ Set Dates</strong> on any vehicle below.
+            </div>
+          </div>
+          {canManage && (
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => setShowBatchModal(true)}
+                className="shrink-0 text-xs gap-1.5"
+              >
+                <Sparkles className="h-3.5 w-3.5" /> Batch Setup
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Summary KPI Cards (Clickable Interactive Filters) ────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <Kpi
           label="Total Vehicles"
@@ -576,9 +611,9 @@ export function VehicleComplianceDashboard() {
           value={loading ? "…" : summaryCounts.compliant}
           accent="success"
           icon={<ShieldCheck className="h-5 w-5" />}
-          hint={statusFilter === "VALID" ? "✓ Currently showing valid" : "Click to filter compliant"}
+          hint={statusFilter === "VALID" ? "✓ All statutory items valid" : "Click to filter compliant"}
           active={statusFilter === "VALID"}
-          onClick={() => setStatusFilter("VALID")}
+          onClick={() => setStatusFilter(statusFilter === "VALID" ? "ALL" : "VALID")}
         />
         <Kpi
           label="Expiring Soon"
@@ -587,29 +622,29 @@ export function VehicleComplianceDashboard() {
           icon={<AlertTriangle className="h-5 w-5" />}
           hint={
             statusFilter === "EXPIRING_SOON"
-              ? `✓ Currently showing ≤${warningDays}d`
+              ? `✓ Within ≤${warningDays}d window`
               : `Within ${warningDays}d · Click to filter`
           }
           active={statusFilter === "EXPIRING_SOON"}
-          onClick={() => setStatusFilter("EXPIRING_SOON")}
+          onClick={() => setStatusFilter(statusFilter === "EXPIRING_SOON" ? "ALL" : "EXPIRING_SOON")}
         />
         <Kpi
           label="Expired"
           value={loading ? "…" : summaryCounts.expired}
           accent="destructive"
           icon={<AlertCircle className="h-5 w-5" />}
-          hint={statusFilter === "EXPIRED" ? "✓ Currently showing expired" : "Action required · Click to filter"}
+          hint={statusFilter === "EXPIRED" ? "✓ Action required" : "Action required · Click to filter"}
           active={statusFilter === "EXPIRED"}
-          onClick={() => setStatusFilter("EXPIRED")}
+          onClick={() => setStatusFilter(statusFilter === "EXPIRED" ? "ALL" : "EXPIRED")}
         />
         <Kpi
           label="Pending Setup"
           value={loading ? "…" : summaryCounts.notApplicable}
           accent="info"
           icon={<Clock className="h-5 w-5" />}
-          hint={statusFilter === "NOT_APPLICABLE" ? "✓ Currently showing unset" : "Needs dates · Click to filter"}
+          hint={statusFilter === "NOT_APPLICABLE" ? "✓ Awaiting date setup" : "Needs dates · Click to filter"}
           active={statusFilter === "NOT_APPLICABLE"}
-          onClick={() => setStatusFilter("NOT_APPLICABLE")}
+          onClick={() => setStatusFilter(statusFilter === "NOT_APPLICABLE" ? "ALL" : "NOT_APPLICABLE")}
         />
       </div>
 
@@ -712,6 +747,17 @@ export function VehicleComplianceDashboard() {
                 <Button
                   size="sm"
                   variant="primary"
+                  onClick={() => setShowBatchModal(true)}
+                  className="text-xs gap-1.5"
+                  title="Batch configure compliance cycles"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Batch Setup
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={() => {
                     setQuickSelectSearch("");
                     setShowQuickSelect(true);
@@ -720,22 +766,6 @@ export function VehicleComplianceDashboard() {
                   title="Select a vehicle to log or edit compliance"
                 >
                   <Plus className="h-3.5 w-3.5 mr-1" /> Log Compliance
-                </Button>
-
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleSeedFleetData}
-                  disabled={seeding}
-                  className="text-xs text-primary border-primary/30 hover:bg-primary/10"
-                  title="Initialize realistic statutory dates across fleet in Supabase"
-                >
-                  {seeding ? (
-                    <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-3.5 w-3.5 mr-1 text-primary" />
-                  )}
-                  Initialize Dates
                 </Button>
 
                 {summaryCounts.compliant + summaryCounts.expiring + summaryCounts.expired > 0 && (
@@ -756,7 +786,7 @@ export function VehicleComplianceDashboard() {
             <Button
               size="sm"
               variant="outline"
-              onClick={exportComplianceCsv}
+              onClick={exportToCsv}
               className="text-xs"
               title="Download complete compliance matrix as CSV"
             >
@@ -808,7 +838,7 @@ export function VehicleComplianceDashboard() {
               title="Group rows by model category"
             >
               <Layers className="h-3.5 w-3.5 mr-1" />
-              {groupByCategory ? "Categorized" : "Flat Table"}
+              {groupByCategory ? "Categorized" : "Flat"}
             </Button>
 
             {/* Refresh button */}
@@ -965,14 +995,8 @@ export function VehicleComplianceDashboard() {
                         </div>
                       </th>
                       <th className="py-3 px-3">Advertisement</th>
-                      <th
-                        className="py-3 px-3 cursor-pointer hover:text-foreground text-center"
-                        onClick={() => toggleSort("status")}
-                      >
-                        <div className="flex items-center justify-center gap-1">
-                          <span>Overall Status</span>
-                          <ArrowUpDown className="h-3 w-3 opacity-60" />
-                        </div>
+                      <th className="py-3 px-3 text-center">
+                        <span>Overall Status</span>
                       </th>
                       <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
@@ -989,6 +1013,7 @@ export function VehicleComplianceDashboard() {
                       const insuranceStatus = calculateItemStatus(row.insuranceExpiry, warningDays);
                       const advStatus = calculateItemStatus(row.advertisementExpiry, warningDays);
 
+                      const isPending = row.overallStatus === "NOT_APPLICABLE";
                       const overallUi = COMPLIANCE_STATUS_UI[row.overallStatus];
 
                       return (
@@ -1005,7 +1030,7 @@ export function VehicleComplianceDashboard() {
 
                           {/* Model / Group */}
                           <td className="py-3 px-3 text-muted-foreground">
-                            <div className="max-w-[130px] truncate" title={row.model || row.type}>
+                            <div className="max-w-[140px] truncate" title={row.model || row.type}>
                               <span className="font-semibold text-foreground mr-1">
                                 {row.vehicleGroup}
                               </span>
@@ -1068,10 +1093,14 @@ export function VehicleComplianceDashboard() {
                           {/* Overall Status */}
                           <td className="py-3 px-3 text-center">
                             <span
-                              className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded-full border ring-1 ring-inset ${overallUi.badgeCls}`}
+                              className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-semibold rounded-full border ring-1 ring-inset ${
+                                isPending
+                                  ? "bg-slate-100 text-slate-600 border-slate-200 ring-slate-200"
+                                  : overallUi.badgeCls
+                              }`}
                             >
-                              <span className={`h-1.5 w-1.5 rounded-full ${overallUi.dotCls}`} />
-                              {overallUi.label}
+                              <span className={`h-1.5 w-1.5 rounded-full ${isPending ? "bg-slate-400" : overallUi.dotCls}`} />
+                              {isPending ? "Pending Setup" : overallUi.label}
                             </span>
                           </td>
 
@@ -1090,12 +1119,20 @@ export function VehicleComplianceDashboard() {
                               {canManage && (
                                 <Button
                                   size="sm"
-                                  variant="primary"
+                                  variant={isPending ? "primary" : "outline"}
                                   onClick={() => setEditRecord(row)}
                                   className="h-7 px-2 text-[11px]"
-                                  title="Edit compliance dates"
+                                  title={isPending ? "Set compliance dates" : "Edit compliance dates"}
                                 >
-                                  <Edit2 className="h-3 w-3 mr-1" /> Edit
+                                  {isPending ? (
+                                    <>
+                                      <Plus className="h-3 w-3 mr-1" /> Set Dates
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Edit2 className="h-3 w-3 mr-1" /> Edit
+                                    </>
+                                  )}
                                 </Button>
                               )}
                             </div>
@@ -1223,6 +1260,15 @@ export function VehicleComplianceDashboard() {
           </div>
         </div>
       )}
+
+      {/* ── Batch Setup Modal ───────────────────────────────────────── */}
+      <BatchComplianceModal
+        vehicles={records}
+        warningDays={warningDays}
+        isOpen={showBatchModal}
+        onClose={() => setShowBatchModal(false)}
+        onApplied={handleBatchApplied}
+      />
     </div>
   );
 }
@@ -1239,7 +1285,7 @@ function ComplianceCell({
 }) {
   const formatted = formatComplianceDate(dateStr);
   if (!dateStr || status === "NOT_APPLICABLE") {
-    return <span className="text-muted-foreground/50 font-mono">N/A</span>;
+    return <span className="text-muted-foreground/40 font-mono">N/A</span>;
   }
 
   const ui = COMPLIANCE_STATUS_UI[status];
