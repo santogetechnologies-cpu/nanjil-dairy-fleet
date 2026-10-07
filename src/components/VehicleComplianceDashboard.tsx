@@ -540,8 +540,6 @@ export function VehicleComplianceDashboard() {
     );
   }, [records, quickSelectSearch]);
 
-  const allPending = summaryCounts.notApplicable === records.length && records.length > 0;
-
   return (
     <div className="space-y-6">
       {/* Toast Notification */}
@@ -562,37 +560,6 @@ export function VehicleComplianceDashboard() {
           <Button size="sm" variant="outline" onClick={() => loadData(true)}>
             Retry
           </Button>
-        </div>
-      )}
-
-      {/* Helpful Setup Guide if all vehicles have no dates entered yet */}
-      {allPending && !loading && (
-        <div className="p-4 rounded-xl border border-primary/25 bg-primary/5 text-foreground flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-          <div className="flex items-start gap-2.5">
-            <Sparkles className="h-5 w-5 text-primary shrink-0 mt-0.5" />
-            <div className="text-xs">
-              <span className="font-semibold text-foreground">
-                Fleet Setup Ready ({records.length} Vehicles Loaded):
-              </span>{" "}
-              Compliance dates have not been entered yet. Click{" "}
-              <span className="font-semibold text-primary underline cursor-pointer" onClick={() => setShowBatchModal(true)}>
-                Batch Setup
-              </span>{" "}
-              to initialize compliance cycles for your fleet, or click <strong>+ Set Dates</strong> on any vehicle below.
-            </div>
-          </div>
-          {canManage && (
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={() => setShowBatchModal(true)}
-                className="shrink-0 text-xs gap-1.5"
-              >
-                <Sparkles className="h-3.5 w-3.5" /> Batch Setup
-              </Button>
-            </div>
-          )}
         </div>
       )}
 
@@ -648,45 +615,7 @@ export function VehicleComplianceDashboard() {
         />
       </div>
 
-      {/* ── Pending Setup Banner when 0 records configured ───────────── */}
-      {!loading && summaryCounts.compliant === 0 && summaryCounts.expiring === 0 && summaryCounts.expired === 0 && records.length > 0 && (
-        <div className="p-4 rounded-2xl border border-primary/25 bg-gradient-to-r from-primary/10 via-background to-primary/5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-xs">
-          <div className="flex items-start gap-3">
-            <div className="p-2.5 rounded-xl bg-primary/15 text-primary shrink-0 mt-0.5">
-              <Sparkles className="h-5 w-5" />
-            </div>
-            <div>
-              <h4 className="text-sm font-bold text-foreground">
-                All {records.length} Fleet Vehicles in "Pending Setup"
-              </h4>
-              <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
-                The compliance checklist table is connected to your live Supabase database. Statutory dates (FC, Permits, Tax, Pollution, Insurance) have not yet been logged. You can click <strong>Log Compliance</strong> to record dates per vehicle, or <strong>Initialize Fleet Dates</strong> to populate realistic statutory dates for all vehicles.
-              </p>
-            </div>
-          </div>
-          {canManage && (
-            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={handleSeedFleetData}
-                disabled={seeding}
-                className="text-xs w-full sm:w-auto shadow-sm whitespace-nowrap"
-              >
-                {seeding ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Initializing…
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="h-3.5 w-3.5 mr-1.5" /> Initialize Fleet Dates
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
-        </div>
-      )}
+
 
       {/* ── Active Status Filter Notice ───────────────────────────────── */}
       {statusFilter !== "ALL" && (
