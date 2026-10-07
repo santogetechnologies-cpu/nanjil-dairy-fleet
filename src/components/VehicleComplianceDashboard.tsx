@@ -19,8 +19,6 @@ import {
   Download,
   Plus,
   X,
-  Sparkles,
-  Trash2,
   HelpCircle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -31,7 +29,6 @@ import {
   calculateOverallVehicleStatus,
   formatComplianceDate,
   resolveVehicleGroup,
-  generateSampleComplianceDates,
   COMPLIANCE_STATUS_UI,
   DEFAULT_COMPLIANCE_WARNING_DAYS,
   type ComplianceItemStatus,
@@ -39,7 +36,6 @@ import {
 import { Kpi, Card, Button } from "@/components/ui-kit";
 import { ComplianceDetailModal } from "./ComplianceDetailModal";
 import { ComplianceEditModal } from "./ComplianceEditModal";
-import { BatchComplianceModal } from "./BatchComplianceModal";
 
 export function VehicleComplianceDashboard() {
   const { user } = useAuth();
@@ -51,7 +47,6 @@ export function VehicleComplianceDashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
   const [isMigrationPending, setIsMigrationPending] = useState(false);
-  const [seeding, setSeeding] = useState(false);
   const [warningDays, setWarningDays] = useState(DEFAULT_COMPLIANCE_WARNING_DAYS);
 
   // Filters, search, sort, and display state
@@ -67,7 +62,6 @@ export function VehicleComplianceDashboard() {
   const [editRecord, setEditRecord] = useState<VehicleComplianceRecord | null>(null);
   const [showQuickSelect, setShowQuickSelect] = useState(false);
   const [quickSelectSearch, setQuickSelectSearch] = useState("");
-  const [showBatchModal, setShowBatchModal] = useState(false);
 
   // Toast / notification banner state
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -284,76 +278,7 @@ export function VehicleComplianceDashboard() {
     showToast(`Compliance updated for vehicle ${updated.vehicleNo}`);
   };
 
-  // ── 3b. Batch Seed / Clear Sample Compliance Dates for Fleet ───────
-  const handleSeedFleetData = async () => {
-    if (records.length === 0) return;
-    const confirmed = window.confirm(
-      `Initialize statutory compliance records for all ${records.length} fleet vehicles in Supabase?\n\nThis will generate realistic statutory dates (FC, Permit, Tax, Pollution, Insurance) with an operational mix of Valid, Expiring Soon, and Expired vehicles so you can test all dashboard functions and filters.`
-    );
-    if (!confirmed) return;
 
-    setSeeding(true);
-    try {
-      const now = new Date();
-      const payloads = records.map((r, idx) => {
-        const item = generateSampleComplianceDates(r.vehicleId, idx, now);
-        return {
-          ...item,
-          updated_at: new Date().toISOString(),
-          created_by: user?.id || null,
-          updated_by: user?.id || null,
-        };
-      });
-
-      const chunkSize = 25;
-      for (let i = 0; i < payloads.length; i += chunkSize) {
-        const chunk = payloads.slice(i, i + chunkSize);
-        const { error } = await supabase
-          .from("vehicle_compliance")
-          .upsert(chunk, { onConflict: "vehicle_id" });
-
-        if (error) throw error;
-      }
-
-      showToast(`Statutory compliance dates initialized for ${records.length} vehicles!`);
-      await loadData(true);
-    } catch (err: any) {
-      console.error("Error seeding compliance dates:", err);
-      alert(`Failed to initialize compliance dates: ${err.message}`);
-    } finally {
-      setSeeding(false);
-    }
-  };
-
-  const handleClearFleetData = async () => {
-    const confirmed = window.confirm(
-      "Are you sure you want to clear all compliance records for all vehicles? All vehicles will be reset to Pending Setup in Supabase."
-    );
-    if (!confirmed) return;
-
-    setSeeding(true);
-    try {
-      const { error } = await supabase
-        .from("vehicle_compliance")
-        .delete()
-        .neq("id", "00000000-0000-0000-0000-000000000000");
-
-      if (error) throw error;
-
-      showToast("All vehicle compliance records cleared.");
-      await loadData(true);
-    } catch (err: any) {
-      console.error("Error clearing compliance data:", err);
-      alert(`Failed to clear compliance dates: ${err.message}`);
-    } finally {
-      setSeeding(false);
-    }
-  };
-
-  const handleBatchApplied = (updatedList: VehicleComplianceRecord[]) => {
-    setRecords(updatedList);
-    showToast(`Batch compliance updated successfully!`);
-  };
 
   // ── 4. Dynamic Summary Counts (Calculated dynamically) ────────────
   const summaryCounts = useMemo(() => {
@@ -672,44 +597,18 @@ export function VehicleComplianceDashboard() {
           <div className="flex flex-wrap items-center gap-2 justify-end">
             {/* Quick action buttons */}
             {canManage && (
-              <>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={() => setShowBatchModal(true)}
-                  className="text-xs gap-1.5"
-                  title="Batch configure compliance cycles"
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Batch Setup
-                </Button>
-
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setQuickSelectSearch("");
-                    setShowQuickSelect(true);
-                  }}
-                  className="text-xs"
-                  title="Select a vehicle to log or edit compliance"
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1" /> Log Compliance
-                </Button>
-
-                {summaryCounts.compliant + summaryCounts.expiring + summaryCounts.expired > 0 && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleClearFleetData}
-                    disabled={seeding}
-                    className="text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                    title="Clear all compliance records"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => {
+                  setQuickSelectSearch("");
+                  setShowQuickSelect(true);
+                }}
+                className="text-xs"
+                title="Select a vehicle to log or edit compliance"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" /> Log Compliance
+              </Button>
             )}
 
             <Button
@@ -1190,14 +1089,6 @@ export function VehicleComplianceDashboard() {
         </div>
       )}
 
-      {/* ── Batch Setup Modal ───────────────────────────────────────── */}
-      <BatchComplianceModal
-        vehicles={records}
-        warningDays={warningDays}
-        isOpen={showBatchModal}
-        onClose={() => setShowBatchModal(false)}
-        onApplied={handleBatchApplied}
-      />
     </div>
   );
 }
