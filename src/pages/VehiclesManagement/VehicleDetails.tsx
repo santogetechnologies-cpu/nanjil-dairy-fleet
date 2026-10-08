@@ -831,7 +831,7 @@ export default function VehicleDetailsPage() {
         </p>
         <Link to="/vehicles-management">
           <Button variant="outline" size="sm" className="mt-2 text-xs">
-            Return to Vehicles Management
+            Return to Vehicles
           </Button>
         </Link>
       </div>
@@ -849,7 +849,7 @@ export default function VehicleDetailsPage() {
               className="hover:text-primary transition-colors flex items-center gap-1 font-medium"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
-              Vehicles Management
+              Vehicles
             </Link>
             <span>/</span>
             <span className="font-semibold text-foreground">{v.number}</span>

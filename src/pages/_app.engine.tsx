@@ -236,7 +236,7 @@ function Page() {
         />
         {vehicles.length === 0 && (
           <div className="py-12 text-center text-sm text-muted-foreground">
-            No vehicles found. Add vehicles in the Vehicles section.
+            No vehicles found. Add vehicles in the Vehicles Management section.
           </div>
         )}
       </Card>

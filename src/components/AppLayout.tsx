@@ -21,8 +21,8 @@ const NAV_GROUPS = [
   {
     label: "Operations",
     items: [
-      { to: "/vehicles", label: "Vehicles", icon: Truck },
-      { to: "/vehicles-management", label: "Vehicles Management", icon: LayoutGrid },
+      { to: "/vehicles", label: "Vehicles Management", icon: Truck },
+      { to: "/vehicles-management", label: "Vehicles", icon: LayoutGrid },
       { to: "/trips", label: "Trips & Routes", icon: RouteIcon },
       { to: "/fuel", label: "Fuel Intelligence", icon: Fuel },
     ],

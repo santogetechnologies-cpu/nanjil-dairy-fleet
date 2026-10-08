@@ -327,7 +327,7 @@ export default function VehiclesManagementPage() {
     <div className="space-y-5 pb-8">
       {/* ── Page Header ── */}
       <PageHeader
-        title="Vehicles Management"
+        title="Vehicles"
         subtitle="Monitor vehicle performance, mileage, maintenance and operational health."
         actions={
           <div className="flex items-center gap-2">
