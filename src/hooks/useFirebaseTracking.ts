@@ -252,8 +252,9 @@ export function usePureFirebaseTracking() {
 
     loadSupabaseVehicles();
 
+    const channelId = `pure-tracking-vehicles-${Math.random().toString(36).substring(2, 9)}`;
     const channel = supabase
-      .channel("pure-tracking-supabase-vehicles")
+      .channel(channelId)
       .on("postgres_changes", { event: "*", schema: "public", table: "vehicles" }, () => {
         loadSupabaseVehicles();
       })
@@ -268,7 +269,7 @@ export function usePureFirebaseTracking() {
 
     return () => {
       cancelled = true;
-      channel.unsubscribe();
+      supabase.removeChannel(channel);
     };
   }, []);
 
@@ -540,72 +541,46 @@ export function useFirebaseTracking(initialVehicles: Vehicle[]) {
 }
 
 /**
- * Hook to track a single vehicle live via Firebase Firestore "vechile" collection
+ * Hook to track a single vehicle live via Firebase Firestore "vechile" collection.
+ * Reuses the authoritative multi-vehicle stream, guaranteeing live telemetry parity with the fleet overview.
  */
-export function useSingleVehicleFirebaseTracking(initialVehicle: Vehicle | null) {
-  const [vehicle, setVehicle] = useState<Vehicle | null>(initialVehicle);
+export function useSingleVehicleFirebaseTracking(initialVehicle: Vehicle | null): Vehicle | null {
+  const allLiveVehicles = usePureFirebaseTracking();
 
-  // GPS-based average speed calculator (incremental, per-device)
-  const { updateGpsPoint, getAverageSpeed } = useAverageSpeed();
+  return useMemo(() => {
+    if (!initialVehicle) return null;
 
-  useEffect(() => {
-    setVehicle(initialVehicle);
-  }, [initialVehicle]);
+    const targetDevId = normalizeDeviceId(initialVehicle.deviceId);
+    const targetNumber = initialVehicle.number?.trim().toLowerCase();
+    const targetId = initialVehicle.id;
 
-  useEffect(() => {
-    if (!db || !vehicle) return;
+    const matched = allLiveVehicles.find((v) => {
+      if (targetId && v.id === targetId) return true;
+      if (targetDevId && normalizeDeviceId(v.deviceId) === targetDevId) return true;
+      if (targetNumber && v.number && v.number.trim().toLowerCase() === targetNumber) return true;
+      return false;
+    });
 
-    const targetDevId = normalizeDeviceId(vehicle.deviceId);
-    if (!targetDevId) return;
+    if (matched) {
+      return {
+        ...initialVehicle,
+        ...matched,
+        // Preserve registration and db metadata from initial vehicle
+        id: initialVehicle.id || matched.id,
+        number: initialVehicle.number || matched.number,
+        type: initialVehicle.type || matched.type,
+        model: initialVehicle.model || matched.model,
+        route: initialVehicle.route || matched.route,
+        driver: matched.driver && matched.driver !== "Unassigned" ? matched.driver : (initialVehicle.driver || "Unassigned"),
+        driverId: initialVehicle.driverId || matched.driverId,
+        odometer: initialVehicle.odometer || matched.odometer,
+        engineHours: initialVehicle.engineHours || matched.engineHours,
+        insuranceExpiry: initialVehicle.insuranceExpiry || matched.insuranceExpiry,
+        lastService: initialVehicle.lastService || matched.lastService,
+        nextServiceKm: initialVehicle.nextServiceKm || matched.nextServiceKm,
+      };
+    }
 
-    const collectionRef = collection(db, "vechile");
-
-    const unsubscribe = onSnapshot(
-      collectionRef,
-      (snapshot) => {
-        let matchingDoc: FirestoreVehicleDoc | null = null;
-
-        for (const docSnap of snapshot.docs) {
-          const data = docSnap.data() as FirestoreVehicleDoc;
-          const docId = docSnap.id.trim();
-          const { cleanDevId } = extractTelemetryDeviceId(data, docId);
-
-          if (cleanDevId && cleanDevId === targetDevId) {
-            matchingDoc = data;
-            break;
-          }
-        }
-
-        if (matchingDoc) {
-          const resolvedDoc: FirestoreVehicleDoc = matchingDoc;
-          // Feed GPS point into the average speed calculator
-          const lat = typeof resolvedDoc.lat === "number" ? resolvedDoc.lat : parseFloat(String(resolvedDoc.lat ?? 0));
-          const lng = typeof resolvedDoc.lng === "number" ? resolvedDoc.lng : parseFloat(String(resolvedDoc.lng ?? 0));
-          const speed = typeof resolvedDoc.speed === "number" ? resolvedDoc.speed : parseFloat(String(resolvedDoc.speed || 0));
-          updateGpsPoint(targetDevId, lat, lng, speed);
-
-          const updatedFields = parseFirestoreTelemetry(resolvedDoc, vehicle);
-          setVehicle((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  ...updatedFields,
-                  // Keep original vehicle registration number
-                  number: prev.number || "Unassigned Vehicle",
-                  deviceId: prev.deviceId || targetDevId,
-                  averageSpeed: getAverageSpeed(targetDevId),
-                }
-              : null,
-          );
-        }
-      },
-      (error) => {
-        console.warn("Firestore single vehicle subscription error:", error);
-      },
-    );
-
-    return () => unsubscribe();
-  }, [initialVehicle?.id, initialVehicle?.deviceId, updateGpsPoint, getAverageSpeed]);
-
-  return vehicle;
+    return initialVehicle;
+  }, [allLiveVehicles, initialVehicle]);
 }

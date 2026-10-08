@@ -12,6 +12,8 @@ const DashboardPage = lazy(() => import("./pages/_app.dashboard"));
 const TrackingPage = lazy(() => import("./pages/_app.tracking"));
 const VehiclesPage = lazy(() => import("./pages/_app.vehicles"));
 const VehicleDetailPage = lazy(() => import("./pages/_app.vehicles.$id"));
+const VehiclesManagementPage = lazy(() => import("./pages/VehiclesManagement/VehiclesManagement"));
+const VehicleManagementDetailPage = lazy(() => import("./pages/VehiclesManagement/VehicleDetails"));
 const TripsPage = lazy(() => import("./pages/_app.trips"));
 const CollectionRoutesPage = lazy(() => import("./pages/_app.collection-routes"));
 const FuelPage = lazy(() => import("./pages/_app.fuel"));
@@ -62,6 +64,8 @@ export default function App() {
           <Route path="/tracking" element={<TrackingPage />} />
           <Route path="/vehicles" element={<VehiclesPage />} />
           <Route path="/vehicles/:id" element={<VehicleDetailPage />} />
+          <Route path="/vehicles-management" element={<VehiclesManagementPage />} />
+          <Route path="/vehicles-management/:vehicleId" element={<VehicleManagementDetailPage />} />
           <Route path="/trips" element={<TripsPage />} />
           <Route path="/collection-routes" element={<CollectionRoutesPage />} />
           <Route path="/fuel" element={<FuelPage />} />
