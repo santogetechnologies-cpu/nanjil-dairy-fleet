@@ -3,7 +3,7 @@ import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { supabase } from "@/lib/supabase";
 import { type Vehicle, type VehicleStatus } from "@/lib/types";
-import { useAverageSpeed } from "@/hooks/useAverageSpeed";
+import { useAverageSpeed, extractTelemetryTimestamp } from "@/hooks/useAverageSpeed";
 
 export interface FirestoreVehicleDoc {
   device_id?: string | number;
@@ -178,10 +178,7 @@ export function parseFirestoreTelemetry(
   };
 }
 
-/**
- * Hook to stream live tracking vehicles DIRECTLY from Firebase Firestore ("vechile" collection)
- * enriched reactively with registered vehicle master data (number, driver, model) from Supabase.
- */
+
 export function usePureFirebaseTracking() {
   const [supabaseVehicles, setSupabaseVehicles] = useState<any[]>([]);
   const [firestoreDocs, setFirestoreDocs] = useState<
@@ -191,7 +188,7 @@ export function usePureFirebaseTracking() {
   const loggedMappingsRef = useRef<Map<string, string>>(new Map());
 
   // GPS-based average speed calculator (incremental, per-device)
-  const { updateGpsPoint, getAverageSpeed } = useAverageSpeed();
+  const { updateGpsPoint, getAverageSpeed, registerAlias } = useAverageSpeed();
 
   // 1. Fetch Supabase registered vehicles and listen for updates
   useEffect(() => {
@@ -343,13 +340,14 @@ export function usePureFirebaseTracking() {
           const docId = docSnap.id.trim();
           docs.push({ id: docId, data });
 
-          // Feed each GPS point into the average speed calculator
+          // Feed each GPS point with its authentic telemetry timestamp
           const { cleanDevId } = extractTelemetryDeviceId(data, docId);
           if (cleanDevId) {
             const lat = typeof data.lat === "number" ? data.lat : parseFloat(String(data.lat ?? 0));
             const lng = typeof data.lng === "number" ? data.lng : parseFloat(String(data.lng ?? 0));
             const speed = typeof data.speed === "number" ? data.speed : parseFloat(String(data.speed || 0));
-            updateGpsPoint(cleanDevId, lat, lng, speed);
+            const timestamp = extractTelemetryTimestamp(data, docSnap);
+            updateGpsPoint(cleanDevId, lat, lng, speed, timestamp);
           }
         });
         setFirestoreDocs(docs);
@@ -430,6 +428,11 @@ export function usePureFirebaseTracking() {
       const vehicleModel = matchedSupabase?.model || data.model || "";
       const vehicleRoute = matchedSupabase?.route || "";
 
+      // Register alias between Supabase UUID and device ID for seamless lookups
+      if (matchedSupabase?.id && (cleanDevId || rawDevId)) {
+        registerAlias(matchedSupabase.id, cleanDevId || rawDevId);
+      }
+
       return {
         id: vehicleId,
         number: vehicleNumber,
@@ -455,10 +458,10 @@ export function usePureFirebaseTracking() {
         engineHours: matchedSupabase?.engine_hours ? Number(matchedSupabase.engine_hours) : 0,
         lastUpdate: "Just now (Firebase)",
         deviceId: cleanDevId || rawDevId,
-        averageSpeed: getAverageSpeed(cleanDevId || rawDevId),
+        averageSpeed: getAverageSpeed(cleanDevId || rawDevId) ?? (matchedSupabase ? getAverageSpeed(matchedSupabase.id) : null),
       } as Vehicle;
     });
-  }, [firestoreDocs, supabaseVehicles, lookupBaseVehicleByDeviceId, getAverageSpeed]);
+  }, [firestoreDocs, supabaseVehicles, lookupBaseVehicleByDeviceId, getAverageSpeed, registerAlias]);
 
   return vehicles;
 }
@@ -471,7 +474,7 @@ export function useFirebaseTracking(initialVehicles: Vehicle[]) {
   const [vehicles, setVehicles] = useState<Vehicle[]>(initialVehicles);
 
   // GPS-based average speed calculator (incremental, per-device)
-  const { updateGpsPoint, getAverageSpeed } = useAverageSpeed();
+  const { updateGpsPoint, getAverageSpeed, registerAlias } = useAverageSpeed();
 
   useEffect(() => {
     setVehicles(initialVehicles);
@@ -495,11 +498,12 @@ export function useFirebaseTracking(initialVehicles: Vehicle[]) {
           if (cleanDevId) {
             firestoreDocsMap.set(cleanDevId, { docId, data });
 
-            // Feed GPS point into the average speed calculator
+            // Feed GPS point with true telemetry timestamp into the average speed calculator
             const lat = typeof data.lat === "number" ? data.lat : parseFloat(String(data.lat ?? 0));
             const lng = typeof data.lng === "number" ? data.lng : parseFloat(String(data.lng ?? 0));
             const speed = typeof data.speed === "number" ? data.speed : parseFloat(String(data.speed || 0));
-            updateGpsPoint(cleanDevId, lat, lng, speed);
+            const timestamp = extractTelemetryTimestamp(data, docSnap);
+            updateGpsPoint(cleanDevId, lat, lng, speed, timestamp);
           }
         });
 
@@ -517,6 +521,10 @@ export function useFirebaseTracking(initialVehicles: Vehicle[]) {
 
             if (!match) return v;
 
+            if (v.id && vDeviceId) {
+              registerAlias(v.id, vDeviceId);
+            }
+
             const updatedFields = parseFirestoreTelemetry(match.data, v);
             return {
               ...v,
@@ -524,7 +532,9 @@ export function useFirebaseTracking(initialVehicles: Vehicle[]) {
               // Keep original vehicle registration number
               number: v.number || "Unassigned Vehicle",
               deviceId: v.deviceId || vDeviceId,
-              averageSpeed: vDeviceId ? getAverageSpeed(vDeviceId) : null,
+              averageSpeed: vDeviceId
+                ? (getAverageSpeed(vDeviceId) ?? (v.id ? getAverageSpeed(v.id) : null))
+                : (v.id ? getAverageSpeed(v.id) : null),
             };
           });
         });
@@ -535,7 +545,7 @@ export function useFirebaseTracking(initialVehicles: Vehicle[]) {
     );
 
     return () => unsubscribe();
-  }, [initialVehicles, updateGpsPoint, getAverageSpeed]);
+  }, [initialVehicles, updateGpsPoint, getAverageSpeed, registerAlias]);
 
   return vehicles;
 }

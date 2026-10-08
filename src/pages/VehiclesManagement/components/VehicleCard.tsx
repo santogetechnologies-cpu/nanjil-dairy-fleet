@@ -56,9 +56,9 @@ export function VehicleCard({ vehicle, metrics }: VehicleCardProps) {
       : "—";
 
   const avgSpeedDisplay = metrics?.avgSpeed != null && metrics.avgSpeed > 0 
-    ? `${Math.round(metrics.avgSpeed)} km/h` 
+    ? `${metrics.avgSpeed.toFixed(1)} km/h` 
     : vehicle.averageSpeed != null && vehicle.averageSpeed > 0 
-      ? `${Math.round(vehicle.averageSpeed)} km/h` 
+      ? `${vehicle.averageSpeed.toFixed(1)} km/h` 
       : "—";
 
   const avgMileageDisplay = metrics?.avgMileage != null 

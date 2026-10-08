@@ -687,7 +687,7 @@ function VehicleDetailPage() {
         <Stat
           icon={<Activity className="h-4 w-4" />}
           label="Avg Speed"
-          value={v.averageSpeed != null ? `${v.averageSpeed.toFixed(1)} km/h` : "N/A"}
+          value={v.averageSpeed != null && v.averageSpeed > 0 ? `${v.averageSpeed.toFixed(1)} km/h` : "—"}
         />
         <Stat
           icon={<Activity className="h-4 w-4" />}

@@ -47,7 +47,7 @@ export interface HealthScoreResult {
 
 export interface PerformanceTimeMetrics {
   topSpeed: number;
-  avgSpeed: number;
+  avgSpeed: number | null;
   totalDistanceKm: number;
   totalDrivingHours: number;
   totalTrips: number;

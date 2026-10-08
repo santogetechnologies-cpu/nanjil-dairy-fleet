@@ -18,6 +18,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { useVehicles, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
 import { normalizeDeviceId } from "@/hooks/useFirebaseTracking";
+import { calculateAverageSpeedFromPoints } from "@/hooks/useAverageSpeed";
 import { calculateVehicleFuelAnalysis, type RawFuelLog } from "@/lib/fuel-efficiency";
 import type { Vehicle, AlertItem, Driver, Trip } from "@/lib/types";
 
@@ -609,18 +610,16 @@ export default function VehicleDetailsPage() {
     });
     if (v && v.speed > maxSpeed) maxSpeed = v.speed;
 
-    // 2. Average Speed in period
-    let avgSpeed = 0;
-    const movingPoints = filteredTelemetry.filter((th) => Number(th.speed || 0) > 0);
-    if (movingPoints.length > 0) {
-      const sumSpeed = movingPoints.reduce((acc, th) => acc + Number(th.speed || 0), 0);
-      avgSpeed = sumSpeed / movingPoints.length;
-    } else if (v?.averageSpeed != null && v.averageSpeed > 0) {
+    // 2. Average Speed in period (Mathematical: Total Distance / Total Driving Time)
+    let avgSpeed: number | null = null;
+    if (filteredTelemetry.length >= 2) {
+      const stats = calculateAverageSpeedFromPoints(filteredTelemetry);
+      avgSpeed = stats.averageSpeed;
+    }
+
+    // Fallback to authoritative live GPS tracker average speed if historical telemetry has insufficient points
+    if (avgSpeed == null && v?.averageSpeed != null && v.averageSpeed > 0) {
       avgSpeed = v.averageSpeed;
-    } else if (filteredTrips.length > 0) {
-      // Estimate from trips if distance > 0
-      const totalKm = filteredTrips.reduce((acc, t) => acc + t.distance, 0);
-      if (totalKm > 0) avgSpeed = 42; // default typical fleet operating speed if no GPS points
     }
 
     // 3. Trips metrics
@@ -631,7 +630,7 @@ export default function VehicleDetailsPage() {
     const avgTripDist = totalTrips > 0 ? totalDist / totalTrips : 0;
 
     // Driving hours estimate (dist / avg speed or sum)
-    const drivingHours = avgSpeed > 0 ? totalDist / avgSpeed : 0;
+    const drivingHours = avgSpeed != null && avgSpeed > 0 ? totalDist / avgSpeed : 0;
 
     // 4. Fuel metrics (using strict engine)
     const fuelAnalysis = calculateVehicleFuelAnalysis(

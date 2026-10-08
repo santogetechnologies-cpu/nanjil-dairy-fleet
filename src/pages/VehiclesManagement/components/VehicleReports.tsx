@@ -113,7 +113,7 @@ export function VehicleReports({ metrics, dateRangeLabel }: VehicleReportsProps)
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Driving Avg Speed</span>
                 <span className="font-semibold text-foreground">
-                  {metrics.avgSpeed > 0 ? `${Math.round(metrics.avgSpeed)} km/h` : "—"}
+                  {metrics.avgSpeed != null && metrics.avgSpeed > 0 ? `${metrics.avgSpeed.toFixed(1)} km/h` : "—"}
                 </span>
               </div>
               <div className="flex justify-between items-center">

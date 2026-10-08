@@ -264,7 +264,7 @@ function TrackingPage() {
                         >
                           {v.speed} km/h
                         </span>
-                        {" "}• Avg: {v.averageSpeed != null ? `${v.averageSpeed.toFixed(1)}` : "N/A"} km/h • Fuel: {v.fuel}%
+                        {" "}• Avg: {v.averageSpeed != null && v.averageSpeed > 0 ? `${v.averageSpeed.toFixed(1)} km/h` : "—"} • Fuel: {v.fuel}%
                       </span>
                       <span className="text-primary font-medium flex items-center gap-0.5 shrink-0">
                         {isSelected ? "Tracking Active" : "Track Route →"}

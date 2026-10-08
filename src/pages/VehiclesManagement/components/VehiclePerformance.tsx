@@ -106,7 +106,7 @@ export function VehiclePerformance({
 
             <div className="mt-3 flex items-baseline gap-2">
               <span className="text-3xl font-extrabold text-foreground tracking-tight">
-                {metrics.avgSpeed > 0 ? Math.round(metrics.avgSpeed) : "—"}
+                {metrics.avgSpeed != null && metrics.avgSpeed > 0 ? metrics.avgSpeed.toFixed(1) : "—"}
               </span>
               <span className="text-sm font-semibold text-muted-foreground">km/h</span>
             </div>

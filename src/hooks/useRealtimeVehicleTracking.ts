@@ -23,6 +23,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { type Vehicle, type VehicleStatus } from "@/lib/types";
+import { globalGpsSpeedTracker } from "@/lib/gpsAverageSpeed";
 
 // Telemetry source flag (set VITE_TELEMETRY_SOURCE=supabase to enable this hook)
 // Default: "firebase" (keeps existing behaviour during migration period)
@@ -86,8 +87,26 @@ function mapRowToVehicle(row: Record<string, unknown>): Vehicle {
   const odometer = Number(row.live_odometer ?? row.odometer ?? 0);
   const engineHours = Number(row.live_engine_hours ?? row.engine_hours ?? 0);
 
+  const vehicleId = String(row.id ?? "");
+  const deviceId = String(row.device_id ?? "");
+  const lat = Number(row.lat ?? 0);
+  const lng = Number(row.lng ?? 0);
+
+  if (vehicleId && deviceId) {
+    globalGpsSpeedTracker.registerAlias(vehicleId, deviceId);
+  }
+
+  if (lat !== 0 && lng !== 0 && lastUpdateDate) {
+    const lookupKey = deviceId || vehicleId;
+    globalGpsSpeedTracker.updateGpsPoint(lookupKey, lat, lng, speed, lastUpdateDate.getTime());
+  }
+
+  const averageSpeed =
+    globalGpsSpeedTracker.getAverageSpeed(deviceId || vehicleId) ??
+    (vehicleId ? globalGpsSpeedTracker.getAverageSpeed(vehicleId) : null);
+
   return {
-    id: String(row.id ?? ""),
+    id: vehicleId,
     number: String(row.number ?? ""),
     type: String(row.type ?? ""),
     model: String(row.model ?? ""),
@@ -95,8 +114,8 @@ function mapRowToVehicle(row: Record<string, unknown>): Vehicle {
     driverId: String(row.driver_id ?? ""),
     status,
     location: String(row.location ?? ""),
-    lat: Number(row.lat ?? 0),
-    lng: Number(row.lng ?? 0),
+    lat,
+    lng,
     speed,
     fuel: Number(row.fuel ?? 0),
     temperature: Number(row.temperature ?? 0),
@@ -110,7 +129,8 @@ function mapRowToVehicle(row: Record<string, unknown>): Vehicle {
     odometer,
     engineHours,
     lastUpdate: formatLastUpdate(lastUpdateStr),
-    deviceId: String(row.device_id ?? ""),
+    deviceId,
+    averageSpeed,
   };
 }
 
@@ -150,7 +170,23 @@ export function useRealtimeAllVehicles(): Vehicle[] {
     // Subscribe to vehicle_telemetry changes (EMQX upserts trigger these)
     const channel = supabase
       .channel("emqx-realtime-all-vehicles")
-      .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_telemetry" }, () => {
+      .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_telemetry" }, (payload) => {
+        if (payload.new) {
+          const row = payload.new as any;
+          if (row.lat && row.lng) {
+            const ts = row.last_update ? new Date(row.last_update).getTime() : Date.now();
+            globalGpsSpeedTracker.updateGpsPoint(
+              String(row.device_id || row.vehicle_id),
+              Number(row.lat),
+              Number(row.lng),
+              Number(row.speed || 0),
+              ts,
+            );
+            if (row.vehicle_id && row.device_id) {
+              globalGpsSpeedTracker.registerAlias(String(row.vehicle_id), String(row.device_id));
+            }
+          }
+        }
         if (isMountedRef.current) {
           console.log("[EMQX/Supabase] vehicle_telemetry changed — reloading");
           load();
@@ -235,7 +271,23 @@ export function useRealtimeSingleVehicle(initialVehicle: Vehicle | null): Vehicl
           table: "vehicle_telemetry",
           filter: `vehicle_id=eq.${vehicleId}`,
         },
-        () => {
+        (payload) => {
+          if (payload.new) {
+            const row = payload.new as any;
+            if (row.lat && row.lng) {
+              const ts = row.last_update ? new Date(row.last_update).getTime() : Date.now();
+              globalGpsSpeedTracker.updateGpsPoint(
+                String(row.device_id || row.vehicle_id),
+                Number(row.lat),
+                Number(row.lng),
+                Number(row.speed || 0),
+                ts,
+              );
+              if (row.vehicle_id && row.device_id) {
+                globalGpsSpeedTracker.registerAlias(String(row.vehicle_id), String(row.device_id));
+              }
+            }
+          }
           if (isMountedRef.current) {
             console.log(`[EMQX/Supabase] Telemetry update for vehicle ${vehicleId}`);
             reload();
@@ -287,7 +339,23 @@ export function useRealtimeVehicleList(initialVehicles: Vehicle[]): Vehicle[] {
 
     const channel = supabase
       .channel("emqx-realtime-vehicle-list")
-      .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_telemetry" }, () => {
+      .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_telemetry" }, (payload) => {
+        if (payload.new) {
+          const row = payload.new as any;
+          if (row.lat && row.lng) {
+            const ts = row.last_update ? new Date(row.last_update).getTime() : Date.now();
+            globalGpsSpeedTracker.updateGpsPoint(
+              String(row.device_id || row.vehicle_id),
+              Number(row.lat),
+              Number(row.lng),
+              Number(row.speed || 0),
+              ts,
+            );
+            if (row.vehicle_id && row.device_id) {
+              globalGpsSpeedTracker.registerAlias(String(row.vehicle_id), String(row.device_id));
+            }
+          }
+        }
         if (isMountedRef.current) reload();
       })
       .subscribe();

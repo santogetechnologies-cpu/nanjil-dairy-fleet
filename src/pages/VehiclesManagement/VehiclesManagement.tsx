@@ -495,7 +495,7 @@ export default function VehiclesManagementPage() {
                         {m?.topSpeed != null && m.topSpeed > 0 ? `${Math.round(m.topSpeed)} km/h` : "—"}
                       </td>
                       <td className="py-3 px-3 font-semibold text-foreground whitespace-nowrap">
-                        {m?.avgSpeed != null && m.avgSpeed > 0 ? `${Math.round(m.avgSpeed)} km/h` : "—"}
+                        {m?.avgSpeed != null && m.avgSpeed > 0 ? `${m.avgSpeed.toFixed(1)} km/h` : "—"}
                       </td>
                       <td className="py-3 px-3 font-semibold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
                         {m?.avgMileage != null ? `${m.avgMileage.toFixed(1)} km/L` : "—"}
