@@ -86,11 +86,7 @@ function Page() {
       admin: "Administrator",
       manager: "Fleet Manager",
       driver: "Driver",
-      operations: "Operations",
-      supervisor: "Supervisor",
-      qa: "QA",
-      logistics: "Logistics",
-      accounts: "Accounts"
+      operations: "Operations"
     };
 
     const profileRows: UserRow[] = (profileData || []).map(u => ({
@@ -215,11 +211,7 @@ function Page() {
       "Administrator": "admin",
       "Fleet Manager": "manager",
       "Driver": "driver",
-      "Operations": "operations",
-      "Supervisor": "supervisor",
-      "QA": "qa",
-      "Logistics": "logistics",
-      "Accounts": "accounts"
+      "Operations": "operations"
     };
     const roleVal = roleMapping[form.role] || "driver";
 
@@ -777,10 +769,6 @@ function Page() {
                   <option>Fleet Manager</option>
                   <option>Driver</option>
                   <option>Operations</option>
-                  <option>Supervisor</option>
-                  <option>QA</option>
-                  <option>Logistics</option>
-                  <option>Accounts</option>
                 </select>
               </div>
 
