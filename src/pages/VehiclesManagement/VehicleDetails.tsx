@@ -632,13 +632,30 @@ export default function VehicleDetailsPage() {
     // Driving hours estimate (dist / avg speed or sum)
     const drivingHours = avgSpeed != null && avgSpeed > 0 ? totalDist / avgSpeed : 0;
 
-    // 4. Fuel metrics (using strict engine)
-    const fuelAnalysis = calculateVehicleFuelAnalysis(
+    // 4. Fuel metrics (using strict full-tank engine)
+    const vehicleFullFuelAnalysis = calculateVehicleFuelAnalysis(
       v?.id || "",
-      filteredFuelLogs,
+      fuelLogs,
       v?.number,
       v?.odometer
     );
+
+    // Filter intervals that completed within the active timeframe
+    const intervalsInPeriod = timeRange === "all"
+      ? vehicleFullFuelAnalysis.intervals
+      : vehicleFullFuelAnalysis.intervals.filter((inv) => {
+          const t = new Date(inv.endDate).getTime();
+          return t >= startDate.getTime();
+        });
+
+    let periodAverageMileage: number | null = null;
+    if (intervalsInPeriod.length > 0) {
+      const pDist = intervalsInPeriod.reduce((sum, item) => sum + item.distanceKm, 0);
+      const pFuel = intervalsInPeriod.reduce((sum, item) => sum + item.fuelLiters, 0);
+      if (pDist > 0 && pFuel > 0) {
+        periodAverageMileage = Number((pDist / pFuel).toFixed(2));
+      }
+    }
 
     const fuelLiters = filteredFuelLogs.reduce((acc, f) => acc + (Number(f.liters) || 0), 0);
     const fuelCost = filteredFuelLogs.reduce((acc, f) => acc + (Number(f.cost) || 0), 0);
@@ -661,13 +678,13 @@ export default function VehicleDetailsPage() {
       avgTripDistanceKm: avgTripDist,
       fuelConsumedLiters: fuelLiters,
       fuelRefillCount: filteredFuelLogs.length,
-      averageMileageKmpl: fuelAnalysis.averageMileage,
+      averageMileageKmpl: periodAverageMileage,
       totalFuelCost: fuelCost,
       overspeedEventsCount: overspeedCount,
       alertsCount: filteredAlerts.length,
       maintenanceRecordsCount: maintenanceRecords.length,
     };
-  }, [filteredTelemetry, filteredTrips, filteredFuelLogs, filteredAlerts, maintenanceRecords, v]);
+  }, [filteredTelemetry, filteredTrips, filteredFuelLogs, fuelLogs, filteredAlerts, maintenanceRecords, v, timeRange, startDate]);
 
   // Overall Maintenance Status calculation
   const maintenanceHealth: MaintenanceHealthStatus = useMemo(() => {
@@ -778,16 +795,27 @@ export default function VehicleDetailsPage() {
   }, [filteredTelemetry, liveSpeedSamples]);
 
   const chartFuelData = useMemo(() => {
+    const fullAnalysis = calculateVehicleFuelAnalysis(
+      v?.id || "",
+      fuelLogs,
+      v?.number,
+      v?.odometer
+    );
+    const intervalMileageByLogId = new Map<string, number>();
+    fullAnalysis.intervals.forEach((inv) => {
+      intervalMileageByLogId.set(inv.intervalId, inv.mileageKmpl);
+    });
+
     return filteredFuelLogs.map((fl) => {
       const d = fl.logged_at ? new Date(fl.logged_at) : new Date();
       return {
         date: d.toLocaleDateString([], { month: "short", day: "numeric" }),
         liters: Math.round(Number(fl.liters || 0)),
         cost: Math.round(Number(fl.cost || 0)),
-        mileage: null,
+        mileage: intervalMileageByLogId.get(fl.id) ?? null,
       };
     });
-  }, [filteredFuelLogs]);
+  }, [filteredFuelLogs, fuelLogs, v]);
 
   const chartTripData = useMemo(() => {
     return filteredTrips.map((tr) => {

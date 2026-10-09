@@ -88,9 +88,7 @@ function DashboardPage() {
         const realEff = Object.values(analysis.vehicleMap)
           .filter((va) => va.hasSufficientData && va.averageMileage !== null)
           .map((va) => ({
-            vehicle: va.vehicleNumber
-              ? va.vehicleNumber.split("-").slice(0, 2).join("-")
-              : "Unknown",
+            vehicle: va.vehicleNumber || "Unknown",
             kmpl: va.averageMileage!,
           }))
           .slice(0, 10);
