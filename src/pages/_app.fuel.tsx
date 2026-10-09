@@ -1,6 +1,6 @@
 import { Kpi, Card, CardHeader, Badge, Button } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
-import { Fuel, TrendingDown, Gauge, AlertTriangle, Sparkles, Plus, Loader2 } from "lucide-react";
+import { Fuel, TrendingDown, Gauge, AlertTriangle, Plus, Loader2 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
 } from "recharts";
@@ -307,24 +307,6 @@ function Page() {
         <Kpi label="Liters Logged" value={`${totalLitersManual.toLocaleString()} L`} accent="success" icon={<Gauge className="h-5 w-5" />} hint="Refills volume" />
         <Kpi label="Avg Fuel Cost" value={`₹${avgPricePerLiter.toFixed(2)}/L`} accent="info" icon={<TrendingDown className="h-5 w-5" />} hint="Average refill rate" />
         <Kpi label="Open Fuel Alerts" value={fuelAlerts.filter((a) => !a.resolved).length} accent="destructive" icon={<AlertTriangle className="h-5 w-5" />} hint={`${fuelAlerts.length} total`} />
-      </div>
-
-      <div className="rounded-lg border border-info/40 bg-gradient-to-br from-info/5 to-primary/5 p-4 mt-4">
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-md bg-primary text-primary-foreground flex items-center justify-center"><Sparkles className="h-4 w-4" /></div>
-          <div className="font-medium">Fuel Efficiency Analysis</div>
-        </div>
-        <p className="text-sm mt-2 leading-relaxed">
-          {fleetAnalysis?.fleetAvgMileage !== null && fleetAnalysis?.fleetAvgMileage !== undefined ? (
-            <>
-              Evaluated fleet average is <span className="font-semibold text-primary">{fleetAnalysis.fleetAvgMileage} km/L</span> across {fleetAnalysis.vehiclesWithDataCount} vehicles with validated full-tank intervals.
-            </>
-          ) : (
-            <>
-              Mileage is calculated using the full-tank-to-full-tank methodology from manual refill records. Log at least two full-tank refills for a vehicle to calculate verified km/L efficiency.
-            </>
-          )}
-        </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
