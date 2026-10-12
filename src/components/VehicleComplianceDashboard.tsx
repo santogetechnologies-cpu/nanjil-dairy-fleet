@@ -804,8 +804,9 @@ export function VehicleComplianceDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => setViewRecord(row)}
-                                className="h-7 w-7 p-0 flex items-center justify-center rounded-lg"
+                                className="h-7 w-7 p-0 flex items-center justify-center rounded-lg shrink-0"
                                 title="View detailed compliance summary"
+                                aria-label="View"
                               >
                                 <Eye className="h-3.5 w-3.5" />
                               </Button>
@@ -814,8 +815,9 @@ export function VehicleComplianceDashboard() {
                                   size="sm"
                                   variant={hasDates ? "outline" : "primary"}
                                   onClick={() => setEditRecord(row)}
-                                  className="h-7 w-7 p-0 flex items-center justify-center rounded-lg"
+                                  className="h-7 w-7 p-0 flex items-center justify-center rounded-lg shrink-0"
                                   title={hasDates ? "Edit compliance dates" : "Set compliance dates"}
+                                  aria-label={hasDates ? "Edit" : "Set compliance"}
                                 >
                                   {hasDates ? (
                                     <Edit2 className="h-3.5 w-3.5" />
