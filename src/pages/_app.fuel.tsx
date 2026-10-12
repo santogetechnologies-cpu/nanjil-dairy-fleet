@@ -1,6 +1,6 @@
 import { Kpi, Card, CardHeader, Badge, Button } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
-import { Fuel, TrendingDown, Gauge, AlertTriangle, Sparkles, Plus, Loader2 } from "lucide-react";
+import { Fuel, TrendingDown, Gauge, AlertTriangle, Plus, Loader2 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
 } from "recharts";
@@ -25,20 +25,58 @@ function Page() {
   const [purchaseLogs, setPurchaseLogs] = useState<any[]>([]);
   const [showLogModal, setShowLogModal] = useState(false);
   const [form, setForm] = useState({ vehicleId: "", liters: 0, cost: 0, odometer: 0, isFullTank: true });
+  const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Derive selected vehicle's last recorded physical odometer
+  const selectedVehicleObj = vehicles.find((v) => v.id === form.vehicleId);
+  const vehiclePrevOdometer = (() => {
+    if (!form.vehicleId) return 0;
+    const vOdo = Number(selectedVehicleObj?.odometer || 0);
+    const logsOdo = purchaseLogs
+      .filter((l) => l.vehicle_id === form.vehicleId || (selectedVehicleObj?.number && l.vehicle === selectedVehicleObj.number))
+      .map((l) => Number(l.odometer || 0));
+    return Math.max(vOdo, ...logsOdo, 0);
+  })();
+
+  const isOdometerRollback = form.odometer > 0 && vehiclePrevOdometer > 0 && form.odometer < vehiclePrevOdometer;
 
   async function handleLogRefill(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.vehicleId || form.liters <= 0 || form.cost <= 0 || form.odometer < 0) return;
+    setFormError(null);
+
+    if (!form.vehicleId) {
+      setFormError("Please select a vehicle.");
+      return;
+    }
+    if (form.liters <= 0) {
+      setFormError("Fuel volume must be greater than 0 litres.");
+      return;
+    }
+    if (form.cost <= 0) {
+      setFormError("Total refill cost must be greater than ₹0.");
+      return;
+    }
+    if (form.odometer < 0) {
+      setFormError("Odometer reading cannot be negative.");
+      return;
+    }
+    if (vehiclePrevOdometer > 0 && form.odometer < vehiclePrevOdometer) {
+      setFormError(
+        `Odometer reading (${form.odometer.toLocaleString()} km) is lower than the vehicle's last recorded odometer (${vehiclePrevOdometer.toLocaleString()} km). Decreasing odometer readings make fuel mileage calculations invalid. Please verify physical reading.`
+      );
+      return;
+    }
+
     setSaving(true);
 
     try {
       const payload: any = {
         vehicle_id: form.vehicleId,
-        liters: form.liters,
-        cost: form.cost,
-        odometer: form.odometer,
-        is_full_tank: form.isFullTank
+        liters: Number(form.liters),
+        cost: Number(form.cost),
+        odometer: Math.round(Number(form.odometer)),
+        is_full_tank: Boolean(form.isFullTank)
       };
 
       const { error } = await supabase
@@ -53,11 +91,20 @@ function Page() {
         throw error;
       }
 
+      // Update vehicle physical odometer if entered reading is higher
+      if (form.odometer > Number(selectedVehicleObj?.odometer || 0)) {
+        await supabase
+          .from('vehicles')
+          .update({ odometer: Math.round(Number(form.odometer)) })
+          .eq('id', form.vehicleId);
+      }
+
       setShowLogModal(false);
       setForm({ vehicleId: "", liters: 0, cost: 0, odometer: 0, isFullTank: true });
-      load();
+      setFormError(null);
+      await load();
     } catch (err: any) {
-      alert("Failed to log fuel refill: " + err.message);
+      setFormError("Failed to save fuel refill: " + (err.message || "Database insert error"));
     } finally {
       setSaving(false);
     }
@@ -89,7 +136,7 @@ function Page() {
     const realEff = Object.values(analysis.vehicleMap)
       .filter(va => va.hasSufficientData && va.averageMileage !== null)
       .map(va => ({
-        vehicle: va.vehicleNumber ? va.vehicleNumber.split("-").slice(0, 2).join("-") : 'Unknown',
+        vehicle: va.vehicleNumber || 'Unknown',
         kmpl: va.averageMileage!
       }));
     setEff(realEff);
@@ -106,6 +153,7 @@ function Page() {
 
     const displayLogs = [...rawLogs].reverse().map(l => ({
       id: l.id,
+      vehicle_id: l.vehicle_id,
       vehicle: l.vehicles?.number || 'Unknown',
       driver: l.drivers?.name || 'Admin Log',
       liters: Number(l.liters || 0),
@@ -167,6 +215,11 @@ function Page() {
           <Card className="w-full max-w-md">
             <CardHeader title="Log Fuel Purchase" subtitle="Record manual fuel refill" />
             <form onSubmit={handleLogRefill} className="p-4 space-y-4">
+              {formError && (
+                <div className="p-2.5 bg-destructive/10 border border-destructive/20 rounded-md text-xs text-destructive font-medium">
+                  {formError}
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Select Vehicle *</label>
                 <select 
@@ -178,6 +231,11 @@ function Page() {
                   <option value="">Choose vehicle...</option>
                   {vehicles.map(v => <option key={v.id} value={v.id}>{v.number}</option>)}
                 </select>
+                {form.vehicleId && vehiclePrevOdometer > 0 && (
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Last recorded physical odometer: <span className="font-semibold text-foreground">{vehiclePrevOdometer.toLocaleString()} km</span>
+                  </p>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -215,6 +273,11 @@ function Page() {
                   placeholder="e.g. 10450"
                   required
                 />
+                {isOdometerRollback && (
+                  <div className="mt-1.5 p-2 rounded bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-600 dark:text-amber-400 font-medium leading-relaxed">
+                    ⚠️ Validation Notice: Entered odometer ({form.odometer.toLocaleString()} km) is lower than previous recorded reading ({vehiclePrevOdometer.toLocaleString()} km). Odometer rollbacks make mileage intervals invalid.
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2 pt-1">
                 <input 
@@ -229,7 +292,7 @@ function Page() {
                 </label>
               </div>
               <div className="flex gap-2 pt-2 border-t border-border">
-                <Button type="button" variant="outline" onClick={() => { setShowLogModal(false); setForm({ vehicleId: "", liters: 0, cost: 0, odometer: 0, isFullTank: true }); }} className="flex-1">Cancel</Button>
+                <Button type="button" variant="outline" onClick={() => { setShowLogModal(false); setForm({ vehicleId: "", liters: 0, cost: 0, odometer: 0, isFullTank: true }); setFormError(null); }} className="flex-1">Cancel</Button>
                 <Button type="submit" className="flex-1" disabled={saving}>
                   {saving ? <Loader2 className="animate-spin h-4 w-4" /> : "Save Refill"}
                 </Button>
@@ -246,27 +309,9 @@ function Page() {
         <Kpi label="Open Fuel Alerts" value={fuelAlerts.filter((a) => !a.resolved).length} accent="destructive" icon={<AlertTriangle className="h-5 w-5" />} hint={`${fuelAlerts.length} total`} />
       </div>
 
-      <div className="rounded-lg border border-info/40 bg-gradient-to-br from-info/5 to-primary/5 p-4 mt-4">
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-md bg-primary text-primary-foreground flex items-center justify-center"><Sparkles className="h-4 w-4" /></div>
-          <div className="font-medium">Fuel Efficiency Analysis</div>
-        </div>
-        <p className="text-sm mt-2 leading-relaxed">
-          {fleetAnalysis?.fleetAvgMileage !== null && fleetAnalysis?.fleetAvgMileage !== undefined ? (
-            <>
-              Evaluated fleet average is <span className="font-semibold text-primary">{fleetAnalysis.fleetAvgMileage} km/L</span> across {fleetAnalysis.vehiclesWithDataCount} vehicles with validated full-tank intervals.
-            </>
-          ) : (
-            <>
-              Mileage is calculated using the full-tank-to-full-tank methodology from manual refill records. Log at least two full-tank refills for a vehicle to calculate verified km/L efficiency.
-            </>
-          )}
-        </p>
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
         <Card>
-          <CardHeader title="Daily Consumption" subtitle="Litres consumed across the fleet" />
+          <CardHeader title="Daily Refills" subtitle="Litres refilled across the fleet (fuel added)" />
           <div className="p-3" style={{ height: 280 }}>
             {trend.length > 0 ? (
               <ResponsiveContainer>
@@ -274,7 +319,7 @@ function Page() {
                   <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
                   <XAxis dataKey="day" fontSize={12} />
                   <YAxis fontSize={12} />
-                  <Tooltip />
+                  <Tooltip formatter={(val: any) => [`${val} L`, "Fuel Refilled"]} />
                   <Bar dataKey="consumed" fill="oklch(0.45 0.15 255)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -286,7 +331,7 @@ function Page() {
           </div>
         </Card>
         <Card>
-          <CardHeader title="Fleet Mileage Trend" subtitle="km/L weekly" />
+          <CardHeader title="Fleet Mileage Trend" subtitle="km/L by interval completion date" />
           <div className="p-3" style={{ height: 280 }}>
             {trend.length > 0 ? (
               <ResponsiveContainer>
@@ -294,9 +339,21 @@ function Page() {
                   <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
                   <XAxis dataKey="day" fontSize={12} />
                   <YAxis fontSize={12} />
-                  <Tooltip />
+                  <Tooltip 
+                    formatter={(val: any) => [
+                      val !== null && val !== undefined ? `${val} km/L` : "No intervals completed", 
+                      "Interval Mileage"
+                    ]} 
+                  />
                   <Legend />
-                  <Line type="monotone" dataKey="mileage" stroke="oklch(0.62 0.18 150)" strokeWidth={2} />
+                  <Line 
+                    type="monotone" 
+                    dataKey="mileage" 
+                    name="Completed Interval Mileage (km/L)"
+                    stroke="oklch(0.62 0.18 150)" 
+                    strokeWidth={2} 
+                    connectNulls={false}
+                  />
                 </LineChart>
               </ResponsiveContainer>
             ) : (
@@ -316,8 +373,8 @@ function Page() {
               <BarChart data={eff} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.92 0.01 240)" />
                 <XAxis type="number" fontSize={12} />
-                <YAxis dataKey="vehicle" type="category" fontSize={12} width={80} />
-                <Tooltip />
+                <YAxis dataKey="vehicle" type="category" fontSize={12} width={110} />
+                <Tooltip formatter={(val: any) => [`${val} km/L`, "Average Mileage"]} />
                 <Bar dataKey="kmpl" fill="oklch(0.45 0.15 255)" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>

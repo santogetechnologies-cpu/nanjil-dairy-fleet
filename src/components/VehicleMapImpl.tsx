@@ -468,7 +468,7 @@ export default function VehicleMapImpl({
                   <div>
                     <div className="text-[10px] text-muted-foreground">Avg Speed</div>
                     <div className="font-semibold text-foreground">
-                      {active.averageSpeed != null ? `${active.averageSpeed.toFixed(1)} km/h` : "N/A"}
+                      {active.averageSpeed != null && active.averageSpeed > 0 ? `${active.averageSpeed.toFixed(1)} km/h` : "—"}
                     </div>
                   </div>
                   <div>

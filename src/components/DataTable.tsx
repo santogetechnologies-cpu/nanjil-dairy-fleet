@@ -61,7 +61,7 @@ export function DataTable<T>({
                     if (sortKey === c.key) setSortDir(sortDir === "asc" ? "desc" : "asc");
                     else { setSortKey(c.key); setSortDir("asc"); }
                   }}
-                  className={`px-4 py-2.5 font-medium cursor-pointer select-none ${c.className ?? ""}`}
+                  className={`px-3 py-2 font-medium cursor-pointer select-none ${c.className ?? ""}`}
                 >
                   {c.label}
                   {sortKey === c.key && (sortDir === "asc" ? " ▲" : " ▼")}
@@ -73,7 +73,7 @@ export function DataTable<T>({
             {slice.map((row, i) => (
               <tr key={i} className="border-t border-border hover:bg-muted/30 transition-colors">
                 {columns.map((c) => (
-                  <td key={c.key} className={`px-4 py-2.5 ${c.className ?? ""}`}>
+                  <td key={c.key} className={`px-3 py-2 ${c.className ?? ""}`}>
                     {c.render ? c.render(row) : String((row as any)[c.key] ?? "")}
                   </td>
                 ))}

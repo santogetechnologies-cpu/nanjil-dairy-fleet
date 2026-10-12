@@ -10,7 +10,7 @@
 import {
   GpsAverageSpeedTracker,
   haversineDistanceKm,
-} from "@/hooks/useAverageSpeed";
+} from "./gpsAverageSpeed";
 
 export interface DiagnosticStepResult {
   step: string;

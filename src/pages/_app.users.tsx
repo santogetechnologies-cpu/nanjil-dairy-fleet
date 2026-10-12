@@ -86,11 +86,7 @@ function Page() {
       admin: "Administrator",
       manager: "Fleet Manager",
       driver: "Driver",
-      operations: "Operations",
-      supervisor: "Supervisor",
-      qa: "QA",
-      logistics: "Logistics",
-      accounts: "Accounts"
+      operations: "Operations"
     };
 
     const profileRows: UserRow[] = (profileData || []).map(u => ({
@@ -215,11 +211,7 @@ function Page() {
       "Administrator": "admin",
       "Fleet Manager": "manager",
       "Driver": "driver",
-      "Operations": "operations",
-      "Supervisor": "supervisor",
-      "QA": "qa",
-      "Logistics": "logistics",
-      "Accounts": "accounts"
+      "Operations": "operations"
     };
     const roleVal = roleMapping[form.role] || "driver";
 
@@ -227,77 +219,181 @@ function Page() {
       // ── DRIVER FLOW ──
       if (roleVal === "driver") {
         const phoneVal = form.phone.trim();
+        const cleanName = form.name.trim();
         if (!phoneVal) {
           setSubmitError("Please enter a phone number for the driver.");
           setLoading(false);
           return;
         }
 
-        // Check if driver with this name already exists
-        const { data: existingDriver } = await supabase
+        const driverEmail = `${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '')}@nanjilmilk.com`;
+
+        // 1. Check existing drivers by name (using an array fetch to safely handle any legacy duplicates)
+        const { data: matchingDrivers } = await supabase
           .from('drivers')
-          .select('id')
-          .ilike('name', form.name)
-          .maybeSingle();
+          .select('id, name, phone, profile_id')
+          .ilike('name', cleanName);
 
-        let driverId: string | null = existingDriver?.id || null;
+        // Prefer driver row that already has a profile_id assigned
+        const alreadyLinkedDriver = matchingDrivers?.find(d => d.profile_id);
+        let driverId: string | null = alreadyLinkedDriver?.id || matchingDrivers?.[0]?.id || null;
 
-        if (existingDriver) {
-          // Update phone on existing record
+        if (driverId) {
+          // Update phone on existing driver record
           const { error: updErr } = await supabase
             .from('drivers')
-            .update({ phone: phoneVal })
-            .eq('id', existingDriver.id);
+            .update({ phone: phoneVal, name: cleanName })
+            .eq('id', driverId);
           if (updErr) throw new Error(`Failed to update driver: ${updErr.message}`);
         } else {
           // Insert new driver record
           const { data: newDrv, error: insErr } = await supabase
             .from('drivers')
-            .insert({ name: form.name, phone: phoneVal })
+            .insert({ name: cleanName, phone: phoneVal })
             .select('id')
             .maybeSingle();
           if (insErr) throw new Error(`Failed to create driver: ${insErr.message}`);
           driverId = newDrv?.id || null;
         }
 
-        // If a password was provided, also create/link an auth account for the driver
+        // 2. If a password was provided (>= 8 chars), create or sync auth account for the driver
         if (form.password.length >= 8 && driverId) {
-          const driverEmail = `${form.name.toLowerCase().replace(/[^a-z0-9]/g, '')}@nanjilmilk.com`;
+          let profileId: string | null = alreadyLinkedDriver?.profile_id || null;
 
-          let profileId: string | null = null;
-
-          // Try signup first
-          const { data: signUpRes, error: signUpErr } = await tempClient.auth.signUp({
-            email: driverEmail,
-            password: form.password,
-            options: { data: { name: form.name, role: 'driver' } }
-          });
-
-          if (!signUpErr && signUpRes?.user) {
-            profileId = signUpRes.user.id;
-          } else if (signUpErr || (signUpRes?.user === null)) {
-            // 422 = email already registered — try signing in to get the existing user ID
-            const { data: signInRes, error: signInErr } = await tempClient.auth.signInWithPassword({
-              email: driverEmail,
-              password: form.password,
-            });
-            if (!signInErr && signInRes?.user) {
-              profileId = signInRes.user.id;
+          // Check if profile exists by email
+          if (!profileId) {
+            const { data: profsByEmail } = await supabase
+              .from('profiles')
+              .select('id')
+              .ilike('email', driverEmail);
+            if (profsByEmail && profsByEmail.length > 0) {
+              profileId = profsByEmail[0].id;
             }
-            // If signIn also fails, skip auth account (driver still saved by phone)
           }
 
+          // Check if profile exists by name
+          if (!profileId) {
+            const { data: profsByName } = await supabase
+              .from('profiles')
+              .select('id')
+              .ilike('name', cleanName);
+            if (profsByName && profsByName.length > 0) {
+              profileId = profsByName[0].id;
+            }
+          }
+
+          let authProvisioned = false;
+
+          // 3. If an existing profile/auth ID is already found, update password directly via admin RPC
+          if (profileId) {
+            const { error: resetErr } = await supabase.rpc("admin_reset_user_password", {
+              user_id: profileId,
+              new_password: form.password
+            });
+            if (!resetErr) {
+              authProvisioned = true;
+            }
+          }
+
+          // 4. If account doesn't exist yet, sign up via tempClient
+          if (!authProvisioned) {
+            const { data: signUpRes, error: signUpErr } = await tempClient.auth.signUp({
+              email: driverEmail,
+              password: form.password,
+              options: { data: { name: cleanName, role: 'driver' } }
+            });
+
+            if (!signUpErr && signUpRes?.user) {
+              profileId = signUpRes.user.id;
+              authProvisioned = true;
+            } else if (signUpErr) {
+              const isAlreadyRegistered =
+                signUpErr.status === 422 ||
+                signUpErr.message?.toLowerCase().includes("already registered");
+
+              if (isAlreadyRegistered) {
+                // Email exists as orphan in auth.users: delete orphan and recreate cleanly with new password
+                try {
+                  await supabase.rpc('admin_delete_user_by_email', { target_email: driverEmail });
+                } catch (e) {
+                  // ignore
+                }
+
+                const retry = await tempClient.auth.signUp({
+                  email: driverEmail,
+                  password: form.password,
+                  options: { data: { name: cleanName, role: 'driver' } }
+                });
+
+                if (retry.data?.user) {
+                  profileId = retry.data.user.id;
+                  authProvisioned = true;
+                } else {
+                  throw new Error(retry.error?.message || "Failed to provision driver login credentials.");
+                }
+              } else {
+                throw new Error(`Failed to create driver login: ${signUpErr.message}`);
+              }
+            }
+          }
+
+          // 5. Ensure profile and drivers table are fully linked and active
           if (profileId) {
             await supabase.from('profiles').upsert({
-              id: profileId, name: form.name, email: driverEmail,
-              role: 'driver', status: 'Active', created_at: new Date().toISOString()
-            });
-            await supabase.from('drivers').update({ profile_id: profileId }).eq('id', driverId);
+              id: profileId,
+              name: cleanName,
+              email: driverEmail,
+              role: 'driver',
+              status: 'Active',
+              created_at: new Date().toISOString()
+            }, { onConflict: 'id' });
+
+            // Check if any driver record in public.drivers already holds this profile_id (e.g. via trigger)
+            const { data: drvWithProfile } = await supabase
+              .from('drivers')
+              .select('id')
+              .eq('profile_id', profileId);
+
+            const linkedId = drvWithProfile?.[0]?.id;
+
+            if (linkedId) {
+              // Row is already attached to this profile_id; update phone & name on it
+              await supabase
+                .from('drivers')
+                .update({ name: cleanName, phone: phoneVal })
+                .eq('id', linkedId);
+
+              // Deduplicate any other unlinked duplicate driver rows
+              if (matchingDrivers) {
+                for (const md of matchingDrivers) {
+                  if (md.id !== linkedId && !md.profile_id) {
+                    try {
+                      await supabase.from('drivers').delete().eq('id', md.id);
+                    } catch (e) {
+                      // ignore
+                    }
+                  }
+                }
+              }
+            } else if (driverId) {
+              // No row holds this profile_id yet; attach to driverId
+              const { error: updErr } = await supabase
+                .from('drivers')
+                .update({ profile_id: profileId, phone: phoneVal, name: cleanName })
+                .eq('id', driverId);
+
+              if (updErr && updErr.code === '23505') {
+                // If a concurrent trigger or constraint conflict occurs, update by profile_id instead
+                await supabase
+                  .from('drivers')
+                  .update({ name: cleanName, phone: phoneVal })
+                  .eq('profile_id', profileId);
+              }
+            }
           }
         }
 
-
-        setToast({ show: true, message: "Driver added successfully." });
+        setToast({ show: true, message: form.password ? "Driver & login credentials saved successfully." : "Driver added successfully." });
         setShowNew(false);
         setForm({ name: "", email: "", role: "Driver", password: "", phone: "" });
         loadUsers();
@@ -469,52 +565,126 @@ function Page() {
     setResetError("");
 
     try {
-      const rawId = selectedUser.id.startsWith("driver-")
-        ? selectedUser.id.replace("driver-", "")
-        : selectedUser.id;
-
       const cleanEmail = selectedUser.email.includes("@")
         ? selectedUser.email.toLowerCase().trim()
         : `${selectedUser.name.toLowerCase().replace(/[^a-z0-9]/g, "")}@nanjilmilk.com`;
 
-      // 1. Reset password via admin RPC if user already has an auth account
-      await supabase.rpc("admin_reset_user_password", {
-        user_id: rawId,
-        new_password: newPwd
-      });
+      let targetAuthId: string | null = null;
+      let driverDbId: string | null = null;
 
-      // 2. Also check if a profile exists by email to update password by profile user_id
-      const { data: profByEmail } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('email', cleanEmail)
-        .maybeSingle();
-
-      if (profByEmail?.id && profByEmail.id !== rawId) {
-        await supabase.rpc("admin_reset_user_password", {
-          user_id: profByEmail.id,
-          new_password: newPwd
-        });
+      if (selectedUser.id.startsWith("driver-")) {
+        driverDbId = selectedUser.id.replace("driver-", "");
+        const { data: drv } = await supabase
+          .from('drivers')
+          .select('id, profile_id')
+          .eq('id', driverDbId)
+          .maybeSingle();
+        targetAuthId = drv?.profile_id || null;
+      } else {
+        targetAuthId = selectedUser.id;
       }
 
-      // 3. If no auth user exists yet, create one via tempClient signup
-      const { data: signUpRes, error: signUpErr } = await tempClient.auth.signUp({
-        email: cleanEmail,
-        password: newPwd,
-        options: { data: { name: selectedUser.name, role: 'driver' } }
-      });
+      // Check profiles if targetAuthId is still not found
+      if (!targetAuthId) {
+        const { data: profsByEmail } = await supabase
+          .from('profiles')
+          .select('id')
+          .ilike('email', cleanEmail);
+        if (profsByEmail && profsByEmail.length > 0) {
+          targetAuthId = profsByEmail[0].id;
+        }
+      }
+      if (!targetAuthId) {
+        const { data: profsByName } = await supabase
+          .from('profiles')
+          .select('id')
+          .ilike('name', selectedUser.name.trim());
+        if (profsByName && profsByName.length > 0) {
+          targetAuthId = profsByName[0].id;
+        }
+      }
 
-      if (!signUpErr && signUpRes?.user) {
-        const newAuthId = signUpRes.user.id;
+      let resetSuccess = false;
+
+      // 1. Reset password via admin RPC if user ID is known
+      if (targetAuthId) {
+        const { error: resetErr } = await supabase.rpc("admin_reset_user_password", {
+          user_id: targetAuthId,
+          new_password: newPwd
+        });
+        if (!resetErr) {
+          resetSuccess = true;
+        }
+      }
+
+      // 2. If user doesn't have an auth account yet, create one via tempClient
+      if (!resetSuccess) {
+        const userRole = selectedUser.role.toLowerCase() === "driver" ? "driver" : selectedUser.role.toLowerCase();
+        const { data: signUpRes, error: signUpErr } = await tempClient.auth.signUp({
+          email: cleanEmail,
+          password: newPwd,
+          options: { data: { name: selectedUser.name, role: userRole } }
+        });
+
+        if (!signUpErr && signUpRes?.user) {
+          targetAuthId = signUpRes.user.id;
+          resetSuccess = true;
+        } else if (signUpErr) {
+          const isAlreadyRegistered =
+            signUpErr.status === 422 ||
+            signUpErr.message?.toLowerCase().includes("already registered");
+
+          if (isAlreadyRegistered) {
+            try {
+              await supabase.rpc('admin_delete_user_by_email', { target_email: cleanEmail });
+            } catch (e) {
+              // ignore
+            }
+            const retry = await tempClient.auth.signUp({
+              email: cleanEmail,
+              password: newPwd,
+              options: { data: { name: selectedUser.name, role: userRole } }
+            });
+            if (retry.data?.user) {
+              targetAuthId = retry.data.user.id;
+              resetSuccess = true;
+            } else {
+              throw new Error(retry.error?.message || "Failed to reset password.");
+            }
+          } else {
+            throw new Error(`Failed to reset password: ${signUpErr.message}`);
+          }
+        }
+      }
+
+      // 3. Ensure profile and driver record are synced
+      if (targetAuthId) {
+        const roleName = selectedUser.role.toLowerCase() === "driver" ? "driver" : selectedUser.role.toLowerCase();
         await supabase.from('profiles').upsert({
-          id: newAuthId,
+          id: targetAuthId,
           name: selectedUser.name,
           email: cleanEmail,
-          role: 'driver',
+          role: roleName,
           status: selectedUser.status || 'Active',
           created_at: new Date().toISOString()
-        });
-        await supabase.from('drivers').update({ profile_id: newAuthId }).eq('id', rawId);
+        }, { onConflict: 'id' });
+
+        const { data: drvWithProfile } = await supabase
+          .from('drivers')
+          .select('id')
+          .eq('profile_id', targetAuthId);
+
+        if (drvWithProfile && drvWithProfile.length > 0) {
+          await supabase.from('drivers').update({ name: selectedUser.name }).eq('id', drvWithProfile[0].id);
+        } else if (driverDbId) {
+          const { error: updErr } = await supabase
+            .from('drivers')
+            .update({ profile_id: targetAuthId })
+            .eq('id', driverDbId);
+          if (updErr && updErr.code === '23505') {
+            await supabase.from('drivers').update({ name: selectedUser.name }).eq('profile_id', targetAuthId);
+          }
+        }
       }
 
       setToast({ show: true, message: `Password for ${selectedUser.name} reset successfully.` });
@@ -548,8 +718,23 @@ function Page() {
     try {
       if (id.startsWith("driver-")) {
         const driverId = id.replace("driver-", "");
+        const { data: drv } = await supabase
+          .from('drivers')
+          .select('id, name, profile_id')
+          .eq('id', driverId)
+          .maybeSingle();
+
+        if (drv?.profile_id) {
+          await supabase.rpc('admin_delete_user', { target_user_id: drv.profile_id });
+        }
+        if (drv?.name) {
+          const email = `${drv.name.toLowerCase().replace(/[^a-z0-9]/g, "")}@nanjilmilk.com`;
+          await supabase.rpc('admin_delete_user_by_email', { target_email: email });
+        }
         await supabase.from('drivers').delete().eq('id', driverId);
-        await supabase.from('profiles').delete().eq('id', driverId);
+        if (drv?.profile_id) {
+          await supabase.from('profiles').delete().eq('id', drv.profile_id);
+        }
       } else {
         const { error: rpcErr } = await supabase.rpc('admin_delete_user', { target_user_id: id });
         if (rpcErr) {
@@ -697,14 +882,14 @@ function Page() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Password <span className="text-muted-foreground/50 font-normal normal-case">(optional)</span></label>
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Password <span className="text-muted-foreground/50 font-normal normal-case">(min 8 characters for login)</span></label>
                     <div className="relative mt-1">
                       <input 
                         type={showPassword ? "text" : "password"} 
                         disabled={loading}
                         value={form.password} 
                         onChange={(e) => handlePasswordChange(e.target.value)}
-                        placeholder="Min. 8 characters — leave blank for phone-only login"
+                        placeholder="Min. 8 characters to enable driver login"
                         className="h-10 w-full pl-3 pr-10 border border-border rounded-md bg-card text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50" 
                       />
                       <button 
@@ -719,7 +904,7 @@ function Page() {
                     {pwdError && (
                       <p className="text-xs text-destructive mt-1 font-medium">{pwdError}</p>
                     )}
-                    <p className="text-[11px] text-muted-foreground/70 mt-1">If set, driver can also log in with password via Staff tab.</p>
+                    <p className="text-[11px] text-muted-foreground/70 mt-1">Driver logs in at the login screen using their Phone Number (or Name) and this Password.</p>
                   </div>
                 </>
               ) : (
@@ -777,10 +962,6 @@ function Page() {
                   <option>Fleet Manager</option>
                   <option>Driver</option>
                   <option>Operations</option>
-                  <option>Supervisor</option>
-                  <option>QA</option>
-                  <option>Logistics</option>
-                  <option>Accounts</option>
                 </select>
               </div>
 
