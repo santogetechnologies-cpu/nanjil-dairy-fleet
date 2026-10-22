@@ -1,11 +1,12 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { supabase } from "./supabase";
 
-export type Role = "admin" | "manager" | "driver";
+export type Role = "admin" | "manager" | "driver" | "operations";
 
 export const REDIRECT_MAP: Record<Role, string> = {
   admin: "/dashboard",
   manager: "/dashboard",
+  operations: "/dashboard",
   driver: "/driver",
 };
 
@@ -51,7 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Auto-heal missing profile row using metadata or defaults
       const metaName = userMetadata?.name || email.split("@")[0] || "User";
       const rawRole = userMetadata?.role || (email.toLowerCase().includes("admin") ? "admin" : "driver");
-      const validRoles = ["admin", "manager", "driver", "operations", "supervisor", "qa", "logistics", "accounts"];
+      const validRoles = ["admin", "manager", "driver", "operations"];
       const metaRole = validRoles.includes(rawRole) ? rawRole : "driver";
 
       const { data: newProfile, error: createErr } = await supabase

@@ -5,7 +5,7 @@ import {
   LayoutDashboard, MapPin, Truck, Route as RouteIcon, Fuel,
   ShieldCheck, Cog, Bell, Wrench, Sparkles,
   Users, Settings, LogOut, Search, Menu, X, ChevronDown, UserCircle2,
-  ChevronRight,
+  ChevronRight, LayoutGrid,
 } from "lucide-react";
 import { useState, useEffect, type ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
@@ -21,7 +21,8 @@ const NAV_GROUPS = [
   {
     label: "Operations",
     items: [
-      { to: "/vehicles", label: "Vehicles", icon: Truck },
+      { to: "/vehicles", label: "Vehicles Management", icon: Truck },
+      { to: "/vehicles-management", label: "Vehicles", icon: LayoutGrid },
       { to: "/trips", label: "Trips & Routes", icon: RouteIcon },
       { to: "/fuel", label: "Fuel Intelligence", icon: Fuel },
     ],

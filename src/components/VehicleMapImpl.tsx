@@ -68,16 +68,20 @@ export default function VehicleMapImpl({
     }
   }, [selectedId, vehicles]);
 
-  // Only show vehicles that have actual valid numeric GPS coordinates
+  // Only show vehicles that have actual valid numeric GPS coordinates within geographic bounds
   const mappedVehicles = useMemo(() => {
     return vehicles.filter(
       (v) =>
         v.lat != null &&
         typeof v.lat === "number" &&
         !isNaN(v.lat) &&
+        v.lat >= -90 &&
+        v.lat <= 90 &&
         v.lng != null &&
         typeof v.lng === "number" &&
         !isNaN(v.lng) &&
+        v.lng >= -180 &&
+        v.lng <= 180 &&
         (v.lat !== 0 || v.lng !== 0),
     );
   }, [vehicles]);
@@ -386,7 +390,14 @@ export default function VehicleMapImpl({
           );
         })}
 
-        {active && (() => {
+        {active &&
+          typeof active.lat === "number" &&
+          active.lat >= -90 &&
+          active.lat <= 90 &&
+          typeof active.lng === "number" &&
+          active.lng >= -180 &&
+          active.lng <= 180 &&
+          (() => {
           const activeOverspeed = getOverspeedStatus(active.speed);
           return (
             <Popup
@@ -468,7 +479,7 @@ export default function VehicleMapImpl({
                   <div>
                     <div className="text-[10px] text-muted-foreground">Avg Speed</div>
                     <div className="font-semibold text-foreground">
-                      {active.averageSpeed != null ? `${active.averageSpeed.toFixed(1)} km/h` : "N/A"}
+                      {active.averageSpeed != null && active.averageSpeed > 0 ? `${active.averageSpeed.toFixed(1)} km/h` : "—"}
                     </div>
                   </div>
                   <div>

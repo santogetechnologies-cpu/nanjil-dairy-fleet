@@ -34,7 +34,8 @@ function DriverPage() {
   const [shiftHistory, setShiftHistory] = useState<any[]>([]);
 
   // Fuel logging states
-  const [fuelForm, setFuelForm] = useState({ liters: 0, cost: 0, odometer: 0 });
+  const [fuelForm, setFuelForm] = useState({ liters: 0, cost: 0, odometer: 0, isFullTank: true });
+  const [driverFuelError, setDriverFuelError] = useState<string | null>(null);
   const [submittingFuel, setSubmittingFuel] = useState(false);
 
   // Pre-Trip Inspection states
@@ -90,20 +91,67 @@ function DriverPage() {
 
   async function handleLogFuelDriver(e: React.FormEvent) {
     e.preventDefault();
-    if (!vehicle?.id || !driver?.id || fuelForm.liters <= 0 || fuelForm.cost <= 0 || fuelForm.odometer < 0) return;
+    setDriverFuelError(null);
+
+    if (!vehicle?.id || !driver?.id) {
+      setDriverFuelError("Vehicle or driver not assigned.");
+      return;
+    }
+    if (fuelForm.liters <= 0) {
+      setDriverFuelError("Fuel volume must be greater than 0 litres.");
+      return;
+    }
+    if (fuelForm.cost <= 0) {
+      setDriverFuelError("Total cost must be greater than ₹0.");
+      return;
+    }
+    if (fuelForm.odometer < 0) {
+      setDriverFuelError("Odometer reading cannot be negative.");
+      return;
+    }
+
+    const currentVehicleOdo = Number(vehicle.odometer || 0);
+    if (currentVehicleOdo > 0 && fuelForm.odometer < currentVehicleOdo) {
+      setDriverFuelError(
+        `Odometer reading (${fuelForm.odometer.toLocaleString()} km) is lower than vehicle's current odometer (${currentVehicleOdo.toLocaleString()} km). Decreasing odometer readings make fuel mileage calculations invalid. Please verify physical reading.`
+      );
+      return;
+    }
+
     setSubmittingFuel(true);
     try {
-      const { error } = await supabase.from('fuel_purchase_logs').insert({
+      const payload: any = {
         vehicle_id: vehicle.id,
         driver_id: driver.id,
-        liters: fuelForm.liters,
-        cost: fuelForm.cost,
-        odometer: fuelForm.odometer,
-      });
-      if (error) throw error;
+        liters: Number(fuelForm.liters),
+        cost: Number(fuelForm.cost),
+        odometer: Math.round(Number(fuelForm.odometer)),
+        is_full_tank: Boolean(fuelForm.isFullTank),
+      };
+
+      const { error } = await supabase.from('fuel_purchase_logs').insert(payload);
+      if (error && error.message?.includes('is_full_tank')) {
+        delete payload.is_full_tank;
+        const { error: retryError } = await supabase.from('fuel_purchase_logs').insert(payload);
+        if (retryError) throw retryError;
+      } else if (error) {
+        throw error;
+      }
+
+      // Update vehicle physical odometer if entered reading is higher
+      if (fuelForm.odometer > currentVehicleOdo) {
+        await supabase
+          .from('vehicles')
+          .update({ odometer: Math.round(Number(fuelForm.odometer)) })
+          .eq('id', vehicle.id);
+      }
+
       alert("Fuel refill logged successfully!");
-      setFuelForm({ liters: 0, cost: 0, odometer: 0 });
+      setFuelForm({ liters: 0, cost: 0, odometer: 0, isFullTank: true });
+      setDriverFuelError(null);
+      load();
     } catch (err: any) {
+      setDriverFuelError("Failed to log fuel: " + err.message);
       alert("Failed to log fuel: " + err.message);
     } finally {
       setSubmittingFuel(false);
@@ -696,6 +744,11 @@ function DriverPage() {
           </div>
 
           <form onSubmit={handleLogFuelDriver} className="space-y-4">
+            {driverFuelError && (
+              <div className="p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive font-medium leading-relaxed">
+                {driverFuelError}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">Liters *</label>
@@ -719,7 +772,12 @@ function DriverPage() {
               </div>
             </div>
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">Odometer (km) *</label>
+              <div className="flex justify-between items-center mb-2">
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Odometer (km) *</label>
+                {vehicle?.odometer ? (
+                  <span className="text-[10px] text-muted-foreground">Current: {Number(vehicle.odometer).toLocaleString()} km</span>
+                ) : null}
+              </div>
               <input
                 type="number" required
                 className="w-full h-12 px-4 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/60"
@@ -727,11 +785,28 @@ function DriverPage() {
                 onChange={(e) => setFuelForm({ ...fuelForm, odometer: Number(e.target.value) })}
                 placeholder="e.g. 10250"
               />
+              {vehicle?.odometer && fuelForm.odometer > 0 && fuelForm.odometer < vehicle.odometer && (
+                <div className="mt-1.5 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-600 dark:text-amber-400 font-medium leading-relaxed">
+                  ⚠️ Warning: Entered odometer ({fuelForm.odometer.toLocaleString()} km) is lower than current vehicle odometer ({Number(vehicle.odometer).toLocaleString()} km).
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-2.5 p-3 rounded-xl border border-border bg-muted/30">
+              <input 
+                type="checkbox" 
+                id="driverIsFullTank"
+                checked={fuelForm.isFullTank}
+                onChange={(e) => setFuelForm({ ...fuelForm, isFullTank: e.target.checked })}
+                className="h-4 w-4 rounded border-border text-primary focus:ring-primary cursor-pointer"
+              />
+              <label htmlFor="driverIsFullTank" className="text-xs font-semibold text-foreground cursor-pointer select-none">
+                Full Tank Refuel (Complete fill to auto-calculate mileage)
+              </label>
             </div>
             <button
               type="submit"
               disabled={submittingFuel || !vehicle?.id}
-              className="w-full h-12 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all hover:-translate-y-0.5 disabled:opacity-50 disabled:pointer-events-none"
+              className="w-full h-12 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all hover:-translate-y-0.5 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
               style={{ background: "linear-gradient(135deg, oklch(0.44 0.22 264), oklch(0.36 0.18 258))" }}
             >
               {submittingFuel ? <Loader2 className="animate-spin h-4 w-4" /> : <><Droplets className="h-4 w-4" /> Save Refuel Log</>}

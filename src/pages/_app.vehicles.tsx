@@ -398,7 +398,7 @@ function VehiclesPage() {
   return (
     <div>
       <PageHeader
-        title="Vehicles"
+        title="Vehicles Management"
         subtitle={`${vehicles.length} vehicles in the fleet`}
         actions={
           canAdd && (

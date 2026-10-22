@@ -88,7 +88,7 @@ const ACCENT_CONFIG: Record<string, { icon: string; value: string; hint: string 
 };
 
 export function Kpi({
-  label, value, hint, accent = "primary", icon, to, onClick, active,
+  label, value, hint, accent = "primary", icon, to, onClick, active = false, className = "",
 }: {
   label: string;
   value: ReactNode;
@@ -98,13 +98,30 @@ export function Kpi({
   to?: string;
   onClick?: () => void;
   active?: boolean;
+  className?: string;
 }) {
   const cfg = ACCENT_CONFIG[accent];
+
+  const activeClass = active
+    ? accent === "success"
+      ? "ring-2 ring-emerald-500 border-emerald-500/80 bg-emerald-500/[0.04] shadow-md shadow-emerald-500/10"
+      : accent === "warning"
+      ? "ring-2 ring-amber-500 border-amber-500/80 bg-amber-500/[0.04] shadow-md shadow-amber-500/10"
+      : accent === "destructive"
+      ? "ring-2 ring-red-500 border-red-500/80 bg-red-500/[0.04] shadow-md shadow-red-500/10"
+      : accent === "info"
+      ? "ring-2 ring-sky-500 border-sky-500/80 bg-sky-500/[0.04] shadow-md shadow-sky-500/10"
+      : "ring-2 ring-primary border-primary/80 bg-primary/[0.04] shadow-md shadow-primary/10"
+    : "";
+
   const content = (
-    <div className="flex items-start justify-between gap-3">
+    <div className="flex items-start justify-between gap-3 text-left w-full">
       <div className="flex-1 min-w-0">
-        <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-widest mb-2">
-          {label}
+        <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-widest mb-2 flex items-center gap-1.5">
+          <span>{label}</span>
+          {active && (
+            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+          )}
         </div>
         <div className={`text-2xl font-bold tracking-tight ${cfg.value}`}>{value}</div>
         {hint && <div className={`text-xs mt-1.5 ${cfg.hint}`}>{hint}</div>}
@@ -119,7 +136,7 @@ export function Kpi({
 
   if (to) {
     return (
-      <Link to={to} className="kpi-card kpi-card-hover block cursor-pointer select-none no-underline">
+      <Link to={to} className={`kpi-card kpi-card-hover block cursor-pointer select-none no-underline ${activeClass} ${className || ""}`}>
         {content}
       </Link>
     );
@@ -127,29 +144,18 @@ export function Kpi({
 
   if (onClick) {
     return (
-      <div
-        role="button"
-        tabIndex={0}
+      <button
+        type="button"
         onClick={onClick}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onClick();
-          }
-        }}
-        className={`kpi-card kpi-card-hover cursor-pointer select-none text-left transition-all ${
-          active
-            ? "ring-2 ring-primary ring-offset-2 shadow-md bg-primary/5 dark:bg-primary/10"
-            : ""
-        }`}
+        className={`kpi-card kpi-card-hover text-left block w-full cursor-pointer select-none transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${activeClass} ${className || ""}`}
       >
         {content}
-      </div>
+      </button>
     );
   }
 
   return (
-    <div className="kpi-card kpi-card-hover">
+    <div className={`kpi-card kpi-card-hover ${activeClass} ${className}`}>
       {content}
     </div>
   );
