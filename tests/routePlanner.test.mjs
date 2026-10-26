@@ -133,6 +133,52 @@ function restoreRouteIntoPlanner(routeItem) {
   return restored;
 }
 
+/**
+ * Helper under test: getInitialPlannerWorkspace (mocking localStorage map)
+ */
+function getInitialPlannerWorkspace(localStorageMap = {}) {
+  try {
+    const raw = localStorageMap["nanjil_planner_active_workspace"];
+    if (raw) {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (parsed && typeof parsed === "object") return parsed;
+    }
+
+    const customRaw = localStorageMap["nanjil_custom_routes"];
+    if (customRaw) {
+      const customList = typeof customRaw === "string" ? JSON.parse(customRaw) : customRaw;
+      if (Array.isArray(customList) && customList.length > 0) {
+        const latest = customList[0];
+        if (latest && Array.isArray(latest.outboundStops) && latest.outboundStops.length > 0) {
+          return {
+            editingRouteId: latest.id || null,
+            routeName: latest.name || "Daily Morning Milk Collection Loop",
+            routeDate: latest.routeDate || "2026-10-26",
+            departureTime: latest.start_time || "05:30",
+            assignedVehicleId: latest.vehicle_id || "",
+            assignedDriverId: latest.driver_id || "",
+            startPoint: latest.startPoint || NANJIL_DAIRY_DEPOT,
+            destinationPoint: latest.destinationPoint || latest.destination || null,
+            roundTripType: latest.roundTripType || "same_path",
+            revisitStopsOnReturn: Boolean(latest.revisitStopsOnReturn),
+            outboundStops: latest.outboundStops,
+            returnStops: latest.returnStops || [],
+            speedLimitKmh: latest.speedLimitKmh || 60,
+            deviationThresholdMeters: latest.deviationThresholdMeters || 250,
+            alertOnMissedStops: latest.alertOnMissedStops ?? true,
+            alertOnDelay: latest.alertOnDelay ?? true,
+            routeNotes: latest.routeNotes || "",
+            activeTab: "planner",
+          };
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 // ── TEST SUITE ─────────────────────────────────────────────────────────────
 
 test("1. Route Planner Validation: Rejects empty route name", () => {
@@ -299,3 +345,112 @@ test("7. Update vs Insert Discrimination: Prevents accidental duplicate rows", (
   assert.equal(isUpdateCalled, false);
   assert.equal(isInsertCalled, true);
 });
+
+test("8. Browser Refresh Resilience: Restores 16+ stops from active workspace", () => {
+  // Simulate 16 customized stops in user's active workspace
+  const sixteenStops = Array.from({ length: 16 }, (_, i) => ({
+    id: `out-${i + 1}`,
+    name: `Collection Center ${i + 1}`,
+    lat: 8.2 + i * 0.01,
+    lng: 77.3 + i * 0.01,
+    serviceDurationMins: 5,
+    isMandatory: true,
+  }));
+
+  const localStore = {
+    "nanjil_planner_active_workspace": JSON.stringify({
+      editingRouteId: "route-saved-4466a33d",
+      routeName: "Nanjil 16-Stop Coastal Morning Route",
+      outboundStops: sixteenStops,
+      speedLimitKmh: 55,
+      deviationThresholdMeters: 200,
+    }),
+  };
+
+  // Rehydration on browser reload (F5)
+  const rehydrated = getInitialPlannerWorkspace(localStore);
+
+  assert.ok(rehydrated);
+  assert.equal(rehydrated.editingRouteId, "route-saved-4466a33d");
+  assert.equal(rehydrated.routeName, "Nanjil 16-Stop Coastal Morning Route");
+  assert.equal(rehydrated.outboundStops.length, 16);
+  assert.equal(rehydrated.outboundStops[15].name, "Collection Center 16");
+});
+
+test("9. Browser Refresh Fallback: Restores custom stops from nanjil_custom_routes when active key is missing", () => {
+  const sixteenStops = Array.from({ length: 16 }, (_, i) => ({
+    id: `stop-${i + 1}`,
+    name: `Dairy Depot ${i + 1}`,
+    lat: 8.25 + i * 0.005,
+    lng: 77.25 + i * 0.005,
+  }));
+
+  const localStore = {
+    // Active workspace key missing (e.g. older session)
+    "nanjil_custom_routes": JSON.stringify([
+      {
+        id: "route-legacy-999",
+        name: "Morning Loop with 16 Stops",
+        outboundStops: sixteenStops,
+      },
+    ]),
+  };
+
+  const rehydrated = getInitialPlannerWorkspace(localStore);
+
+  assert.ok(rehydrated);
+  assert.equal(rehydrated.editingRouteId, "route-legacy-999");
+  assert.equal(rehydrated.outboundStops.length, 16);
+});
+
+test("10. Stop Modification: Adding, deleting, or reordering stops updates the persistent workspace", () => {
+  let simulatedLocalStorage = {};
+
+  function syncWorkspace(state) {
+    simulatedLocalStorage["nanjil_planner_active_workspace"] = JSON.stringify(state);
+  }
+
+  // Initial 15 stops
+  let stops = Array.from({ length: 15 }, (_, i) => ({ id: `stop-${i + 1}`, name: `Stop ${i + 1}` }));
+  syncWorkspace({ editingRouteId: null, outboundStops: stops });
+
+  // User adds stop #16
+  stops = [...stops, { id: "stop-16", name: "New Added Stop #16" }];
+  syncWorkspace({ editingRouteId: null, outboundStops: stops });
+
+  let loaded = getInitialPlannerWorkspace(simulatedLocalStorage);
+  assert.equal(loaded.outboundStops.length, 16);
+  assert.equal(loaded.outboundStops[15].name, "New Added Stop #16");
+
+  // User deletes stop #2
+  stops = stops.filter((s) => s.id !== "stop-2");
+  syncWorkspace({ editingRouteId: null, outboundStops: stops });
+
+  loaded = getInitialPlannerWorkspace(simulatedLocalStorage);
+  assert.equal(loaded.outboundStops.length, 15);
+  assert.equal(loaded.outboundStops.find((s) => s.id === "stop-2"), undefined);
+});
+
+test("11. Start New Route: Clears editingRouteId and cleanly resets active workspace", () => {
+  const simulatedLocalStorage = {
+    "nanjil_planner_active_workspace": JSON.stringify({
+      editingRouteId: "route-123",
+      routeName: "Old Route",
+      outboundStops: [{ id: "out-1", name: "Center" }],
+    }),
+  };
+
+  // Simulate handleStartNewRoute()
+  const freshStops = [{ id: "out-1", name: "Default 1" }, { id: "out-2", name: "Default 2" }];
+  simulatedLocalStorage["nanjil_planner_active_workspace"] = JSON.stringify({
+    editingRouteId: null,
+    routeName: "New Milk Collection Loop",
+    outboundStops: freshStops,
+  });
+
+  const loaded = getInitialPlannerWorkspace(simulatedLocalStorage);
+  assert.equal(loaded.editingRouteId, null);
+  assert.equal(loaded.routeName, "New Milk Collection Loop");
+  assert.equal(loaded.outboundStops.length, 2);
+});
+

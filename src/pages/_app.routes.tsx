@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/AppLayout";
 import { Badge, Button, Card, CardHeader } from "@/components/ui-kit";
 import {
@@ -52,32 +53,130 @@ import {
 
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
 
+export const PLANNER_WORKSPACE_KEY = "nanjil_planner_active_workspace";
+
+export interface StoredPlannerWorkspace {
+  editingRouteId?: string | null;
+  routeName?: string;
+  routeDate?: string;
+  departureTime?: string;
+  assignedVehicleId?: string;
+  assignedDriverId?: string;
+  startPoint?: any;
+  destinationPoint?: any;
+  roundTripType?: "same_path" | "different_path" | "one_way";
+  revisitStopsOnReturn?: boolean;
+  outboundStops?: RoutePoint[];
+  returnStops?: RoutePoint[];
+  speedLimitKmh?: number;
+  deviationThresholdMeters?: number;
+  alertOnMissedStops?: boolean;
+  alertOnDelay?: boolean;
+  routeNotes?: string;
+  activeTab?: "planner" | "saved" | "execution";
+  lastUpdated?: string;
+}
+
+export function getInitialPlannerWorkspace(): StoredPlannerWorkspace | null {
+  if (typeof window === "undefined") return null;
+  try {
+    // 1. Primary: load the active working draft
+    const raw = localStorage.getItem(PLANNER_WORKSPACE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return parsed;
+      }
+    }
+
+    // 2. Fallback: if user previously saved custom routes in localStorage before active workspace key existed
+    const customRaw = localStorage.getItem("nanjil_custom_routes");
+    if (customRaw) {
+      const customList = JSON.parse(customRaw);
+      if (Array.isArray(customList) && customList.length > 0) {
+        const latest = customList[0];
+        if (latest && Array.isArray(latest.outboundStops) && latest.outboundStops.length > 0) {
+          return {
+            editingRouteId: latest.id || null,
+            routeName: latest.name || "Daily Morning Milk Collection Loop",
+            routeDate: latest.routeDate || new Date().toISOString().split("T")[0],
+            departureTime: latest.start_time || "05:30",
+            assignedVehicleId: latest.vehicle_id || "",
+            assignedDriverId: latest.driver_id || "",
+            startPoint: latest.startPoint || NANJIL_DAIRY_DEPOT,
+            destinationPoint: latest.destinationPoint || latest.destination || PRESET_DAIRY_CENTRES[7],
+            roundTripType: latest.roundTripType || "same_path",
+            revisitStopsOnReturn: latest.revisitStopsOnReturn ?? false,
+            outboundStops: latest.outboundStops,
+            returnStops: latest.returnStops || [],
+            speedLimitKmh: latest.speedLimitKmh || 60,
+            deviationThresholdMeters: latest.deviationThresholdMeters || 250,
+            alertOnMissedStops: latest.alertOnMissedStops ?? true,
+            alertOnDelay: latest.alertOnDelay ?? true,
+            routeNotes: latest.routeNotes || "Maintain refrigerated tanker temp at 4°C. Check seals at each depot.",
+            activeTab: "planner",
+          };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to read initial planner workspace:", err);
+  }
+  return null;
+}
+
 export default function RoutesPlannerPage() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const mapRef = useRef<MapRef>(null);
   const liveVehicles = useVehicles();
 
+  const initialWorkspace = useMemo(() => getInitialPlannerWorkspace(), []);
+
   // Mode: "planner" (designing route) or "execution" (tracking active route)
-  const [activeTab, setActiveTab] = useState<"planner" | "saved" | "execution">("planner");
+  const [activeTab, setActiveTab] = useState<"planner" | "saved" | "execution">(
+    () => initialWorkspace?.activeTab || "planner"
+  );
 
   // Core Route Details
-  const [routeName, setRouteName] = useState("Daily Morning Milk Collection Loop");
-  const [routeDate, setRouteDate] = useState(new Date().toISOString().split("T")[0]);
-  const [departureTime, setDepartureTime] = useState("05:30");
-  const [assignedVehicleId, setAssignedVehicleId] = useState("");
-  const [assignedDriverId, setAssignedDriverId] = useState("");
+  const [routeName, setRouteName] = useState(
+    () => initialWorkspace?.routeName || "Daily Morning Milk Collection Loop"
+  );
+  const [routeDate, setRouteDate] = useState(
+    () => initialWorkspace?.routeDate || new Date().toISOString().split("T")[0]
+  );
+  const [departureTime, setDepartureTime] = useState(
+    () => initialWorkspace?.departureTime || "05:30"
+  );
+  const [assignedVehicleId, setAssignedVehicleId] = useState(
+    () => initialWorkspace?.assignedVehicleId || ""
+  );
+  const [assignedDriverId, setAssignedDriverId] = useState(
+    () => initialWorkspace?.assignedDriverId || ""
+  );
 
   // Start & End
-  const [startPoint, setStartPoint] = useState(NANJIL_DAIRY_DEPOT);
-  const [destinationPoint, setDestinationPoint] = useState(PRESET_DAIRY_CENTRES[7]); // Kanyakumari South
+  const [startPoint, setStartPoint] = useState(
+    () => initialWorkspace?.startPoint || NANJIL_DAIRY_DEPOT
+  );
+  const [destinationPoint, setDestinationPoint] = useState(
+    () => initialWorkspace?.destinationPoint || PRESET_DAIRY_CENTRES[7]
+  );
 
   // Round Trip Configuration
-  const [roundTripType, setRoundTripType] = useState<"same_path" | "different_path" | "one_way">("same_path");
-  const [revisitStopsOnReturn, setRevisitStopsOnReturn] = useState(false);
+  const [roundTripType, setRoundTripType] = useState<"same_path" | "different_path" | "one_way">(
+    () => initialWorkspace?.roundTripType || "same_path"
+  );
+  const [revisitStopsOnReturn, setRevisitStopsOnReturn] = useState(
+    () => initialWorkspace?.revisitStopsOnReturn ?? false
+  );
 
-  // Stop Sequences (Supports 40+ stops)
-  const [outboundStops, setOutboundStops] = useState<RoutePoint[]>(
-    PRESET_DAIRY_CENTRES.slice(0, 15).map((c, i) => ({
+  // Stop Sequences (Supports 40+ stops) - restored from workspace or default 15 presets
+  const [outboundStops, setOutboundStops] = useState<RoutePoint[]>(() => {
+    if (initialWorkspace?.outboundStops && initialWorkspace.outboundStops.length > 0) {
+      return initialWorkspace.outboundStops;
+    }
+    return PRESET_DAIRY_CENTRES.slice(0, 15).map((c, i) => ({
       id: `out-${i + 1}`,
       name: c.name,
       lat: c.lat,
@@ -85,36 +184,51 @@ export default function RoutesPlannerPage() {
       serviceDurationMins: 5,
       isMandatory: true,
       status: "Pending",
-    }))
-  );
+    }));
+  });
 
-  const [returnStops, setReturnStops] = useState<RoutePoint[]>([
-    {
-      id: "ret-1",
-      name: PRESET_DAIRY_CENTRES[18].name,
-      lat: PRESET_DAIRY_CENTRES[18].lat,
-      lng: PRESET_DAIRY_CENTRES[18].lng,
-      serviceDurationMins: 5,
-      isMandatory: false,
-      status: "Pending",
-    },
-    {
-      id: "ret-2",
-      name: PRESET_DAIRY_CENTRES[13].name,
-      lat: PRESET_DAIRY_CENTRES[13].lat,
-      lng: PRESET_DAIRY_CENTRES[13].lng,
-      serviceDurationMins: 5,
-      isMandatory: false,
-      status: "Pending",
-    },
-  ]);
+  const [returnStops, setReturnStops] = useState<RoutePoint[]>(() => {
+    if (initialWorkspace?.returnStops) {
+      return initialWorkspace.returnStops;
+    }
+    return [
+      {
+        id: "ret-1",
+        name: PRESET_DAIRY_CENTRES[18].name,
+        lat: PRESET_DAIRY_CENTRES[18].lat,
+        lng: PRESET_DAIRY_CENTRES[18].lng,
+        serviceDurationMins: 5,
+        isMandatory: false,
+        status: "Pending",
+      },
+      {
+        id: "ret-2",
+        name: PRESET_DAIRY_CENTRES[13].name,
+        lat: PRESET_DAIRY_CENTRES[13].lat,
+        lng: PRESET_DAIRY_CENTRES[13].lng,
+        serviceDurationMins: 5,
+        isMandatory: false,
+        status: "Pending",
+      },
+    ];
+  });
 
   // Route-Specific Settings
-  const [speedLimitKmh, setSpeedLimitKmh] = useState(60);
-  const [deviationThresholdMeters, setDeviationThresholdMeters] = useState(250);
-  const [alertOnMissedStops, setAlertOnMissedStops] = useState(true);
-  const [alertOnDelay, setAlertOnDelay] = useState(true);
-  const [routeNotes, setRouteNotes] = useState("Maintain refrigerated tanker temp at 4°C. Check seals at each depot.");
+  const [speedLimitKmh, setSpeedLimitKmh] = useState(
+    () => initialWorkspace?.speedLimitKmh || 60
+  );
+  const [deviationThresholdMeters, setDeviationThresholdMeters] = useState(
+    () => initialWorkspace?.deviationThresholdMeters || 250
+  );
+  const [alertOnMissedStops, setAlertOnMissedStops] = useState(
+    () => initialWorkspace?.alertOnMissedStops ?? true
+  );
+  const [alertOnDelay, setAlertOnDelay] = useState(
+    () => initialWorkspace?.alertOnDelay ?? true
+  );
+  const [routeNotes, setRouteNotes] = useState(
+    () => initialWorkspace?.routeNotes || "Maintain refrigerated tanker temp at 4°C. Check seals at each depot."
+  );
 
   // Calculated Road Network Paths
   const [isCalculatingRoute, setIsCalculatingRoute] = useState(false);
@@ -127,7 +241,9 @@ export default function RoutesPlannerPage() {
   const [savedRoutes, setSavedRoutes] = useState<any[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
-  const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
+  const [editingRouteId, setEditingRouteId] = useState<string | null>(
+    () => searchParams.get("id") || searchParams.get("routeId") || initialWorkspace?.editingRouteId || null
+  );
   const [savedRoutesSearch, setSavedRoutesSearch] = useState("");
   const [toastMessage, setToastMessage] = useState<{
     text: string;
@@ -141,6 +257,69 @@ export default function RoutesPlannerPage() {
 
   // Selected stop on map
   const [activeStopId, setActiveStopId] = useState<string | null>(null);
+
+  // Auto-sync active workspace to localStorage on any state modification
+  useEffect(() => {
+    try {
+      const workspaceDraft: StoredPlannerWorkspace = {
+        editingRouteId,
+        routeName,
+        routeDate,
+        departureTime,
+        assignedVehicleId,
+        assignedDriverId,
+        startPoint,
+        destinationPoint,
+        roundTripType,
+        revisitStopsOnReturn,
+        outboundStops,
+        returnStops,
+        speedLimitKmh,
+        deviationThresholdMeters,
+        alertOnMissedStops,
+        alertOnDelay,
+        routeNotes,
+        activeTab,
+        lastUpdated: new Date().toISOString(),
+      };
+      localStorage.setItem(PLANNER_WORKSPACE_KEY, JSON.stringify(workspaceDraft));
+    } catch (e) {
+      console.warn("Failed to auto-sync route planner workspace:", e);
+    }
+  }, [
+    editingRouteId,
+    routeName,
+    routeDate,
+    departureTime,
+    assignedVehicleId,
+    assignedDriverId,
+    startPoint,
+    destinationPoint,
+    roundTripType,
+    revisitStopsOnReturn,
+    outboundStops,
+    returnStops,
+    speedLimitKmh,
+    deviationThresholdMeters,
+    alertOnMissedStops,
+    alertOnDelay,
+    routeNotes,
+    activeTab,
+  ]);
+
+  // Keep URL query parameter ?id= in sync with editingRouteId
+  useEffect(() => {
+    const currentUrlId = searchParams.get("id");
+    if (editingRouteId) {
+      if (currentUrlId !== editingRouteId) {
+        setSearchParams({ id: editingRouteId }, { replace: true });
+      }
+    } else {
+      if (currentUrlId) {
+        setSearchParams({}, { replace: true });
+      }
+    }
+  }, [editingRouteId]);
 
   function showToast(text: string, type: "success" | "error" | "info" = "success") {
     setToastMessage({ text, type });
@@ -241,6 +420,15 @@ export default function RoutesPlannerPage() {
             route_config: extractRouteConfig(r),
           }));
           setSavedRoutes(enriched);
+
+          // If URL specifically requested a route (?id=... or ?routeId=...)
+          const targetUrlId = searchParams.get("id") || searchParams.get("routeId");
+          if (targetUrlId && targetUrlId !== initialWorkspace?.editingRouteId) {
+            const matched = enriched.find((r: any) => r.id === targetUrlId);
+            if (matched) {
+              handleOpenInDesigner(matched);
+            }
+          }
         }
       } catch (err: any) {
         console.error("Failed to load initial data in routes:", err);
@@ -532,6 +720,8 @@ export default function RoutesPlannerPage() {
 
   // Load a Route Template
   function applyTemplate(tpl: RouteTemplate) {
+    setEditingRouteId(null);
+    setSearchParams({}, { replace: true });
     setRouteName(tpl.name);
     setStartPoint(tpl.startPoint);
     setDestinationPoint(tpl.destination);
@@ -662,6 +852,30 @@ export default function RoutesPlannerPage() {
         const filtered = existingStored.filter((r: any) => r.id !== savedRecord.id);
         filtered.unshift(fullRouteRecord);
         localStorage.setItem("nanjil_custom_routes", JSON.stringify(filtered.slice(0, 50)));
+
+        // Immediately update active planner workspace draft with the saved ID
+        const activeDraft: StoredPlannerWorkspace = {
+          editingRouteId: savedRecord.id,
+          routeName: routeName.trim(),
+          routeDate,
+          departureTime,
+          assignedVehicleId,
+          assignedDriverId,
+          startPoint,
+          destinationPoint,
+          roundTripType,
+          revisitStopsOnReturn,
+          outboundStops,
+          returnStops,
+          speedLimitKmh,
+          deviationThresholdMeters,
+          alertOnMissedStops,
+          alertOnDelay,
+          routeNotes,
+          activeTab: "planner",
+          lastUpdated: new Date().toISOString(),
+        };
+        localStorage.setItem(PLANNER_WORKSPACE_KEY, JSON.stringify(activeDraft));
       } catch (storageErr) {
         console.warn("Local storage write warning:", storageErr);
       }
@@ -672,6 +886,7 @@ export default function RoutesPlannerPage() {
       };
 
       setEditingRouteId(savedRecord.id);
+      setSearchParams({ id: savedRecord.id }, { replace: true });
 
       setSavedRoutes((prev) => {
         if (isUpdate) {
@@ -698,10 +913,14 @@ export default function RoutesPlannerPage() {
   // Open and restore saved route into Route Designer
   function handleOpenInDesigner(r: any) {
     setEditingRouteId(r.id);
+    setSearchParams({ id: r.id }, { replace: true });
     setRouteName(r.name || "Milk Collection Route");
     if (r.vehicle_id) setAssignedVehicleId(r.vehicle_id);
     if (r.driver_id) setAssignedDriverId(r.driver_id);
     if (r.start_time) setDepartureTime(r.start_time);
+
+    let loadedOutbound: RoutePoint[] = [];
+    let loadedReturn: RoutePoint[] = [];
 
     const cfg = r.route_config || extractRouteConfig(r);
     if (cfg) {
@@ -714,9 +933,13 @@ export default function RoutesPlannerPage() {
       if (cfg.roundTripType) setRoundTripType(cfg.roundTripType);
       if (typeof cfg.revisitStopsOnReturn === "boolean") setRevisitStopsOnReturn(cfg.revisitStopsOnReturn);
       if (Array.isArray(cfg.outboundStops) && cfg.outboundStops.length > 0) {
+        loadedOutbound = cfg.outboundStops;
         setOutboundStops(cfg.outboundStops);
       }
-      if (Array.isArray(cfg.returnStops)) setReturnStops(cfg.returnStops);
+      if (Array.isArray(cfg.returnStops)) {
+        loadedReturn = cfg.returnStops;
+        setReturnStops(cfg.returnStops);
+      }
       if (typeof cfg.speedLimitKmh === "number") setSpeedLimitKmh(cfg.speedLimitKmh);
       if (typeof cfg.deviationThresholdMeters === "number") setDeviationThresholdMeters(cfg.deviationThresholdMeters);
       if (typeof cfg.alertOnMissedStops === "boolean") setAlertOnMissedStops(cfg.alertOnMissedStops);
@@ -726,18 +949,44 @@ export default function RoutesPlannerPage() {
     } else {
       // Legacy records: reconstruct realistic stops matching recorded centres count
       const stopCount = Math.max(r.centres || 8, 2);
-      setOutboundStops(
-        PRESET_DAIRY_CENTRES.slice(0, Math.min(stopCount, PRESET_DAIRY_CENTRES.length)).map((c, i) => ({
-          id: `out-${i + 1}`,
-          name: c.name,
-          lat: c.lat,
-          lng: c.lng,
-          serviceDurationMins: 5,
-          isMandatory: true,
-          status: "Pending",
-        }))
-      );
+      loadedOutbound = PRESET_DAIRY_CENTRES.slice(0, Math.min(stopCount, PRESET_DAIRY_CENTRES.length)).map((c, i) => ({
+        id: `out-${i + 1}`,
+        name: c.name,
+        lat: c.lat,
+        lng: c.lng,
+        serviceDurationMins: 5,
+        isMandatory: true,
+        status: "Pending",
+      }));
+      setOutboundStops(loadedOutbound);
       setReturnStops([]);
+    }
+
+    try {
+      const workspaceDraft: StoredPlannerWorkspace = {
+        editingRouteId: r.id,
+        routeName: r.name || "Milk Collection Route",
+        routeDate: cfg?.routeDate || new Date().toISOString().split("T")[0],
+        departureTime: r.start_time || "05:30",
+        assignedVehicleId: r.vehicle_id || "",
+        assignedDriverId: r.driver_id || "",
+        startPoint: cfg?.startPoint || NANJIL_DAIRY_DEPOT,
+        destinationPoint: cfg?.destinationPoint || cfg?.destination || PRESET_DAIRY_CENTRES[7],
+        roundTripType: cfg?.roundTripType || "same_path",
+        revisitStopsOnReturn: cfg?.revisitStopsOnReturn ?? false,
+        outboundStops: loadedOutbound.length > 0 ? loadedOutbound : outboundStops,
+        returnStops: loadedReturn,
+        speedLimitKmh: cfg?.speedLimitKmh || speedLimitKmh,
+        deviationThresholdMeters: cfg?.deviationThresholdMeters || deviationThresholdMeters,
+        alertOnMissedStops: cfg?.alertOnMissedStops ?? alertOnMissedStops,
+        alertOnDelay: cfg?.alertOnDelay ?? alertOnDelay,
+        routeNotes: cfg?.routeNotes || routeNotes,
+        activeTab: "planner",
+        lastUpdated: new Date().toISOString(),
+      };
+      localStorage.setItem(PLANNER_WORKSPACE_KEY, JSON.stringify(workspaceDraft));
+    } catch (e) {
+      // Ignore
     }
 
     setActiveTab("planner");
@@ -767,6 +1016,12 @@ export default function RoutesPlannerPage() {
       setSavedRoutes((prev) => prev.filter((r) => r.id !== id));
       if (editingRouteId === id) {
         setEditingRouteId(null);
+        setSearchParams({}, { replace: true });
+        try {
+          localStorage.removeItem(PLANNER_WORKSPACE_KEY);
+        } catch (e) {
+          // Ignore
+        }
       }
       showToast(`Route "${name}" deleted successfully.`);
     } catch (err: any) {
@@ -778,25 +1033,53 @@ export default function RoutesPlannerPage() {
   // Clear editing state and start a fresh route
   function handleStartNewRoute() {
     setEditingRouteId(null);
+    setSearchParams({}, { replace: true });
     setRouteName("New Milk Collection Loop");
     setStartPoint(NANJIL_DAIRY_DEPOT);
     setDestinationPoint(PRESET_DAIRY_CENTRES[7]);
     setRoundTripType("same_path");
     setRevisitStopsOnReturn(false);
-    setOutboundStops(
-      PRESET_DAIRY_CENTRES.slice(0, 10).map((c, i) => ({
-        id: `out-${i + 1}`,
-        name: c.name,
-        lat: c.lat,
-        lng: c.lng,
-        serviceDurationMins: 5,
-        isMandatory: true,
-        status: "Pending",
-      }))
-    );
+    const freshStops: RoutePoint[] = PRESET_DAIRY_CENTRES.slice(0, 10).map((c, i) => ({
+      id: `out-${i + 1}`,
+      name: c.name,
+      lat: c.lat,
+      lng: c.lng,
+      serviceDurationMins: 5,
+      isMandatory: true,
+      status: "Pending",
+    }));
+    setOutboundStops(freshStops);
     setReturnStops([]);
     setRouteNotes("Maintain refrigerated tanker temp at 4°C. Check seals at each depot.");
     setActiveTab("planner");
+
+    try {
+      const cleanDraft: StoredPlannerWorkspace = {
+        editingRouteId: null,
+        routeName: "New Milk Collection Loop",
+        routeDate: new Date().toISOString().split("T")[0],
+        departureTime: "05:30",
+        assignedVehicleId,
+        assignedDriverId,
+        startPoint: NANJIL_DAIRY_DEPOT,
+        destinationPoint: PRESET_DAIRY_CENTRES[7],
+        roundTripType: "same_path",
+        revisitStopsOnReturn: false,
+        outboundStops: freshStops,
+        returnStops: [],
+        speedLimitKmh: 60,
+        deviationThresholdMeters: 250,
+        alertOnMissedStops: true,
+        alertOnDelay: true,
+        routeNotes: "Maintain refrigerated tanker temp at 4°C. Check seals at each depot.",
+        activeTab: "planner",
+        lastUpdated: new Date().toISOString(),
+      };
+      localStorage.setItem(PLANNER_WORKSPACE_KEY, JSON.stringify(cleanDraft));
+    } catch (e) {
+      // Ignore
+    }
+
     showToast("Ready to design a new route.", "info");
   }
 
@@ -948,15 +1231,19 @@ export default function RoutesPlannerPage() {
         <div className="bg-indigo-50/70 border border-indigo-200/80 text-indigo-900 px-4 py-2 rounded-xl text-xs flex items-center justify-between shadow-xs">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-indigo-600 animate-pulse" />
-            <span className="font-semibold">Editing: {routeName}</span>
+            <span className="font-semibold">Active Route: {routeName}</span>
             <span className="text-slate-400 hidden sm:inline">· ID: {editingRouteId.slice(0, 8)}...</span>
+            <span className="text-[10px] text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-md font-medium hidden sm:inline-flex items-center gap-1">
+              <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+              Synced & Persisted
+            </span>
           </div>
           <div className="flex items-center gap-3">
             <button
               onClick={() => handleSaveRoute(false)}
               className="text-indigo-700 hover:text-indigo-900 font-semibold underline text-[11px]"
             >
-              Update Database
+              Update Route
             </button>
             <button
               onClick={handleStartNewRoute}
@@ -965,6 +1252,24 @@ export default function RoutesPlannerPage() {
               Start New Route
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Unsaved Draft Banner */}
+      {!editingRouteId && activeTab === "planner" && (
+        <div className="bg-slate-50 border border-slate-200 text-slate-700 px-4 py-1.5 rounded-xl text-xs flex items-center justify-between shadow-xs">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-amber-500" />
+            <span className="font-medium">Active Workspace: {routeName} ({outboundStops.length} stops)</span>
+            <span className="text-[10px] text-slate-500 hidden sm:inline">· Auto-saved in browser across refresh</span>
+          </div>
+          <button
+            onClick={() => handleSaveRoute(false)}
+            className="text-indigo-600 hover:text-indigo-800 font-semibold text-[11px] flex items-center gap-1"
+          >
+            <Save className="h-3 w-3" />
+            Save to Database
+          </button>
         </div>
       )}
 
