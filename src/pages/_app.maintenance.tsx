@@ -71,8 +71,9 @@ function Page() {
 
       loadMaintenance();
 
+      const channelId = `maintenance-realtime-${Math.random().toString(36).substring(2, 9)}`;
       channel = supabase
-        .channel("maintenance-realtime")
+        .channel(channelId)
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "maintenance_records" },
@@ -87,7 +88,7 @@ function Page() {
 
     return () => {
       cancelled = true;
-      channel?.unsubscribe();
+      if (channel) supabase.removeChannel(channel);
     };
   }, []);
 

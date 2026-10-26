@@ -168,8 +168,9 @@ export function useRealtimeAllVehicles(): Vehicle[] {
     load();
 
     // Subscribe to vehicle_telemetry changes (EMQX upserts trigger these)
+    const channelId = `emqx-realtime-all-vehicles-${Math.random().toString(36).substring(2, 9)}`;
     const channel = supabase
-      .channel("emqx-realtime-all-vehicles")
+      .channel(channelId)
       .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_telemetry" }, (payload) => {
         if (payload.new) {
           const row = payload.new as any;
@@ -212,7 +213,7 @@ export function useRealtimeAllVehicles(): Vehicle[] {
 
     return () => {
       isMountedRef.current = false;
-      channel.unsubscribe();
+      supabase.removeChannel(channel);
     };
   }, []);
 
@@ -261,8 +262,9 @@ export function useRealtimeSingleVehicle(initialVehicle: Vehicle | null): Vehicl
       }
     }
 
+    const channelId = `emqx-realtime-vehicle-${vehicleId}-${Math.random().toString(36).substring(2, 9)}`;
     const channel = supabase
-      .channel(`emqx-realtime-vehicle-${vehicleId}`)
+      .channel(channelId)
       .on(
         "postgres_changes",
         {
@@ -298,7 +300,7 @@ export function useRealtimeSingleVehicle(initialVehicle: Vehicle | null): Vehicl
 
     return () => {
       isMountedRef.current = false;
-      channel.unsubscribe();
+      supabase.removeChannel(channel);
     };
   }, [initialVehicle?.id]);
 
@@ -337,8 +339,9 @@ export function useRealtimeVehicleList(initialVehicles: Vehicle[]): Vehicle[] {
       }
     }
 
+    const channelId = `emqx-realtime-vehicle-list-${Math.random().toString(36).substring(2, 9)}`;
     const channel = supabase
-      .channel("emqx-realtime-vehicle-list")
+      .channel(channelId)
       .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_telemetry" }, (payload) => {
         if (payload.new) {
           const row = payload.new as any;
@@ -362,7 +365,7 @@ export function useRealtimeVehicleList(initialVehicles: Vehicle[]): Vehicle[] {
 
     return () => {
       isMountedRef.current = false;
-      channel.unsubscribe();
+      supabase.removeChannel(channel);
     };
   }, []);
 

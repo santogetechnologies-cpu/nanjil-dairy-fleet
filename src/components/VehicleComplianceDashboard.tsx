@@ -200,8 +200,9 @@ export function VehicleComplianceDashboard() {
     loadData();
 
     // Subscribe to realtime postgres_changes on vehicle_compliance
+    const channelId = `vehicle-compliance-realtime-${Math.random().toString(36).substring(2, 9)}`;
     const channel = supabase
-      .channel("vehicle-compliance-realtime")
+      .channel(channelId)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "vehicle_compliance" },
@@ -265,7 +266,7 @@ export function VehicleComplianceDashboard() {
 
     return () => {
       cancelled = true;
-      channel.unsubscribe();
+      supabase.removeChannel(channel);
     };
   }, [warningDays]);
 

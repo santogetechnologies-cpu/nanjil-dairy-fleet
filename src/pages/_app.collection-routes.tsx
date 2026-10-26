@@ -67,15 +67,16 @@ function Page() {
     async function init() {
       if (cancelled) return;
       load();
+      const channelId = `routes-realtime-${Math.random().toString(36).substring(2, 9)}`;
       channel = supabase
-        .channel('routes-realtime')
+        .channel(channelId)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'collection_routes' }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => { if (!cancelled) load(); })
         .subscribe();
     }
 
     init();
-    return () => { cancelled = true; channel?.unsubscribe(); };
+    return () => { cancelled = true; if (channel) supabase.removeChannel(channel); };
   }, []);
 
   async function handleCreateRoute(e: React.FormEvent) {

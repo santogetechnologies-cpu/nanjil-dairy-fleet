@@ -238,8 +238,9 @@ function VehicleDetailPage() {
 
       load();
 
+      const channelId = `vehicle-detail-${id}-${Math.random().toString(36).substring(2, 9)}`;
       channel = supabase
-        .channel(`vehicle-detail-${id}`)
+        .channel(channelId)
         .on(
           "postgres_changes",
           {
@@ -295,7 +296,7 @@ function VehicleDetailPage() {
 
     return () => {
       cancelled = true;
-      channel?.unsubscribe();
+      if (channel) supabase.removeChannel(channel);
     };
   }, [id]);
 

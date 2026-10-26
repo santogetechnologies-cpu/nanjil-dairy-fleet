@@ -139,8 +139,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
     getUnread();
 
+    const channelId = `alerts-app-layout-stream-${Math.random().toString(36).substring(2, 9)}`;
     const channel = supabase
-      .channel("alerts-app-layout-stream")
+      .channel(channelId)
       .on("postgres_changes", { event: "*", schema: "public", table: "alerts" }, () => {
         if (!cancelled) getUnread();
       })

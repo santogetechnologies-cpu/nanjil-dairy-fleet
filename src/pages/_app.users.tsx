@@ -157,8 +157,9 @@ function Page() {
       loadUsers();
       loadDrivers();
 
+      const channelId = `profiles-realtime-${Math.random().toString(36).substring(2, 9)}`;
       channel = supabase
-        .channel('profiles-realtime')
+        .channel(channelId)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
           if (!cancelled) loadUsers();
         })
@@ -169,7 +170,7 @@ function Page() {
 
     return () => {
       cancelled = true;
-      channel?.unsubscribe();
+      if (channel) supabase.removeChannel(channel);
     };
   }, [user]);
 

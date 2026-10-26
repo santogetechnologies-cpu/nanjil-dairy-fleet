@@ -64,8 +64,9 @@ function Page() {
     async function init() {
       if (cancelled) return;
       load();
+      const channelId = `vehicle-activity-realtime-${Math.random().toString(36).substring(2, 9)}`;
       channel = supabase
-        .channel("vehicle-activity-realtime")
+        .channel(channelId)
         .on("postgres_changes", { event: "*", schema: "public", table: "trips" }, () => {
           if (!cancelled) load();
         })
@@ -85,7 +86,7 @@ function Page() {
     init();
     return () => {
       cancelled = true;
-      channel?.unsubscribe();
+      if (channel) supabase.removeChannel(channel);
     };
   }, []);
 

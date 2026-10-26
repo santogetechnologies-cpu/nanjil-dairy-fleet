@@ -325,8 +325,9 @@ function DriverPage() {
     async function init() {
       if (cancelled) return;
       load();
+      const channelId = `driver-portal-realtime-${Math.random().toString(36).substring(2, 9)}`;
       channel = supabase
-        .channel('driver-portal-realtime')
+        .channel(channelId)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_shifts' }, () => { if (!cancelled) load(); })
@@ -335,7 +336,7 @@ function DriverPage() {
         .subscribe();
     }
     init();
-    return () => { cancelled = true; channel?.unsubscribe(); };
+    return () => { cancelled = true; if (channel) supabase.removeChannel(channel); };
   }, [user]);
 
   useEffect(() => {

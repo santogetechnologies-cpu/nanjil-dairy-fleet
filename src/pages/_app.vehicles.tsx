@@ -134,8 +134,9 @@ function VehiclesPage() {
 
       load();
 
+      const channelId = `vehicles-realtime-${Math.random().toString(36).substring(2, 9)}`;
       channel = supabase
-        .channel("vehicles-realtime")
+        .channel(channelId)
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "vehicle_telemetry" },
@@ -160,7 +161,7 @@ function VehiclesPage() {
 
     return () => {
       cancelled = true;
-      channel?.unsubscribe();
+      if (channel) supabase.removeChannel(channel);
     };
   }, []);
 
