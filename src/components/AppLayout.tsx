@@ -125,13 +125,19 @@ export function AppLayout({ children }: { children: ReactNode }) {
       try {
         const { data, error } = await supabase
           .from("alerts")
-          .select("id, type, severity, message, time, vehicle")
+          .select("id, type, severity, message, time, vehicle_id, vehicles(number)")
           .eq("resolved", false)
           .order("time", { ascending: false })
           .limit(6);
 
         if (cancelled) return;
-        if (!error && data) setUnreadAlerts(data);
+        if (!error && data) {
+          const mapped = data.map((item: any) => ({
+            ...item,
+            vehicle: item.vehicles?.number || null,
+          }));
+          setUnreadAlerts(mapped);
+        }
       } catch (err) {
         // Silently catch
       }
@@ -844,7 +850,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
                                 }`}
                               />
                               <span className="font-bold text-slate-900 truncate">
-                                {alt.vehicle || "Fleet Asset"}
+                                {alt.vehicle || (alt.vehicle_id && liveVehicles.find((v) => v.id === alt.vehicle_id)?.number) || "Fleet Asset"}
                               </span>
                               <span className="text-[10px] text-slate-400 ml-auto shrink-0">
                                 {alt.time ? new Date(alt.time).toLocaleTimeString() : "Recent"}

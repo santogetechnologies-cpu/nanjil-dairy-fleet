@@ -26,8 +26,12 @@ import {
   FileSpreadsheet,
   X,
   Search,
+  RefreshCw,
+  Edit,
+  Truck,
+  UserCheck,
 } from "lucide-react";
-import Map, { Marker, Source, Layer, NavigationControl, MapRef } from "react-map-gl/maplibre";
+import MapGL, { Marker, Source, Layer, NavigationControl, MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
@@ -122,7 +126,13 @@ export default function RoutesPlannerPage() {
   const [dbDrivers, setDbDrivers] = useState<any[]>([]);
   const [savedRoutes, setSavedRoutes] = useState<any[]>([]);
   const [isSaving, setIsSaving] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
+  const [editingRouteId, setEditingRouteId] = useState<string | null>(null);
+  const [savedRoutesSearch, setSavedRoutesSearch] = useState("");
+  const [toastMessage, setToastMessage] = useState<{
+    text: string;
+    type: "success" | "error" | "info";
+  } | null>(null);
 
   // Address search query
   const [searchLocationQuery, setSearchLocationQuery] = useState("");
@@ -132,33 +142,132 @@ export default function RoutesPlannerPage() {
   // Selected stop on map
   const [activeStopId, setActiveStopId] = useState<string | null>(null);
 
-  // Load vehicles, drivers, and saved routes
-  useEffect(() => {
-    async function loadData() {
-      const [vRes, dRes, rRes] = await Promise.all([
-        supabase.from("vehicles").select("id, number, type, model"),
-        supabase.from("drivers").select("id, name, phone"),
-        supabase.from("collection_routes").select("*").order("created_at", { ascending: false }),
-      ]);
+  function showToast(text: string, type: "success" | "error" | "info" = "success") {
+    setToastMessage({ text, type });
+    setTimeout(() => setToastMessage(null), 4000);
+  }
 
-      if (vRes.data && vRes.data.length > 0) {
-        setDbVehicles(vRes.data);
-        if (!assignedVehicleId) setAssignedVehicleId(vRes.data[0].id);
-      }
-      if (dRes.data && dRes.data.length > 0) {
-        const uniqueDrivers = new Map();
-        dRes.data.forEach((d) => {
-          if (!uniqueDrivers.has(d.name)) uniqueDrivers.set(d.name, d);
-        });
-        const dList = Array.from(uniqueDrivers.values());
-        setDbDrivers(dList);
-        if (!assignedDriverId && dList.length > 0) setAssignedDriverId(dList[0].id);
-      }
-      if (rRes.data) {
-        setSavedRoutes(rRes.data);
+  // Extract route configuration from DB or localStorage backup
+  function extractRouteConfig(r: any) {
+    let config = r.route_config;
+    if (typeof config === "string") {
+      try {
+        config = JSON.parse(config);
+      } catch (e) {
+        config = null;
       }
     }
-    loadData();
+    if (!config || typeof config !== "object" || Object.keys(config).length === 0) {
+      try {
+        const local = localStorage.getItem(`nanjil_route_config_${r.id}`);
+        if (local) {
+          config = JSON.parse(local);
+        } else {
+          const allCustom = JSON.parse(localStorage.getItem("nanjil_custom_routes") || "[]");
+          const found = allCustom.find((c: any) => c.id === r.id || c.name === r.name);
+          if (found) config = found;
+        }
+      } catch (e) {
+        // Silently catch
+      }
+    }
+    return config || null;
+  }
+
+  // Reload saved routes from database
+  async function loadSavedRoutes() {
+    setIsLoadingRoutes(true);
+    try {
+      const { data, error } = await supabase
+        .from("collection_routes")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.error("Failed to load collection_routes:", error);
+        showToast("Error loading routes: " + error.message, "error");
+        return;
+      }
+
+      if (data) {
+        const enriched = data.map((r: any) => ({
+          ...r,
+          route_config: extractRouteConfig(r),
+        }));
+        setSavedRoutes(enriched);
+      }
+    } catch (err: any) {
+      console.error("loadSavedRoutes exception:", err);
+      showToast("Network error while loading routes", "error");
+    } finally {
+      setIsLoadingRoutes(false);
+    }
+  }
+
+  // Load vehicles, drivers, and saved routes on mount
+  useEffect(() => {
+    let isMounted = true;
+
+    async function initData() {
+      setIsLoadingRoutes(true);
+      try {
+        const [vRes, dRes, rRes] = await Promise.all([
+          supabase.from("vehicles").select("id, number, type, model"),
+          supabase.from("drivers").select("id, name, phone"),
+          supabase.from("collection_routes").select("*").order("created_at", { ascending: false }),
+        ]);
+
+        if (!isMounted) return;
+
+        if (vRes.data && vRes.data.length > 0) {
+          setDbVehicles(vRes.data);
+          setAssignedVehicleId((prev) => prev || vRes.data[0].id);
+        }
+        if (dRes.data && dRes.data.length > 0) {
+          const uniqueDrivers = new Map();
+          dRes.data.forEach((d) => {
+            if (!uniqueDrivers.has(d.name)) uniqueDrivers.set(d.name, d);
+          });
+          const dList = Array.from(uniqueDrivers.values());
+          setDbDrivers(dList);
+          setAssignedDriverId((prev) => prev || (dList.length > 0 ? dList[0].id : ""));
+        }
+        if (rRes.error) {
+          console.error("Failed to load collection_routes:", rRes.error);
+          showToast("Could not load saved routes: " + rRes.error.message, "error");
+        } else if (rRes.data) {
+          const enriched = rRes.data.map((r: any) => ({
+            ...r,
+            route_config: extractRouteConfig(r),
+          }));
+          setSavedRoutes(enriched);
+        }
+      } catch (err: any) {
+        console.error("Failed to load initial data in routes:", err);
+      } finally {
+        if (isMounted) setIsLoadingRoutes(false);
+      }
+    }
+
+    initData();
+
+    // Subscribe to realtime updates on collection_routes
+    const channelId = `routes-stream-${Math.random().toString(36).substring(2, 9)}`;
+    const channel = supabase
+      .channel(channelId)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "collection_routes" },
+        () => {
+          if (isMounted) loadSavedRoutes();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   // Compute road routing when waypoints or round-trip settings change
@@ -435,33 +544,21 @@ export default function RoutesPlannerPage() {
     showToast(`Loaded template: "${tpl.name}" with ${tpl.outboundStops.length} stops`);
   }
 
-  // Save Route
-  async function handleSaveRoute() {
+  // Save or Update Route in Supabase & Local Mirror
+  async function handleSaveRoute(asNewCopy = false) {
     if (!routeName.trim()) {
-      alert("Please enter a route name.");
+      showToast("Please enter a route name.", "error");
       return;
     }
+    if (outboundStops.length === 0) {
+      showToast("Please add at least one stop to the route before saving.", "error");
+      return;
+    }
+
     setIsSaving(true);
     try {
-      const payload = {
-        name: routeName.trim(),
-        vehicle_id: assignedVehicleId || null,
-        driver_id: assignedDriverId || null,
-        centres: routeStats.totalStopsCount,
-        start_time: departureTime,
-        end_time: routeStats.completionTimeStr,
-        status: "In Progress",
-        litres: 0,
-        completion: 0,
-      };
-
-      const { data, error } = await supabase.from("collection_routes").insert(payload).select().single();
-      if (error) throw error;
-
-      // Also persist full route metadata in localStorage for offline / detailed recovery
-      const fullRouteRecord = {
-        ...payload,
-        id: data.id,
+      // 1. Build complete persistent configuration
+      const routeConfigData = {
         startPoint,
         destinationPoint,
         roundTripType,
@@ -473,27 +570,234 @@ export default function RoutesPlannerPage() {
         alertOnMissedStops,
         alertOnDelay,
         routeNotes,
+        routeDate,
         totalDistanceKm: routeStats.totalDistanceKm,
         totalDurationMins: routeStats.totalDurationMins,
         savedAt: new Date().toISOString(),
       };
 
-      const existingStored = JSON.parse(localStorage.getItem("nanjil_custom_routes") || "[]");
-      existingStored.unshift(fullRouteRecord);
-      localStorage.setItem("nanjil_custom_routes", JSON.stringify(existingStored.slice(0, 50)));
+      const basePayload: any = {
+        name: routeName.trim(),
+        vehicle_id: assignedVehicleId || null,
+        driver_id: assignedDriverId || null,
+        centres: routeStats.totalStopsCount,
+        start_time: departureTime,
+        end_time: routeStats.completionTimeStr,
+        status: "In Progress",
+        litres: 0,
+        completion: 0,
+      };
 
-      setSavedRoutes((prev) => [data, ...prev]);
-      showToast("Route and independent configuration saved successfully!");
+      let savedRecord: any = null;
+      const isUpdate = Boolean(editingRouteId && !asNewCopy);
+
+      if (isUpdate) {
+        // Attempt update with route_config column
+        let updateRes = await supabase
+          .from("collection_routes")
+          .update({ ...basePayload, route_config: routeConfigData })
+          .eq("id", editingRouteId)
+          .select()
+          .single();
+
+        // Fallback if route_config column not yet created in PostgreSQL
+        if (
+          updateRes.error &&
+          (updateRes.error.message?.includes("route_config") ||
+            updateRes.error.code === "PGRST204" ||
+            updateRes.error.code === "42703")
+        ) {
+          console.warn("route_config column not found on collection_routes, falling back to base payload update.");
+          updateRes = await supabase
+            .from("collection_routes")
+            .update(basePayload)
+            .eq("id", editingRouteId)
+            .select()
+            .single();
+        }
+
+        if (updateRes.error) throw updateRes.error;
+        savedRecord = updateRes.data;
+      } else {
+        // Attempt insert with route_config column
+        let insertRes = await supabase
+          .from("collection_routes")
+          .insert({ ...basePayload, route_config: routeConfigData })
+          .select()
+          .single();
+
+        // Fallback if route_config column not yet created in PostgreSQL
+        if (
+          insertRes.error &&
+          (insertRes.error.message?.includes("route_config") ||
+            insertRes.error.code === "PGRST204" ||
+            insertRes.error.code === "42703")
+        ) {
+          console.warn("route_config column not found on collection_routes, falling back to base payload insert.");
+          insertRes = await supabase
+            .from("collection_routes")
+            .insert(basePayload)
+            .select()
+            .single();
+        }
+
+        if (insertRes.error) throw insertRes.error;
+        savedRecord = insertRes.data;
+      }
+
+      if (!savedRecord || !savedRecord.id) {
+        throw new Error("No database record was returned after saving.");
+      }
+
+      // Persist full route metadata in localStorage for instant offline resilience and cross-session restoration
+      try {
+        localStorage.setItem(`nanjil_route_config_${savedRecord.id}`, JSON.stringify(routeConfigData));
+
+        const fullRouteRecord = {
+          ...basePayload,
+          id: savedRecord.id,
+          ...routeConfigData,
+        };
+        const existingStored = JSON.parse(localStorage.getItem("nanjil_custom_routes") || "[]");
+        const filtered = existingStored.filter((r: any) => r.id !== savedRecord.id);
+        filtered.unshift(fullRouteRecord);
+        localStorage.setItem("nanjil_custom_routes", JSON.stringify(filtered.slice(0, 50)));
+      } catch (storageErr) {
+        console.warn("Local storage write warning:", storageErr);
+      }
+
+      const completeRecord = {
+        ...savedRecord,
+        route_config: routeConfigData,
+      };
+
+      setEditingRouteId(savedRecord.id);
+
+      setSavedRoutes((prev) => {
+        if (isUpdate) {
+          return prev.map((r) => (r.id === savedRecord.id ? completeRecord : r));
+        } else {
+          return [completeRecord, ...prev.filter((r) => r.id !== savedRecord.id)];
+        }
+      });
+
+      showToast(
+        isUpdate
+          ? `Route "${savedRecord.name}" updated successfully with ${routeStats.totalStopsCount} stops!`
+          : `New route "${savedRecord.name}" saved successfully with ${routeStats.totalStopsCount} stops!`,
+        "success"
+      );
     } catch (err: any) {
-      alert("Failed to save route: " + err.message);
+      console.error("Failed to save route:", err);
+      showToast("Failed to save route: " + (err.message || "Database error"), "error");
     } finally {
       setIsSaving(false);
     }
   }
 
-  function showToast(msg: string) {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
+  // Open and restore saved route into Route Designer
+  function handleOpenInDesigner(r: any) {
+    setEditingRouteId(r.id);
+    setRouteName(r.name || "Milk Collection Route");
+    if (r.vehicle_id) setAssignedVehicleId(r.vehicle_id);
+    if (r.driver_id) setAssignedDriverId(r.driver_id);
+    if (r.start_time) setDepartureTime(r.start_time);
+
+    const cfg = r.route_config || extractRouteConfig(r);
+    if (cfg) {
+      if (cfg.startPoint && typeof cfg.startPoint.lat === "number") setStartPoint(cfg.startPoint);
+      if (cfg.destinationPoint && typeof cfg.destinationPoint.lat === "number") {
+        setDestinationPoint(cfg.destinationPoint);
+      } else if (cfg.destination && typeof cfg.destination.lat === "number") {
+        setDestinationPoint(cfg.destination);
+      }
+      if (cfg.roundTripType) setRoundTripType(cfg.roundTripType);
+      if (typeof cfg.revisitStopsOnReturn === "boolean") setRevisitStopsOnReturn(cfg.revisitStopsOnReturn);
+      if (Array.isArray(cfg.outboundStops) && cfg.outboundStops.length > 0) {
+        setOutboundStops(cfg.outboundStops);
+      }
+      if (Array.isArray(cfg.returnStops)) setReturnStops(cfg.returnStops);
+      if (typeof cfg.speedLimitKmh === "number") setSpeedLimitKmh(cfg.speedLimitKmh);
+      if (typeof cfg.deviationThresholdMeters === "number") setDeviationThresholdMeters(cfg.deviationThresholdMeters);
+      if (typeof cfg.alertOnMissedStops === "boolean") setAlertOnMissedStops(cfg.alertOnMissedStops);
+      if (typeof cfg.alertOnDelay === "boolean") setAlertOnDelay(cfg.alertOnDelay);
+      if (typeof cfg.routeNotes === "string") setRouteNotes(cfg.routeNotes);
+      if (typeof cfg.routeDate === "string") setRouteDate(cfg.routeDate);
+    } else {
+      // Legacy records: reconstruct realistic stops matching recorded centres count
+      const stopCount = Math.max(r.centres || 8, 2);
+      setOutboundStops(
+        PRESET_DAIRY_CENTRES.slice(0, Math.min(stopCount, PRESET_DAIRY_CENTRES.length)).map((c, i) => ({
+          id: `out-${i + 1}`,
+          name: c.name,
+          lat: c.lat,
+          lng: c.lng,
+          serviceDurationMins: 5,
+          isMandatory: true,
+          status: "Pending",
+        }))
+      );
+      setReturnStops([]);
+    }
+
+    setActiveTab("planner");
+    showToast(`Loaded "${r.name}" into Route Designer`, "info");
+  }
+
+  // Delete route from Supabase and cache
+  async function handleDeleteRoute(id: string, name: string) {
+    if (!window.confirm(`Are you sure you want to delete route "${name}"?\nThis cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase.from("collection_routes").delete().eq("id", id);
+      if (error) throw error;
+
+      // Clean local storage
+      try {
+        localStorage.removeItem(`nanjil_route_config_${id}`);
+        const allCustom = JSON.parse(localStorage.getItem("nanjil_custom_routes") || "[]");
+        const filtered = allCustom.filter((c: any) => c.id !== id);
+        localStorage.setItem("nanjil_custom_routes", JSON.stringify(filtered));
+      } catch (e) {
+        // Ignore
+      }
+
+      setSavedRoutes((prev) => prev.filter((r) => r.id !== id));
+      if (editingRouteId === id) {
+        setEditingRouteId(null);
+      }
+      showToast(`Route "${name}" deleted successfully.`);
+    } catch (err: any) {
+      console.error("Failed to delete route:", err);
+      showToast("Failed to delete route: " + (err.message || "Database error"), "error");
+    }
+  }
+
+  // Clear editing state and start a fresh route
+  function handleStartNewRoute() {
+    setEditingRouteId(null);
+    setRouteName("New Milk Collection Loop");
+    setStartPoint(NANJIL_DAIRY_DEPOT);
+    setDestinationPoint(PRESET_DAIRY_CENTRES[7]);
+    setRoundTripType("same_path");
+    setRevisitStopsOnReturn(false);
+    setOutboundStops(
+      PRESET_DAIRY_CENTRES.slice(0, 10).map((c, i) => ({
+        id: `out-${i + 1}`,
+        name: c.name,
+        lat: c.lat,
+        lng: c.lng,
+        serviceDurationMins: 5,
+        isMandatory: true,
+        status: "Pending",
+      }))
+    );
+    setReturnStops([]);
+    setRouteNotes("Maintain refrigerated tanker temp at 4°C. Check seals at each depot.");
+    setActiveTab("planner");
+    showToast("Ready to design a new route.", "info");
   }
 
   // Active Vehicle Execution Status
@@ -506,6 +810,21 @@ export default function RoutesPlannerPage() {
       outboundRoadResult.coordinates
     );
   }, [activeVehicle, outboundRoadResult]);
+
+  // Filtered saved routes for quick search
+  const filteredSavedRoutes = useMemo(() => {
+    if (!savedRoutesSearch.trim()) return savedRoutes;
+    const q = savedRoutesSearch.toLowerCase();
+    return savedRoutes.filter((r) => {
+      const v = dbVehicles.find((x) => x.id === r.vehicle_id);
+      const d = dbDrivers.find((x) => x.id === r.driver_id);
+      return (
+        r.name?.toLowerCase().includes(q) ||
+        v?.number?.toLowerCase().includes(q) ||
+        d?.name?.toLowerCase().includes(q)
+      );
+    });
+  }, [savedRoutes, savedRoutesSearch, dbVehicles, dbDrivers]);
 
   return (
     <div className="space-y-6">
@@ -539,38 +858,113 @@ export default function RoutesPlannerPage() {
               </button>
               <button
                 onClick={() => setActiveTab("saved")}
-                className={`px-3 py-1.5 rounded-lg transition-all ${
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
                   activeTab === "saved"
                     ? "bg-white text-slate-900 shadow-xs"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
               >
-                Saved Routes ({savedRoutes.length})
+                <span>Saved Routes ({savedRoutes.length})</span>
+                {editingRouteId && (
+                  <span className="h-1.5 w-1.5 rounded-full bg-indigo-600" />
+                )}
               </button>
             </div>
 
-            <Button
-              onClick={handleSaveRoute}
-              disabled={isSaving}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-xs"
-            >
-              {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-              Save Route
-            </Button>
+            {editingRouteId && (
+              <Button
+                onClick={handleStartNewRoute}
+                variant="outline"
+                className="text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 border-slate-200 text-slate-700 hover:bg-slate-50"
+                title="Clear editor and start designing a new route"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                New Route
+              </Button>
+            )}
+
+            {editingRouteId ? (
+              <div className="flex items-center gap-1.5">
+                <Button
+                  onClick={() => handleSaveRoute(false)}
+                  disabled={isSaving}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-xs"
+                >
+                  {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                  Update Route
+                </Button>
+                <Button
+                  onClick={() => handleSaveRoute(true)}
+                  disabled={isSaving}
+                  variant="outline"
+                  className="border-indigo-200 text-indigo-700 hover:bg-indigo-50 font-medium text-xs px-3 py-2 rounded-xl flex items-center gap-1.5"
+                  title="Save current settings as a new separate route record"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Save as Copy
+                </Button>
+              </div>
+            ) : (
+              <Button
+                onClick={() => handleSaveRoute(false)}
+                disabled={isSaving}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-xs"
+              >
+                {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                Save Route
+              </Button>
+            )}
           </div>
         }
       />
 
       {/* Toast Notification Banner */}
       {toastMessage && (
-        <div className="bg-indigo-50 border border-indigo-200/80 text-indigo-900 px-4 py-2.5 rounded-xl text-sm font-medium flex items-center justify-between shadow-xs">
+        <div
+          className={`px-4 py-2.5 rounded-xl text-sm font-medium flex items-center justify-between shadow-xs border ${
+            toastMessage.type === "error"
+              ? "bg-rose-50 border-rose-200 text-rose-900"
+              : toastMessage.type === "info"
+              ? "bg-slate-50 border-slate-200 text-slate-800"
+              : "bg-indigo-50 border-indigo-200/80 text-indigo-900"
+          }`}
+        >
           <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 text-indigo-600 shrink-0" />
-            <span>{toastMessage}</span>
+            {toastMessage.type === "error" ? (
+              <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4 text-indigo-600 shrink-0" />
+            )}
+            <span>{toastMessage.text}</span>
           </div>
-          <button onClick={() => setToastMessage(null)} className="text-indigo-400 hover:text-indigo-700">
+          <button onClick={() => setToastMessage(null)} className="text-slate-400 hover:text-slate-700">
             <X className="h-4 w-4" />
           </button>
+        </div>
+      )}
+
+      {/* Active Route Edit Banner */}
+      {editingRouteId && activeTab === "planner" && (
+        <div className="bg-indigo-50/70 border border-indigo-200/80 text-indigo-900 px-4 py-2 rounded-xl text-xs flex items-center justify-between shadow-xs">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-indigo-600 animate-pulse" />
+            <span className="font-semibold">Editing: {routeName}</span>
+            <span className="text-slate-400 hidden sm:inline">· ID: {editingRouteId.slice(0, 8)}...</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => handleSaveRoute(false)}
+              className="text-indigo-700 hover:text-indigo-900 font-semibold underline text-[11px]"
+            >
+              Update Database
+            </button>
+            <button
+              onClick={handleStartNewRoute}
+              className="text-slate-500 hover:text-slate-700 text-[11px]"
+            >
+              Start New Route
+            </button>
+          </div>
         </div>
       )}
 
@@ -674,7 +1068,7 @@ export default function RoutesPlannerPage() {
 
               {/* Map Container */}
               <div className="relative h-[560px] w-full bg-slate-100">
-                <Map
+                <MapGL
                   ref={mapRef}
                   initialViewState={{
                     longitude: NANJIL_DAIRY_DEPOT.lng,
@@ -801,7 +1195,7 @@ export default function RoutesPlannerPage() {
                         </div>
                       </Marker>
                     ))}
-                </Map>
+                </MapGL>
               </div>
 
               {/* Map Footer Toolbar */}
@@ -1244,7 +1638,7 @@ export default function RoutesPlannerPage() {
 
               {/* Map Preview */}
               <div className="h-[480px] w-full rounded-xl overflow-hidden border border-slate-200">
-                <Map
+                <MapGL
                   initialViewState={{
                     longitude: NANJIL_DAIRY_DEPOT.lng,
                     latitude: NANJIL_DAIRY_DEPOT.lat,
@@ -1287,7 +1681,7 @@ export default function RoutesPlannerPage() {
                       </div>
                     </Marker>
                   )}
-                </Map>
+                </MapGL>
               </div>
 
               {/* Deviation & Completion Metrics */}
@@ -1394,64 +1788,201 @@ export default function RoutesPlannerPage() {
       {/* ── SAVED ROUTES TAB ──────────────────────────────────────── */}
       {activeTab === "saved" && (
         <Card className="border border-slate-200/80 p-5 space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
             <div>
-              <div className="text-base font-bold text-slate-900">Saved Fleet Routes & Templates</div>
-              <div className="text-xs text-slate-500">
-                Manage, activate, or inspect saved multi-stop collection routes
+              <div className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <span>Saved Fleet Routes & Templates</span>
+                <Badge variant="outline" className="bg-indigo-50 text-indigo-700 text-xs font-semibold">
+                  {savedRoutes.length} Persisted
+                </Badge>
               </div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                Manage, activate, update or inspect saved multi-stop collection routes
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <Search className="h-3.5 w-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Filter routes..."
+                  value={savedRoutesSearch}
+                  onChange={(e) => setSavedRoutesSearch(e.target.value)}
+                  className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-indigo-500 w-44 sm:w-56"
+                />
+              </div>
+
+              <Button
+                onClick={loadSavedRoutes}
+                disabled={isLoadingRoutes}
+                variant="outline"
+                className="text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1.5 border-slate-200 text-slate-700 hover:bg-slate-50"
+                title="Refresh routes from Supabase database"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${isLoadingRoutes ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
+
+              <Button
+                onClick={handleStartNewRoute}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                New Route
+              </Button>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
-                  <th className="py-2.5 px-3">Route Name</th>
-                  <th className="py-2.5 px-3">Assigned Vehicle</th>
-                  <th className="py-2.5 px-3">Assigned Driver</th>
-                  <th className="py-2.5 px-3">Centres / Stops</th>
-                  <th className="py-2.5 px-3">Departure</th>
-                  <th className="py-2.5 px-3">Status</th>
-                  <th className="py-2.5 px-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {savedRoutes.map((r) => {
-                  const v = dbVehicles.find((x) => x.id === r.vehicle_id);
-                  const d = dbDrivers.find((x) => x.id === r.driver_id);
-                  return (
-                    <tr key={r.id} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="py-3 px-3 font-semibold text-slate-900">{r.name}</td>
-                      <td className="py-3 px-3 text-slate-700">{v ? v.number : "Unassigned"}</td>
-                      <td className="py-3 px-3 text-slate-700">{d ? d.name : "Unassigned"}</td>
-                      <td className="py-3 px-3 font-semibold text-indigo-700">{r.centres || 0} stops</td>
-                      <td className="py-3 px-3 text-slate-600">{r.start_time || "05:30"}</td>
-                      <td className="py-3 px-3">
-                        <Badge variant="outline" className="bg-slate-50 text-slate-700 text-[10px]">
-                          {r.status || "Ready"}
-                        </Badge>
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <Button
-                          onClick={() => {
-                            setRouteName(r.name);
-                            if (r.vehicle_id) setAssignedVehicleId(r.vehicle_id);
-                            if (r.driver_id) setAssignedDriverId(r.driver_id);
-                            setActiveTab("planner");
-                            showToast(`Loaded ${r.name} into Route Designer`);
-                          }}
-                          className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-2.5 py-1 rounded-lg"
-                        >
-                          Open in Designer
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          {isLoadingRoutes && savedRoutes.length === 0 ? (
+            <div className="py-16 text-center space-y-2">
+              <Loader2 className="h-7 w-7 text-indigo-600 animate-spin mx-auto" />
+              <div className="text-xs text-slate-500">Loading saved fleet routes from database...</div>
+            </div>
+          ) : filteredSavedRoutes.length === 0 ? (
+            <div className="py-14 text-center space-y-3">
+              <div className="h-12 w-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
+                <RouteIcon className="h-6 w-6" />
+              </div>
+              <div className="text-sm font-bold text-slate-800">
+                {savedRoutesSearch ? "No routes matching your search" : "No saved routes yet"}
+              </div>
+              <div className="text-xs text-slate-500 max-w-sm mx-auto">
+                {savedRoutesSearch
+                  ? `No routes found matching "${savedRoutesSearch}". Try clearing your search.`
+                  : "Design and customize multi-stop collection routes in the Route Designer, then click Save Route to store them."}
+              </div>
+              {savedRoutesSearch ? (
+                <Button
+                  onClick={() => setSavedRoutesSearch("")}
+                  variant="outline"
+                  className="text-xs px-3 py-1.5 rounded-xl"
+                >
+                  Clear Search
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => setActiveTab("planner")}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-4 py-2 rounded-xl"
+                >
+                  Open Route Designer
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-400 uppercase text-[10px] tracking-wider font-semibold bg-slate-50/50">
+                    <th className="py-2.5 px-3">Route Name</th>
+                    <th className="py-2.5 px-3">Trip Mode</th>
+                    <th className="py-2.5 px-3">Assigned Vehicle</th>
+                    <th className="py-2.5 px-3">Assigned Driver</th>
+                    <th className="py-2.5 px-3">Stops / Distance</th>
+                    <th className="py-2.5 px-3">Departure</th>
+                    <th className="py-2.5 px-3">Status</th>
+                    <th className="py-2.5 px-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredSavedRoutes.map((r) => {
+                    const v = dbVehicles.find((x) => x.id === r.vehicle_id);
+                    const d = dbDrivers.find((x) => x.id === r.driver_id);
+                    const cfg = r.route_config;
+                    const mode = cfg?.roundTripType || "same_path";
+                    const distKm = cfg?.totalDistanceKm || null;
+                    const isCurrent = editingRouteId === r.id;
+
+                    return (
+                      <tr
+                        key={r.id}
+                        className={`hover:bg-slate-50/70 transition-colors ${
+                          isCurrent ? "bg-indigo-50/30 font-medium" : ""
+                        }`}
+                      >
+                        <td className="py-3 px-3">
+                          <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                            {r.name}
+                            {isCurrent && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 font-bold uppercase">
+                                Active
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            Saved {r.created_at ? new Date(r.created_at).toLocaleDateString() : "Recently"}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3">
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] ${
+                              mode === "same_path"
+                                ? "bg-blue-50 text-blue-700 border-blue-200"
+                                : mode === "different_path"
+                                ? "bg-purple-50 text-purple-700 border-purple-200"
+                                : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            }`}
+                          >
+                            {mode === "same_path"
+                              ? "Same Path Loop"
+                              : mode === "different_path"
+                              ? "Split Path Loop"
+                              : "One-Way"}
+                          </Badge>
+                        </td>
+                        <td className="py-3 px-3 text-slate-700">
+                          {v ? (
+                            <span className="font-medium text-slate-900">{v.number}</span>
+                          ) : (
+                            <span className="text-slate-400 italic">Unassigned</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-slate-700">
+                          {d ? (
+                            <span>{d.name}</span>
+                          ) : (
+                            <span className="text-slate-400 italic">Unassigned</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-indigo-700">
+                          {r.centres || (cfg?.outboundStops?.length ?? 0)} stops
+                          {distKm ? (
+                            <span className="text-slate-400 font-normal ml-1">({distKm} km)</span>
+                          ) : null}
+                        </td>
+                        <td className="py-3 px-3 text-slate-600">{r.start_time || "05:30"}</td>
+                        <td className="py-3 px-3">
+                          <Badge variant="outline" className="bg-slate-50 text-slate-700 text-[10px]">
+                            {r.status || "Ready"}
+                          </Badge>
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Button
+                              onClick={() => handleOpenInDesigner(r)}
+                              className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 font-medium transition-colors"
+                              title="Load full route into Route Designer"
+                            >
+                              <Edit className="h-3 w-3" />
+                              Open in Designer
+                            </Button>
+                            <button
+                              onClick={() => handleDeleteRoute(r.id, r.name)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                              title="Delete route permanently"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
       )}
     </div>

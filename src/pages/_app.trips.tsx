@@ -29,7 +29,7 @@ import {
   SkipBack,
   SkipForward,
 } from "lucide-react";
-import Map, { Marker, Source, Layer, NavigationControl, MapRef } from "react-map-gl/maplibre";
+import MapGL, { Marker, Source, Layer, NavigationControl, MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
@@ -667,7 +667,7 @@ export default function TripHistoryPage() {
           <Card className="border border-slate-200/80 overflow-hidden shadow-xs flex-1 flex flex-col">
             {/* Map Canvas */}
             <div className="relative h-[500px] w-full bg-slate-100">
-              <Map
+              <MapGL
                 ref={mapRef}
                 initialViewState={{
                   longitude: gpsPoints[0]?.lng || 77.288373,
@@ -772,7 +772,7 @@ export default function TripHistoryPage() {
                     </div>
                   </Marker>
                 )}
-              </Map>
+              </MapGL>
 
               {/* HUD OVERLAY (Top-Left on Map) */}
               {currentPoint && (

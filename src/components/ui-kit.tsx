@@ -66,14 +66,26 @@ export function StatusDot({ status }: { status: string }) {
   );
 }
 
-export function Badge({ status, children }: { status?: string; children: ReactNode }) {
+export function Badge({
+  status,
+  className = "",
+  variant,
+  children,
+  ...props
+}: {
+  status?: string;
+  className?: string;
+  variant?: string;
+  children?: ReactNode;
+} & React.HTMLAttributes<HTMLSpanElement>) {
   const cfg = status ? STATUS_CONFIG[status] : undefined;
   const cls = cfg?.badge ?? "bg-muted text-muted-foreground border-border";
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-semibold rounded-full border ring-1 ring-inset ${cls}`}
+      {...props}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-semibold rounded-full border ring-1 ring-inset ${cls} ${className}`}
     >
-      <StatusDot status={status ?? ""} />
+      {status && <StatusDot status={status} />}
       {children}
     </span>
   );
