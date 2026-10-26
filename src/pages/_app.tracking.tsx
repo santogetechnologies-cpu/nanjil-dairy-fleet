@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { type Vehicle, type VehicleStatus } from "@/lib/types";
 import { Card } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
@@ -102,19 +103,19 @@ function TrackingPage() {
             <span className="truncate">
               {activeCriticals.length > 0 ? (
                 <>
-                  <strong>Critical Overspeed (≥100 km/h):</strong>{" "}
+                  <strong>Critical Overspeed (≥75 km/h):</strong>{" "}
                   {activeCriticals.map((v) => `${v.number} (${v.speed} km/h)`).join(", ")}
                 </>
               ) : (
                 <>
-                  <strong>Overspeed Warning (≥80 km/h):</strong>{" "}
+                  <strong>Speeding Warning (&gt;60 km/h):</strong>{" "}
                   {activeWarnings.map((v) => `${v.number} (${v.speed} km/h)`).join(", ")}
                 </>
               )}
             </span>
           </div>
           <div className="text-[11px] opacity-75 shrink-0 hidden md:block font-mono">
-            Safety Monitor · 80 / 100 km/h
+            Safety Policy · 60 km/h Baseline
           </div>
         </div>
       )}
@@ -238,18 +239,50 @@ function TrackingPage() {
                     </div>
 
                     {v.deviceId && (
-                      <div className="text-[10px] text-muted-foreground font-mono mt-1 flex items-center gap-1">
-                        <Radio className="h-3 w-3 text-emerald-500 animate-pulse" />
-                        <span>Device ID: {v.deviceId}</span>
+                      <div className="text-[10px] text-muted-foreground font-mono mt-1 flex items-center justify-between">
+                        <span className="flex items-center gap-1">
+                          <Radio className="h-3 w-3 text-emerald-500 animate-pulse" />
+                          <span>Device ID: {v.deviceId}</span>
+                        </span>
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 font-sans">
+                          {v.lastUpdate ? "Transmitting" : "Live"}
+                        </span>
                       </div>
                     )}
 
                     <div className="flex items-center justify-between text-xs text-muted-foreground mt-1">
-                      <span>{v.driver || "No Driver"}</span>
-                      <span className="flex items-center gap-0.5">
-                        <MapPin className="h-3 w-3" /> {v.location || "Live Location"}
+                      <span>{v.driver || "Unassigned"}</span>
+                      <span className="flex items-center gap-0.5 truncate max-w-[130px]">
+                        <MapPin className="h-3 w-3 shrink-0" /> {v.location || "Live Location"}
                       </span>
                     </div>
+
+                    {isSelected && (
+                      <div className="mt-2.5 pt-2 border-t border-slate-200/80 flex items-center gap-1.5 text-[11px]">
+                        <Link
+                          to={`/trips?vehicle=${v.id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex-1 text-center py-1 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-semibold"
+                        >
+                          Trip History
+                        </Link>
+                        <Link
+                          to={`/routes?vehicle=${v.id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex-1 text-center py-1 rounded bg-slate-100 text-slate-700 hover:bg-slate-200 font-medium"
+                        >
+                          Route Planner
+                        </Link>
+                        <Link
+                          to={`/vehicles/${v.id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="px-2 py-1 rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          title="Vehicle Profile"
+                        >
+                          Profile
+                        </Link>
+                      </div>
+                    )}
                     <div className="mt-2 flex items-center justify-between flex-wrap gap-y-1 text-[11px] text-muted-foreground border-t border-border/40 pt-1.5">
                       <span className="truncate mr-1">
                         Speed:{" "}

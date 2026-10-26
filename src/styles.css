@@ -271,9 +271,14 @@ html, body {
   scrollbar-color: var(--border) transparent;
 }
 
-button, a, [role="button"] {
-  min-height: 44px;
-  min-width: 44px;
+/* Mobile touch target minimum size - scoped to coarse pointers only so desktop controls remain crisp */
+@media (pointer: coarse) {
+  button:not(.btn-compact):not(.pill-compact), 
+  a:not(.link-compact):not(.pill-compact), 
+  [role="button"]:not(.btn-compact) {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }
 
 .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 16px); }

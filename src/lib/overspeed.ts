@@ -13,9 +13,10 @@ import { supabase } from "@/lib/supabase";
 import type { Vehicle } from "@/lib/types";
 
 // ── Threshold Constants ──────────────────────────────────────────────────────
-export const WARNING_SPEED_KMH = 80;
-export const CRITICAL_SPEED_KMH = 100;
-export const OVERSPEED_ALERT_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+export const DEFAULT_SPEED_LIMIT_KMH = 60;
+export const WARNING_SPEED_DELTA_KMH = 10;
+export const CRITICAL_SPEED_DELTA_KMH = 20;
+export const OVERSPEED_ALERT_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
 
 export type OverspeedLevel = "normal" | "warning" | "critical";
 
@@ -23,6 +24,8 @@ export interface OverspeedStatus {
   level: OverspeedLevel;
   label: "Normal" | "Overspeed Warning" | "Critical Overspeed";
   speed: number;
+  limit: number;
+  excessSpeed: number;
   isOverspeed: boolean;
 }
 
@@ -47,10 +50,12 @@ export function isRealSupabaseVehicleId(id: unknown): boolean {
 
 /**
  * Centralized overspeed classification function.
- * Safely parses string or number speeds, ignores invalid/negative values,
- * and classifies strictly into normal, warning (80-99.9), or critical (>=100).
+ * Supports configurable speed threshold (defaults to 60 km/h).
+ * Normal: <= limit
+ * Warning: limit < speed <= limit + 20
+ * Critical: > limit + 20
  */
-export function getOverspeedStatus(speedVal: unknown): OverspeedStatus {
+export function getOverspeedStatus(speedVal: unknown, customLimit: number = DEFAULT_SPEED_LIMIT_KMH): OverspeedStatus {
   const speed =
     typeof speedVal === "number" && !isNaN(speedVal)
       ? speedVal
@@ -58,29 +63,39 @@ export function getOverspeedStatus(speedVal: unknown): OverspeedStatus {
         ? parseFloat(speedVal)
         : 0;
 
-  if (isNaN(speed) || speed < 0) {
+  const limit = typeof customLimit === "number" && customLimit > 0 ? customLimit : DEFAULT_SPEED_LIMIT_KMH;
+
+  if (isNaN(speed) || speed <= 0) {
     return {
       level: "normal",
       label: "Normal",
       speed: 0,
+      limit,
+      excessSpeed: 0,
       isOverspeed: false,
     };
   }
 
-  if (speed >= CRITICAL_SPEED_KMH) {
+  const excess = Math.max(0, Math.round(speed - limit));
+
+  if (speed > limit + CRITICAL_SPEED_DELTA_KMH) {
     return {
       level: "critical",
       label: "Critical Overspeed",
       speed,
+      limit,
+      excessSpeed: excess,
       isOverspeed: true,
     };
   }
 
-  if (speed >= WARNING_SPEED_KMH) {
+  if (speed > limit) {
     return {
       level: "warning",
       label: "Overspeed Warning",
       speed,
+      limit,
+      excessSpeed: excess,
       isOverspeed: true,
     };
   }
@@ -89,6 +104,8 @@ export function getOverspeedStatus(speedVal: unknown): OverspeedStatus {
     level: "normal",
     label: "Normal",
     speed,
+    limit,
+    excessSpeed: 0,
     isOverspeed: false,
   };
 }

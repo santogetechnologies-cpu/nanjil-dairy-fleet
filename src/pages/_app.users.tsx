@@ -961,7 +961,6 @@ function Page() {
                   <option>Administrator</option>
                   <option>Fleet Manager</option>
                   <option>Driver</option>
-                  <option>Operations</option>
                 </select>
               </div>
 
