@@ -282,7 +282,7 @@ export default function DashboardPage() {
             <div className="mt-3 pt-3 border-t border-slate-100 flex items-baseline justify-between text-xs">
               <span className="text-slate-500 font-medium">Monthly Cost:</span>
               <span className="text-sm font-bold text-slate-900">
-                ₹ {fleetFuel.totalCost.toLocaleString() || "1,84,500"}
+                ₹ {fleetFuel?.totalFleetCost ? fleetFuel.totalFleetCost.toLocaleString() : "1,84,500"}
               </span>
             </div>
           </Link>
