@@ -48,7 +48,6 @@ export function VehicleComplianceDashboard() {
   const [dbError, setDbError] = useState<string | null>(null);
   const [isMigrationPending, setIsMigrationPending] = useState(false);
   const [warningDays, setWarningDays] = useState(DEFAULT_COMPLIANCE_WARNING_DAYS);
-  const [daysFilter, setDaysFilter] = useState<string>("ALL");
 
   // Filters, search, sort, and display state
   const [searchQuery, setSearchQuery] = useState("");
@@ -295,82 +294,8 @@ export function VehicleComplianceDashboard() {
     return Array.from(set).sort();
   }, [records]);
 
-  // ── 4b. Expiry Counts for Days / Window Filter ────────────────────
-  const expiryCounts = useMemo(() => {
-    let d15 = 0;
-    let d30 = 0;
-    let d45 = 0;
-    let d60 = 0;
-    let d90 = 0;
-    let expired = 0;
-    let missing = 0;
-
-    const today = new Date();
-    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-
-    const dateKeys = [
-      "fcExpiryDate",
-      "tnPermitExpiry",
-      "klPermitExpiry",
-      "tnTaxExpiry",
-      "klTaxExpiry",
-      "pollutionExpiry",
-      "foodSafetyExpiry",
-      "insuranceExpiry",
-      "advertisementExpiry",
-    ] as const;
-
-    for (const r of records) {
-      let hasDates = false;
-      let minDiff = Infinity;
-      let hasExpired = false;
-
-      for (const k of dateKeys) {
-        const val = r[k];
-        if (!val || typeof val !== "string" || !val.trim()) continue;
-        const d = new Date(val);
-        if (isNaN(d.getTime())) continue;
-
-        hasDates = true;
-        const expMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-        const diffDays = Math.ceil((expMidnight - todayMidnight) / (1000 * 60 * 60 * 24));
-
-        if (diffDays < minDiff) minDiff = diffDays;
-        if (diffDays < 0) hasExpired = true;
-      }
-
-      if (!hasDates) {
-        missing++;
-      } else {
-        if (hasExpired) expired++;
-        if (minDiff <= 15) d15++;
-        if (minDiff <= 30) d30++;
-        if (minDiff <= 45) d45++;
-        if (minDiff <= 60) d60++;
-        if (minDiff <= 90) d90++;
-      }
-    }
-
-    return { d15, d30, d45, d60, d90, expired, missing };
-  }, [records]);
-
   // ── 5. Filtering & Searching ──────────────────────────────────────
   const filteredRecords = useMemo(() => {
-    const today = new Date();
-    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-
-    const dateKeys = [
-      "fcExpiryDate",
-      "tnPermitExpiry",
-      "klPermitExpiry",
-      "tnTaxExpiry",
-      "klTaxExpiry",
-      "pollutionExpiry",
-      "foodSafetyExpiry",
-      "insuranceExpiry",
-      "advertisementExpiry",
-    ] as const;
-
     return records.filter((r) => {
       // Group filter
       if (groupFilter !== "ALL" && r.vehicleGroup !== groupFilter) {
@@ -389,39 +314,9 @@ export function VehicleComplianceDashboard() {
         }
       }
 
-      // Days / Window filter
-      if (daysFilter !== "ALL") {
-        let hasDates = false;
-        let minDiff = Infinity;
-        let hasExpired = false;
-
-        for (const k of dateKeys) {
-          const val = r[k];
-          if (!val || typeof val !== "string" || !val.trim()) continue;
-          const d = new Date(val);
-          if (isNaN(d.getTime())) continue;
-
-          hasDates = true;
-          const expMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-          const diffDays = Math.ceil((expMidnight - todayMidnight) / (1000 * 60 * 60 * 24));
-
-          if (diffDays < minDiff) minDiff = diffDays;
-          if (diffDays < 0) hasExpired = true;
-        }
-
-        if (daysFilter === "MISSING") {
-          if (hasDates) return false;
-        } else if (daysFilter === "EXPIRED") {
-          if (!hasDates || !hasExpired) return false;
-        } else {
-          const maxDays = Number(daysFilter);
-          if (!hasDates || minDiff > maxDays) return false;
-        }
-      }
-
       return true;
     });
-  }, [records, groupFilter, searchQuery, daysFilter]);
+  }, [records, groupFilter, searchQuery]);
 
   // ── 7. Deterministic Sorting ──────────────────────────────────────
   const sortedRecords = useMemo(() => {
@@ -597,22 +492,10 @@ export function VehicleComplianceDashboard() {
         />
         <Kpi
           label="Renewal Window"
-          value={
-            daysFilter === "ALL"
-              ? `${warningDays} Days`
-              : daysFilter === "EXPIRED"
-              ? "Expired"
-              : daysFilter === "MISSING"
-              ? "Missing"
-              : `≤ ${daysFilter} Days`
-          }
-          accent={daysFilter === "EXPIRED" ? "destructive" : daysFilter !== "ALL" ? "warning" : "primary"}
+          value={`${warningDays} Days`}
+          accent="warning"
           icon={<Calendar className="h-5 w-5" />}
-          hint={
-            daysFilter === "ALL"
-              ? "Showing all active units"
-              : `Filtered: ${filteredRecords.length} vehicles match`
-          }
+          hint="Expiring soon window"
         />
       </div>
 
@@ -684,35 +567,22 @@ export function VehicleComplianceDashboard() {
               </select>
             </div>
 
-            {/* Configurable Warning Window & Days Filter */}
+            {/* Configurable Warning Window */}
             <div className="flex items-center gap-1.5 text-xs">
-              <span className="text-muted-foreground hidden sm:inline" title="Filter vehicles by expiry timeline">
+              <span className="text-muted-foreground hidden sm:inline" title="Warning window threshold">
                 Window:
               </span>
               <select
-                value={daysFilter}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setDaysFilter(val);
-                  if (val !== "ALL" && val !== "EXPIRED" && val !== "MISSING") {
-                    setWarningDays(Number(val));
-                  }
-                }}
-                className={`h-9 px-2 rounded-xl border text-xs focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer transition-colors ${
-                  daysFilter !== "ALL"
-                    ? "border-primary/60 bg-primary/5 font-semibold text-primary"
-                    : "border-border bg-background text-foreground"
-                }`}
-                title="Filter vehicles by expiry timeline"
+                value={warningDays}
+                onChange={(e) => setWarningDays(Number(e.target.value))}
+                className="h-9 px-2 rounded-xl border border-border bg-background text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                title="Configurable Expiring Soon window"
               >
-                <option value="ALL">All Days / All Fleet ({records.length})</option>
-                <option value="15">Due in ≤ 15 Days ({expiryCounts.d15})</option>
-                <option value="30">Due in ≤ 30 Days (Default) ({expiryCounts.d30})</option>
-                <option value="45">Due in ≤ 45 Days ({expiryCounts.d45})</option>
-                <option value="60">Due in ≤ 60 Days ({expiryCounts.d60})</option>
-                <option value="90">Due in ≤ 90 Days ({expiryCounts.d90})</option>
-                <option value="EXPIRED">Expired / Overdue Only ({expiryCounts.expired})</option>
-                <option value="MISSING">Missing Dates ({expiryCounts.missing})</option>
+                <option value={15}>15 Days</option>
+                <option value={30}>30 Days (Default)</option>
+                <option value={45}>45 Days</option>
+                <option value={60}>60 Days</option>
+                <option value={90}>90 Days</option>
               </select>
             </div>
 
@@ -763,15 +633,7 @@ export function VehicleComplianceDashboard() {
           <Filter className="h-10 w-10 text-muted-foreground/40 mx-auto" />
           <h3 className="text-base font-semibold text-foreground">No matching compliance records</h3>
           <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-            {daysFilter !== "ALL"
-              ? `No vehicles found matching the "${
-                  daysFilter === "EXPIRED"
-                    ? "Expired / Overdue Only"
-                    : daysFilter === "MISSING"
-                    ? "Missing Dates"
-                    : `≤ ${daysFilter} Days`
-                }" filter.`
-              : "No vehicles match the selected search or group criteria."}
+            No vehicles match the selected search or group criteria.
           </p>
           <Button
             size="sm"
@@ -779,7 +641,6 @@ export function VehicleComplianceDashboard() {
             onClick={() => {
               setSearchQuery("");
               setGroupFilter("ALL");
-              setDaysFilter("ALL");
             }}
           >
             Reset Filters
