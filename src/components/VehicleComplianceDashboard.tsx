@@ -708,7 +708,7 @@ export function VehicleComplianceDashboard() {
                         </div>
                       </th>
                       <th className="py-3 px-3">Advertisement</th>
-                      <th className="py-3 px-4 text-right">Actions</th>
+                      <th className="py-3 px-4 text-right w-24 min-w-[90px]">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
@@ -802,28 +802,40 @@ export function VehicleComplianceDashboard() {
                           <td className="py-3 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
                               <Button
-                                size="sm"
+                                size="icon"
                                 variant="outline"
                                 onClick={() => setViewRecord(row)}
-                                className="h-7 w-7 p-0 flex items-center justify-center rounded-lg shrink-0"
-                                title="View detailed compliance summary"
-                                aria-label="View"
+                                className="h-8 w-8 text-muted-foreground hover:text-foreground cursor-pointer"
+                                title={`View detailed compliance summary for ${row.vehicleNo}`}
+                                aria-label={`View compliance for ${row.vehicleNo}`}
                               >
-                                <Eye className="h-3.5 w-3.5" />
+                                <Eye className="h-4 w-4 shrink-0" />
                               </Button>
                               {canManage && (
                                 <Button
-                                  size="sm"
+                                  size="icon"
                                   variant={hasDates ? "outline" : "primary"}
                                   onClick={() => setEditRecord(row)}
-                                  className="h-7 w-7 p-0 flex items-center justify-center rounded-lg shrink-0"
-                                  title={hasDates ? "Edit compliance dates" : "Set compliance dates"}
-                                  aria-label={hasDates ? "Edit" : "Set compliance"}
+                                  className={`h-8 w-8 cursor-pointer ${
+                                    hasDates
+                                      ? "text-muted-foreground hover:text-primary hover:border-primary/40"
+                                      : "text-white"
+                                  }`}
+                                  title={
+                                    hasDates
+                                      ? `Edit compliance dates for ${row.vehicleNo}`
+                                      : `Log compliance dates for ${row.vehicleNo}`
+                                  }
+                                  aria-label={
+                                    hasDates
+                                      ? `Edit compliance for ${row.vehicleNo}`
+                                      : `Log compliance for ${row.vehicleNo}`
+                                  }
                                 >
                                   {hasDates ? (
-                                    <Edit2 className="h-3.5 w-3.5" />
+                                    <Edit2 className="h-4 w-4 shrink-0" />
                                   ) : (
-                                    <Plus className="h-3.5 w-3.5" />
+                                    <Plus className="h-4 w-4 shrink-0 stroke-[2.5]" />
                                   )}
                                 </Button>
                               )}

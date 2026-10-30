@@ -190,6 +190,8 @@ const BTN_SIZES: Record<string, string> = {
   sm: "h-8 px-3 text-xs gap-1",
   md: "h-9 px-4 text-sm gap-1.5",
   lg: "h-11 px-5 text-sm gap-2",
+  icon: "h-8 w-8 p-0 shrink-0",
+  "icon-sm": "h-7 w-7 p-0 shrink-0",
 };
 
 export function Button({
@@ -200,7 +202,7 @@ export function Button({
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "outline" | "ghost" | "destructive" | "success";
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "icon" | "icon-sm";
 }) {
   const isPrimary = variant === "primary";
   return (
