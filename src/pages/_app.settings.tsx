@@ -20,6 +20,7 @@ import {
   Lock,
   Plus,
   Loader2,
+  Trash2,
 } from "lucide-react";
 
 type SettingsTab = "route" | "trip" | "speed" | "fuel" | "fleet_users";
@@ -83,6 +84,13 @@ export default function SettingsPage() {
     password: "",
   });
   const [isSubmittingUser, setIsSubmittingUser] = useState(false);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [userActionMsg, setUserActionMsg] = useState<string | null>(null);
+
+  const showUserToast = (msg: string) => {
+    setUserActionMsg(msg);
+    setTimeout(() => setUserActionMsg(null), 3500);
+  };
 
   // Load saved preferences from localStorage / database
   useEffect(() => {
@@ -161,11 +169,72 @@ export default function SettingsPage() {
       setShowAddUserModal(false);
       setNewUserForm({ name: "", email: "", role: "manager", password: "" });
       loadProfiles();
-      alert("User account registered successfully!");
+      showUserToast("User account registered successfully!");
     } catch (err: any) {
       alert("Failed to create user: " + err.message);
     } finally {
       setIsSubmittingUser(false);
+    }
+  }
+
+  async function handleDeleteUser(targetUser: any) {
+    if (targetUser.id === user?.id) {
+      alert("You cannot delete your own administrator account.");
+      return;
+    }
+
+    const userName = targetUser.name || targetUser.email || "this user";
+    if (
+      !confirm(
+        `Are you sure you want to permanently delete user "${userName}"? This will revoke their access and remove their credentials.`
+      )
+    ) {
+      return;
+    }
+
+    setDeletingUserId(targetUser.id);
+
+    try {
+      // 1. If it's a driver, clean up driver record and synthetic email
+      if (targetUser.role === "driver") {
+        await supabase.from("drivers").delete().eq("profile_id", targetUser.id);
+        if (targetUser.email && targetUser.email.endsWith("@nanjilmilk.com")) {
+          try {
+            await supabase.rpc("admin_delete_user_by_email", { target_email: targetUser.email });
+          } catch {
+            // Ignore
+          }
+        }
+      }
+
+      // 2. Try backend admin_delete_user RPC
+      const { error: rpcErr } = await supabase.rpc("admin_delete_user", {
+        target_user_id: targetUser.id,
+      });
+
+      if (rpcErr) {
+        console.warn("[DeleteUser] RPC warning, fallback to table cascade:", rpcErr);
+        await supabase.from("drivers").delete().eq("profile_id", targetUser.id);
+        const { error: profErr } = await supabase.from("profiles").delete().eq("id", targetUser.id);
+        if (profErr) throw profErr;
+        if (targetUser.email) {
+          try {
+            await supabase.rpc("admin_delete_user_by_email", { target_email: targetUser.email });
+          } catch {
+            // Ignore
+          }
+        }
+      }
+
+      // 3. Optimistic local update
+      setSystemUsers((prev) => prev.filter((u) => u.id !== targetUser.id));
+      showUserToast(`User "${userName}" deleted successfully.`);
+    } catch (err: any) {
+      console.error("Failed to delete user:", err);
+      alert("Failed to delete user: " + (err.message || "An unexpected error occurred."));
+      loadProfiles();
+    } finally {
+      setDeletingUserId(null);
     }
   }
 
@@ -191,6 +260,14 @@ export default function SettingsPage() {
             <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
             <span>Settings saved and applied successfully across modules!</span>
           </div>
+        </div>
+      )}
+
+      {/* Floating Action Feedback Notification */}
+      {userActionMsg && (
+        <div className="fixed bottom-5 right-5 z-50 bg-emerald-700 text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2 text-sm font-medium animate-in fade-in slide-in-from-bottom-3 duration-200">
+          <CheckCircle2 className="h-4 w-4 shrink-0" />
+          <span>{userActionMsg}</span>
         </div>
       )}
 
@@ -533,42 +610,67 @@ export default function SettingsPage() {
                   <th className="py-2.5 px-3">Email</th>
                   <th className="py-2.5 px-3">Role</th>
                   <th className="py-2.5 px-3">Status</th>
-                  <th className="py-2.5 px-3 text-right">Access Scope</th>
+                  <th className="py-2.5 px-3">Access Scope</th>
+                  <th className="py-2.5 px-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {systemUsers.map((u) => (
-                  <tr key={u.id} className="hover:bg-slate-50/70 transition-colors">
-                    <td className="py-3 px-3 font-bold text-slate-900">{u.name}</td>
-                    <td className="py-3 px-3 text-slate-600">{u.email}</td>
-                    <td className="py-3 px-3">
-                      <Badge
-                        variant="outline"
-                        className={
-                          u.role === "admin"
-                            ? "bg-purple-50 text-purple-700 border-purple-200 font-bold"
-                            : u.role === "manager"
-                            ? "bg-indigo-50 text-indigo-700 border-indigo-200 font-semibold"
-                            : "bg-slate-100 text-slate-700"
-                        }
-                      >
-                        {u.role === "admin" ? "Administrator" : u.role === "manager" ? "Fleet Manager" : "Driver"}
-                      </Badge>
-                    </td>
-                    <td className="py-3 px-3">
-                      <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">
-                        {u.status || "Active"}
-                      </Badge>
-                    </td>
-                    <td className="py-3 px-3 text-right text-slate-500 text-[11px]">
-                      {u.role === "admin"
-                        ? "Full System Access"
-                        : u.role === "manager"
-                        ? "Fleet Operations & Reports"
-                        : "Driver Trip Portal"}
-                    </td>
-                  </tr>
-                ))}
+                {systemUsers.map((u) => {
+                  const isSelf = u.id === user?.id;
+                  return (
+                    <tr key={u.id} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-3 px-3 font-bold text-slate-900">{u.name}</td>
+                      <td className="py-3 px-3 text-slate-600">{u.email}</td>
+                      <td className="py-3 px-3">
+                        <Badge
+                          variant="outline"
+                          className={
+                            u.role === "admin"
+                              ? "bg-purple-50 text-purple-700 border-purple-200 font-bold"
+                              : u.role === "manager"
+                              ? "bg-indigo-50 text-indigo-700 border-indigo-200 font-semibold"
+                              : "bg-slate-100 text-slate-700"
+                          }
+                        >
+                          {u.role === "admin" ? "Administrator" : u.role === "manager" ? "Fleet Manager" : "Driver"}
+                        </Badge>
+                      </td>
+                      <td className="py-3 px-3">
+                        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">
+                          {u.status || "Active"}
+                        </Badge>
+                      </td>
+                      <td className="py-3 px-3 text-slate-500 text-[11px]">
+                        {u.role === "admin"
+                          ? "Full System Access"
+                          : u.role === "manager"
+                          ? "Fleet Operations & Reports"
+                          : "Driver Trip Portal"}
+                      </td>
+                      <td className="py-3 px-3 text-right">
+                        {isSelf ? (
+                          <span className="text-[10px] font-medium text-slate-400 italic pr-2">Current User</span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleDeleteUser(u)}
+                            disabled={deletingUserId === u.id}
+                            className="h-7 px-2.5 text-xs text-rose-600 border-rose-200 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-700 cursor-pointer transition-colors shrink-0"
+                            title={`Delete ${u.name || u.email}`}
+                          >
+                            {deletingUserId === u.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5 mr-1" />
+                            )}
+                            Delete
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
