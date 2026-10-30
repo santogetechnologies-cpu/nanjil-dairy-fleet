@@ -21,6 +21,8 @@ import {
   Plus,
   Loader2,
   Trash2,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 
 type SettingsTab = "route" | "trip" | "speed" | "fuel" | "fleet_users";
@@ -80,9 +82,12 @@ export default function SettingsPage() {
   const [newUserForm, setNewUserForm] = useState({
     name: "",
     email: "",
-    role: "manager" as "admin" | "manager" | "driver",
+    role: "driver" as "admin" | "manager" | "driver",
     password: "",
   });
+  const [driverList, setDriverList] = useState<{ id: string; name: string; phone: string }[]>([]);
+  const [selectedDriverId, setSelectedDriverId] = useState<string>("");
+  const [showPassword, setShowPassword] = useState<boolean>(false);
   const [isSubmittingUser, setIsSubmittingUser] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
   const [userActionMsg, setUserActionMsg] = useState<string | null>(null);
@@ -91,6 +96,30 @@ export default function SettingsPage() {
     setUserActionMsg(msg);
     setTimeout(() => setUserActionMsg(null), 3500);
   };
+
+  async function loadDriverList() {
+    try {
+      const { data } = await supabase
+        .from("drivers")
+        .select("id, name, phone")
+        .order("name");
+      if (data) {
+        const map = new Map<string, { id: string; name: string; phone: string }>();
+        for (const d of data) {
+          if (d.name && !map.has(d.name.trim().toLowerCase())) {
+            map.set(d.name.trim().toLowerCase(), {
+              id: d.id,
+              name: d.name.trim(),
+              phone: d.phone ? d.phone.trim() : "",
+            });
+          }
+        }
+        setDriverList(Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name)));
+      }
+    } catch (e) {
+      console.warn("Failed to load driver directory list:", e);
+    }
+  }
 
   // Load saved preferences from localStorage / database
   useEffect(() => {
@@ -109,6 +138,7 @@ export default function SettingsPage() {
 
     if (isAdmin) {
       loadProfiles();
+      loadDriverList();
     }
   }, [isAdmin]);
 
@@ -140,11 +170,14 @@ export default function SettingsPage() {
 
   async function handleCreateUser(e: React.FormEvent) {
     e.preventDefault();
-    if (!newUserForm.email || !newUserForm.password) return;
+    if (!newUserForm.name || !newUserForm.email || !newUserForm.password) return;
     setIsSubmittingUser(true);
     try {
+      const cleanEmail = newUserForm.email.toLowerCase().trim();
+      let createdAuthUserId: string | null = null;
+
       const { data, error } = await supabase.auth.signUp({
-        email: newUserForm.email.toLowerCase().trim(),
+        email: cleanEmail,
         password: newUserForm.password,
         options: {
           data: {
@@ -153,23 +186,67 @@ export default function SettingsPage() {
           },
         },
       });
-      if (error) throw error;
 
-      if (data?.user) {
+      if (error) {
+        // If email already exists in auth.users as an orphan, clean and retry
+        if (error.message.toLowerCase().includes("already registered") || (error as any).status === 422) {
+          try {
+            await supabase.rpc("admin_delete_user_by_email", { target_email: cleanEmail });
+          } catch {
+            // Ignore
+          }
+          const retry = await supabase.auth.signUp({
+            email: cleanEmail,
+            password: newUserForm.password,
+            options: {
+              data: {
+                name: newUserForm.name,
+                role: newUserForm.role,
+              },
+            },
+          });
+          if (retry.error) throw retry.error;
+          createdAuthUserId = retry.data?.user?.id || null;
+        } else {
+          throw error;
+        }
+      } else {
+        createdAuthUserId = data?.user?.id || null;
+      }
+
+      if (createdAuthUserId) {
         await supabase.from("profiles").upsert({
-          id: data.user.id,
+          id: createdAuthUserId,
           name: newUserForm.name,
-          email: newUserForm.email.toLowerCase().trim(),
+          email: cleanEmail,
           role: newUserForm.role,
           status: "Active",
           created_at: new Date().toISOString(),
         });
+
+        // If Driver role, link profile_id in drivers table
+        if (newUserForm.role === "driver") {
+          if (selectedDriverId) {
+            await supabase
+              .from("drivers")
+              .update({ profile_id: createdAuthUserId })
+              .eq("id", selectedDriverId);
+          } else if (newUserForm.name.trim()) {
+            await supabase
+              .from("drivers")
+              .update({ profile_id: createdAuthUserId })
+              .ilike("name", newUserForm.name.trim());
+          }
+        }
       }
 
       setShowAddUserModal(false);
-      setNewUserForm({ name: "", email: "", role: "manager", password: "" });
+      setShowPassword(false);
+      setNewUserForm({ name: "", email: "", role: "driver", password: "" });
+      setSelectedDriverId("");
       loadProfiles();
-      showUserToast("User account registered successfully!");
+      loadDriverList();
+      showUserToast(`User "${newUserForm.name}" registered successfully!`);
     } catch (err: any) {
       alert("Failed to create user: " + err.message);
     } finally {
@@ -594,7 +671,13 @@ export default function SettingsPage() {
             </div>
 
             <Button
-              onClick={() => setShowAddUserModal(true)}
+              onClick={() => {
+                loadDriverList();
+                setSelectedDriverId("");
+                setShowPassword(false);
+                setNewUserForm({ name: "", email: "", role: "driver", password: "" });
+                setShowAddUserModal(true);
+              }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-3.5 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs"
             >
               <Plus className="h-3.5 w-3.5" />
@@ -686,62 +769,178 @@ export default function SettingsPage() {
                 <div className="text-sm font-bold text-slate-900">Add Staff Account</div>
                 <div className="text-xs text-slate-500">Only Admin, Manager, and Driver roles permitted</div>
               </div>
-              <button onClick={() => setShowAddUserModal(false)} className="text-slate-400 hover:text-slate-700">
+              <button
+                onClick={() => {
+                  setShowAddUserModal(false);
+                  setShowPassword(false);
+                }}
+                className="text-slate-400 hover:text-slate-700"
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateUser} className="space-y-3 text-xs">
+            <form onSubmit={handleCreateUser} className="space-y-3.5 text-xs">
+              {/* User Role */}
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Full Name *</label>
-                <input
-                  value={newUserForm.name}
-                  onChange={(e) => setNewUserForm({ ...newUserForm, name: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200"
-                  required
-                />
+                <label className="font-semibold text-slate-700 block mb-1">User Role *</label>
+                <select
+                  value={newUserForm.role}
+                  onChange={(e) => {
+                    const r = e.target.value as any;
+                    setSelectedDriverId("");
+                    setNewUserForm({
+                      ...newUserForm,
+                      role: r,
+                      name: "",
+                      email: "",
+                    });
+                    if (r === "driver") {
+                      loadDriverList();
+                    }
+                  }}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 cursor-pointer"
+                >
+                  <option value="driver">Driver</option>
+                  <option value="manager">Fleet Manager</option>
+                  <option value="admin">Administrator</option>
+                </select>
               </div>
 
+              {/* Full Name / Driver Name Selection */}
+              {newUserForm.role === "driver" ? (
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">
+                    Select Driver Name *
+                  </label>
+                  <select
+                    value={selectedDriverId}
+                    onChange={(e) => {
+                      const dId = e.target.value;
+                      setSelectedDriverId(dId);
+                      if (!dId) {
+                        setNewUserForm((prev) => ({ ...prev, name: "", email: "" }));
+                      } else {
+                        const found = driverList.find((d) => d.id === dId);
+                        if (found) {
+                          const cleanSlug = found.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+                          const emailVal = `${cleanSlug}@nanjilmilk.com`;
+                          setNewUserForm((prev) => ({
+                            ...prev,
+                            name: found.name,
+                            email: emailVal,
+                          }));
+                        }
+                      }
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 cursor-pointer"
+                    required
+                  >
+                    <option value="">-- Select Driver Name ({driverList.length} registered) --</option>
+                    {driverList.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} {d.phone ? `· ${d.phone}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedDriverId && (
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Account credentials will be linked to this registered driver profile.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <label className="font-semibold text-slate-700 block mb-1">Full Name *</label>
+                  <input
+                    type="text"
+                    value={newUserForm.name}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, name: e.target.value })}
+                    placeholder="e.g. Rajesh Kumar"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    required
+                  />
+                </div>
+              )}
+
+              {/* Email Address */}
               <div>
                 <label className="font-semibold text-slate-700 block mb-1">Email Address *</label>
                 <input
                   type="email"
                   value={newUserForm.email}
                   onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200"
+                  placeholder={newUserForm.role === "driver" ? "driver@nanjilmilk.com" : "name@example.com"}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                   required
                 />
               </div>
 
+              {/* Initial Password */}
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">User Role *</label>
-                <select
-                  value={newUserForm.role}
-                  onChange={(e) => setNewUserForm({ ...newUserForm, role: e.target.value as any })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white font-semibold"
-                >
-                  <option value="manager">Fleet Manager</option>
-                  <option value="admin">Administrator</option>
-                  <option value="driver">Driver</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="font-semibold text-slate-700 block mb-1">Initial Password *</label>
-                <input
-                  type="password"
-                  value={newUserForm.password}
-                  onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200"
-                  required
-                  minLength={6}
-                />
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-slate-700 block">Initial Password *</label>
+                  {newUserForm.password.length > 0 && (
+                    <span
+                      className={`text-[11px] font-medium flex items-center gap-1 ${
+                        newUserForm.password.length >= 6 ? "text-emerald-600" : "text-amber-600"
+                      }`}
+                    >
+                      {newUserForm.password.length >= 6 ? (
+                        <>
+                          <CheckCircle2 className="h-3 w-3" />
+                          Meets requirement ({newUserForm.password.length} chars)
+                        </>
+                      ) : (
+                        `At least 6 chars required (${newUserForm.password.length}/6)`
+                      )}
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={newUserForm.password}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                    placeholder="Minimum 6 characters"
+                    className={`w-full pl-3 pr-10 py-2 rounded-xl border text-slate-800 transition-colors focus:outline-none focus:ring-2 ${
+                      newUserForm.password.length > 0 && newUserForm.password.length < 6
+                        ? "border-amber-300 focus:ring-amber-500/20"
+                        : newUserForm.password.length >= 6
+                        ? "border-emerald-300 focus:ring-emerald-500/20"
+                        : "border-slate-200 focus:ring-indigo-500/20"
+                    }`}
+                    required
+                    minLength={6}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors"
+                    title={showPassword ? "Hide password" : "Show password"}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="h-4 w-4 text-slate-600" />
+                    ) : (
+                      <Eye className="h-4 w-4 text-slate-400" />
+                    )}
+                  </button>
+                </div>
+                {newUserForm.password.length === 0 && (
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Password must be at least 6 characters.
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                 <Button
                   type="button"
-                  onClick={() => setShowAddUserModal(false)}
+                  onClick={() => {
+                    setShowAddUserModal(false);
+                    setShowPassword(false);
+                  }}
                   className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-3 py-1.5 rounded-xl"
                 >
                   Cancel
