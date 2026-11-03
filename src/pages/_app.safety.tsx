@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/AppLayout";
 import { Badge, Button, Card } from "@/components/ui-kit";
 import {
@@ -23,6 +24,8 @@ import {
   ChevronRight,
   Loader2,
   Check,
+  Radio,
+  Zap,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -39,6 +42,8 @@ import {
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { DEFAULT_SPEED_LIMIT_KMH, getOverspeedStatus } from "@/lib/overspeed";
+import { useVehicles, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
+import { useOverspeedMonitor } from "@/hooks/useOverspeed";
 
 export interface SpeedingIncident {
   id: string;
@@ -75,8 +80,16 @@ export interface DrivingBehaviorEvent {
 export default function SpeedingSafetyPage() {
   const { user } = useAuth();
 
-  // Active Tab
-  const [activeTab, setActiveTab] = useState<"incidents" | "analytics" | "behavior" | "policy">("incidents");
+  // Active Tab: default to "realtime" so user immediately sees live vehicle speed
+  const [activeTab, setActiveTab] = useState<"realtime" | "incidents" | "analytics" | "behavior" | "policy">("realtime");
+
+  // Real-time Vehicle Telemetry streamed directly via Firebase / Supabase
+  const liveVehicles = useVehicles();
+  const { activeWarnings, activeCriticals } = useOverspeedMonitor(liveVehicles);
+
+  // Realtime Tab Filters
+  const [realtimeFilter, setRealtimeFilter] = useState<"All" | "Moving" | "Overspeed" | "Idle">("All");
+  const [realtimeSearch, setRealtimeSearch] = useState("");
 
   // Configurable Speed Threshold Policy (default: 60 km/h)
   const [companySpeedLimit, setCompanySpeedLimit] = useState(DEFAULT_SPEED_LIMIT_KMH);
@@ -95,6 +108,62 @@ export default function SpeedingSafetyPage() {
   const [incidents, setIncidents] = useState<SpeedingIncident[]>([]);
   const [behaviorEvents, setBehaviorEvents] = useState<DrivingBehaviorEvent[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Real-time telemetry metrics derived reactively from liveVehicles
+  const liveMovingVehicles = useMemo(
+    () => liveVehicles.filter((v) => v.status === "Moving"),
+    [liveVehicles]
+  );
+
+  const liveIdleVehicles = useMemo(
+    () => liveVehicles.filter((v) => v.status === "Idle" || v.status === "Parked"),
+    [liveVehicles]
+  );
+
+  const liveOverspeedingVehicles = useMemo(
+    () => liveVehicles.filter((v) => (typeof v.speed === "number" ? v.speed : 0) > companySpeedLimit),
+    [liveVehicles, companySpeedLimit]
+  );
+
+  const fastestVehicle = useMemo(() => {
+    if (liveVehicles.length === 0) return null;
+    let max = liveVehicles[0];
+    for (const v of liveVehicles) {
+      if ((v.speed || 0) > (max.speed || 0)) max = v;
+    }
+    return max;
+  }, [liveVehicles]);
+
+  const liveMaxSpeed = fastestVehicle?.speed || 0;
+
+  const liveAvgSpeed = useMemo(() => {
+    if (liveMovingVehicles.length === 0) return 0;
+    const total = liveMovingVehicles.reduce((acc, v) => acc + (v.speed || 0), 0);
+    return Math.round(total / liveMovingVehicles.length);
+  }, [liveMovingVehicles]);
+
+  // Filtered live vehicles for Realtime Speeds view
+  const filteredLiveVehicles = useMemo(() => {
+    return liveVehicles.filter((v) => {
+      const spd = typeof v.speed === "number" ? v.speed : 0;
+      if (realtimeFilter === "Moving" && v.status !== "Moving") return false;
+      if (realtimeFilter === "Idle" && v.status !== "Idle" && v.status !== "Parked") return false;
+      if (realtimeFilter === "Overspeed" && spd <= companySpeedLimit) return false;
+
+      if (realtimeSearch.trim()) {
+        const q = realtimeSearch.toLowerCase().trim();
+        const matchesNumber = (v.number || "").toLowerCase().includes(q);
+        const matchesDriver = (v.driver || "").toLowerCase().includes(q);
+        const matchesLocation = (v.location || "").toLowerCase().includes(q);
+        const matchesModel = (v.model || "").toLowerCase().includes(q);
+        const matchesDevId = (v.deviceId || "").toLowerCase().includes(q);
+        if (!matchesNumber && !matchesDriver && !matchesLocation && !matchesModel && !matchesDevId) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [liveVehicles, realtimeFilter, realtimeSearch, companySpeedLimit]);
 
   // Resolution Modal State
   const [resolvingIncident, setResolvingIncident] = useState<SpeedingIncident | null>(null);
@@ -386,13 +455,30 @@ export default function SpeedingSafetyPage() {
       {/* ── HEADER ─────────────────────────────────────────────── */}
       <PageHeader
         title="Speeding & Driving Behavior"
-        subtitle={`Safety Analytics · Policy: ${companySpeedLimit} km/h Threshold · ${filteredIncidents.length} Speeding Incidents`}
+        subtitle={`Safety Analytics · Policy: ${companySpeedLimit} km/h Threshold · ${liveMovingVehicles.length} Moving Units (${liveVehicles.length} Connected)`}
         actions={
           <div className="flex items-center gap-2">
             <div className="bg-slate-100 p-1 rounded-xl flex items-center text-xs font-semibold">
               <button
+                onClick={() => setActiveTab("realtime")}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === "realtime"
+                    ? "bg-white text-slate-900 shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span>Realtime Speeds</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
+                  {liveVehicles.length}
+                </span>
+              </button>
+              <button
                 onClick={() => setActiveTab("incidents")}
-                className={`px-3 py-1.5 rounded-lg transition-all ${
+                className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
                   activeTab === "incidents"
                     ? "bg-white text-slate-900 shadow-xs"
                     : "text-slate-600 hover:text-slate-900"
@@ -402,7 +488,7 @@ export default function SpeedingSafetyPage() {
               </button>
               <button
                 onClick={() => setActiveTab("analytics")}
-                className={`px-3 py-1.5 rounded-lg transition-all ${
+                className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
                   activeTab === "analytics"
                     ? "bg-white text-slate-900 shadow-xs"
                     : "text-slate-600 hover:text-slate-900"
@@ -412,7 +498,7 @@ export default function SpeedingSafetyPage() {
               </button>
               <button
                 onClick={() => setActiveTab("behavior")}
-                className={`px-3 py-1.5 rounded-lg transition-all ${
+                className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
                   activeTab === "behavior"
                     ? "bg-white text-slate-900 shadow-xs"
                     : "text-slate-600 hover:text-slate-900"
@@ -422,7 +508,7 @@ export default function SpeedingSafetyPage() {
               </button>
               <button
                 onClick={() => setActiveTab("policy")}
-                className={`px-3 py-1.5 rounded-lg transition-all ${
+                className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
                   activeTab === "policy"
                     ? "bg-white text-slate-900 shadow-xs"
                     : "text-slate-600 hover:text-slate-900"
@@ -435,10 +521,41 @@ export default function SpeedingSafetyPage() {
         }
       />
 
+      {/* ── LIVE OVERSPEED ALERT BANNER ────────────────────────── */}
+      {liveOverspeedingVehicles.length > 0 && (
+        <div className="bg-red-500/10 border-2 border-red-500/30 rounded-2xl p-4 flex items-center justify-between gap-4 animate-pulse">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+              <ShieldAlert className="h-6 w-6" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-red-900 flex items-center gap-2">
+                <span>Active Overspeed Detected!</span>
+                <Badge variant="outline" className="bg-red-600 text-white border-none font-bold text-[10px]">
+                  {liveOverspeedingVehicles.length} {liveOverspeedingVehicles.length === 1 ? "Vehicle" : "Vehicles"}
+                </Badge>
+              </div>
+              <div className="text-xs text-red-700 mt-0.5">
+                {liveOverspeedingVehicles.map((v) => `${v.number} (${v.speed} km/h)`).join(", ")} currently exceeding the {companySpeedLimit} km/h policy limit.
+              </div>
+            </div>
+          </div>
+          <Link
+            to="/tracking"
+            className="px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold text-xs shrink-0 shadow-sm transition-colors"
+          >
+            Track on Live Map
+          </Link>
+        </div>
+      )}
+
       {/* ── STATS TILES ────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <div className="bg-white border border-slate-200/80 p-3.5 rounded-2xl shadow-xs">
-          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Speed Policy</div>
+          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+            <span>Speed Policy</span>
+            <span className="text-[10px] text-slate-400">Limit</span>
+          </div>
           <div className="text-xl font-bold text-slate-900 mt-1 flex items-baseline gap-1">
             {companySpeedLimit} <span className="text-xs font-medium text-slate-500">km/h</span>
           </div>
@@ -446,45 +563,365 @@ export default function SpeedingSafetyPage() {
         </div>
 
         <div className="bg-white border border-slate-200/80 p-3.5 rounded-2xl shadow-xs">
-          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Exceeded Incidents</div>
+          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+            <span>Live Peak Speed</span>
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+          </div>
           <div
-            className={`text-xl font-bold mt-1 ${
-              analyticsSummary.totalCount > 0 ? "text-amber-600" : "text-slate-900"
+            className={`text-xl font-bold mt-1 flex items-baseline gap-1 ${
+              liveMaxSpeed > companySpeedLimit
+                ? "text-red-600 animate-pulse font-extrabold"
+                : liveMaxSpeed > 0
+                ? "text-indigo-600"
+                : "text-slate-900"
             }`}
           >
-            {analyticsSummary.totalCount}
+            {liveMaxSpeed} <span className="text-xs font-medium text-slate-500">km/h</span>
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Vehicles above limit</div>
+          <div
+            className="text-[11px] text-slate-500 mt-1 truncate"
+            title={fastestVehicle ? fastestVehicle.number : "All units stationary"}
+          >
+            {fastestVehicle ? `${fastestVehicle.number} (${fastestVehicle.status})` : "All units stationary"}
+          </div>
         </div>
 
         <div className="bg-white border border-slate-200/80 p-3.5 rounded-2xl shadow-xs">
-          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Peak Speed</div>
-          <div className="text-xl font-bold text-red-600 mt-1 flex items-baseline gap-1">
-            {analyticsSummary.maxSpeedRecorded} <span className="text-xs font-medium text-slate-500">km/h</span>
+          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+            <span>Moving Vehicles</span>
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Highest recorded telemetry</div>
+          <div className="text-xl font-bold text-emerald-600 mt-1 flex items-baseline gap-1">
+            {liveMovingVehicles.length}{" "}
+            <span className="text-xs font-medium text-slate-400">/ {liveVehicles.length} units</span>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-1">
+            {liveIdleVehicles.length} currently idle / stopped
+          </div>
         </div>
 
         <div className="bg-white border border-slate-200/80 p-3.5 rounded-2xl shadow-xs">
-          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Average Duration</div>
+          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+            <span>Live Overspeed</span>
+            {liveOverspeedingVehicles.length > 0 && (
+              <span className="h-2 w-2 rounded-full bg-red-500 animate-ping" />
+            )}
+          </div>
+          <div
+            className={`text-xl font-bold mt-1 ${
+              liveOverspeedingVehicles.length > 0 ? "text-red-600 font-extrabold" : "text-emerald-600"
+            }`}
+          >
+            {liveOverspeedingVehicles.length > 0 ? `${liveOverspeedingVehicles.length} Over Limit` : "0 (Compliant)"}
+          </div>
+          <div className="text-[11px] text-slate-500 mt-1">
+            {liveOverspeedingVehicles.length > 0 ? "Requires manager caution" : "100% of fleet within limit"}
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200/80 p-3.5 rounded-2xl shadow-xs">
+          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+            <span>Fleet Moving Avg</span>
+            <span className="text-[10px] text-slate-400">Live</span>
+          </div>
           <div className="text-xl font-bold text-slate-900 mt-1 flex items-baseline gap-1">
-            {analyticsSummary.avgDurationSec} <span className="text-xs font-medium text-slate-500">seconds</span>
+            {liveAvgSpeed} <span className="text-xs font-medium text-slate-500">km/h</span>
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Time spent over limit</div>
-        </div>
-
-        <div className="bg-white border border-slate-200/80 p-3.5 rounded-2xl shadow-xs">
-          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Repeat Drivers</div>
-          <div className="text-xl font-bold text-slate-900 mt-1">
-            {analyticsSummary.repeatDrivers.filter((d) => d.count > 1).length}
-          </div>
-          <div className="text-[11px] text-slate-500 mt-1">Drivers with &gt;1 incidents</div>
+          <div className="text-[11px] text-slate-500 mt-1">Active transit telemetry</div>
         </div>
       </div>
+
+      {/* ── TAB: REALTIME VEHICLE SPEEDS ───────────────────────── */}
+      {activeTab === "realtime" && (
+        <Card className="border border-slate-200/80 shadow-xs p-4 space-y-4">
+          {/* Header & Live Filter Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-slate-500 font-medium">Filter:</span>
+              <button
+                type="button"
+                onClick={() => setRealtimeFilter("All")}
+                className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                  realtimeFilter === "All"
+                    ? "bg-slate-900 text-white shadow-xs"
+                    : "bg-slate-100 text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                All Connected ({liveVehicles.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setRealtimeFilter("Moving")}
+                className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  realtimeFilter === "Moving"
+                    ? "bg-emerald-600 text-white shadow-xs"
+                    : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"
+                }`}
+              >
+                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
+                Moving Now ({liveMovingVehicles.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setRealtimeFilter("Overspeed")}
+                className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  realtimeFilter === "Overspeed"
+                    ? "bg-red-600 text-white shadow-xs"
+                    : "bg-red-50 text-red-700 hover:bg-red-100 border border-red-200"
+                }`}
+              >
+                Exceeding Limit ({liveOverspeedingVehicles.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setRealtimeFilter("Idle")}
+                className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
+                  realtimeFilter === "Idle"
+                    ? "bg-amber-600 text-white shadow-xs"
+                    : "bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200"
+                }`}
+              >
+                Idle / Stopped ({liveIdleVehicles.length})
+              </button>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search vehicle, driver..."
+                  value={realtimeSearch}
+                  onChange={(e) => setRealtimeSearch(e.target.value)}
+                  className="pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 w-48"
+                />
+              </div>
+
+              <div className="flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                <Radio className="h-3 w-3 text-emerald-600 animate-pulse" />
+                <span>Live ({TELEMETRY_LABEL})</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Realtime Speeds Table */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
+                  <th className="py-2.5 px-3">Vehicle</th>
+                  <th className="py-2.5 px-3">Driver</th>
+                  <th className="py-2.5 px-3 w-44">Realtime Speed</th>
+                  <th className="py-2.5 px-3">Status</th>
+                  <th className="py-2.5 px-3">Speed Delta vs Policy</th>
+                  <th className="py-2.5 px-3">GPS Location</th>
+                  <th className="py-2.5 px-3">Last Telemetry</th>
+                  <th className="py-2.5 px-3 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredLiveVehicles.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="text-center py-8 text-slate-400 text-xs">
+                      No vehicles found matching current filter.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredLiveVehicles.map((v) => {
+                    const spd = typeof v.speed === "number" ? Math.round(v.speed) : 0;
+                    const isOver = spd > companySpeedLimit;
+                    const pctOfLimit = Math.min(100, Math.round((spd / companySpeedLimit) * 100));
+                    const isMoving = v.status === "Moving";
+
+                    return (
+                      <tr key={v.id || v.number} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="py-3 px-3">
+                          <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                            <Truck className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                            <span>{v.number}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5 truncate max-w-[140px]">
+                            {v.model || v.type || "Fleet Asset"}
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-3">
+                          <div className="font-semibold text-slate-800">{v.driver || "Unassigned"}</div>
+                          {v.deviceId && (
+                            <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                              DEV: {v.deviceId.slice(-6)}
+                            </div>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3">
+                          <div className="flex items-baseline justify-between mb-1">
+                            <span
+                              className={`text-base font-extrabold ${
+                                isOver
+                                  ? "text-red-600 animate-pulse"
+                                  : isMoving
+                                  ? "text-emerald-600"
+                                  : "text-slate-500"
+                              }`}
+                            >
+                              {spd}{" "}
+                              <span className="text-[11px] font-normal text-slate-400">km/h</span>
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-medium">
+                              limit {companySpeedLimit} km/h
+                            </span>
+                          </div>
+                          {/* Visual Speed Gauge Bar */}
+                          <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                            <div
+                              className={`h-full transition-all duration-500 rounded-full ${
+                                isOver
+                                  ? "bg-red-500"
+                                  : spd >= companySpeedLimit - 10
+                                  ? "bg-amber-500"
+                                  : isMoving
+                                  ? "bg-emerald-500"
+                                  : "bg-slate-300"
+                              }`}
+                              style={{ width: `${Math.max(4, pctOfLimit)}%` }}
+                            />
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-3">
+                          {isMoving ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping shrink-0" />
+                              Moving
+                            </span>
+                          ) : v.status === "Idle" ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
+                              Idle
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600">
+                              {v.status || "Parked"}
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3">
+                          {isOver ? (
+                            <Badge variant="outline" className="bg-red-50 text-red-700 border-red-300 font-bold">
+                              +{spd - companySpeedLimit} km/h OVER
+                            </Badge>
+                          ) : spd > 0 ? (
+                            <span className="text-[11px] text-emerald-700 font-medium">
+                              -{companySpeedLimit - spd} km/h below limit
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-slate-400">At rest (0 km/h)</span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3">
+                          <div className="flex items-center gap-1 text-slate-700 truncate max-w-[180px]" title={v.location || (v.lat ? `${v.lat.toFixed(4)}, ${v.lng.toFixed(4)}` : "Location pending")}>
+                            <MapPin className="h-3 w-3 text-slate-400 shrink-0" />
+                            <span className="truncate">{v.location || (v.lat ? `${v.lat.toFixed(4)}, ${v.lng.toFixed(4)}` : "GPS active")}</span>
+                          </div>
+                          {v.lat !== 0 && v.lng !== 0 && (
+                            <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                              {v.lat.toFixed(4)}° N, {v.lng.toFixed(4)}° E
+                            </div>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3 text-slate-500 text-[11px]">
+                          {v.lastUpdate || "Live"}
+                        </td>
+
+                        <td className="py-3 px-3 text-right">
+                          <Link
+                            to={`/tracking`}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-indigo-600 font-semibold text-xs shadow-2xs hover:border-indigo-300 transition-colors"
+                          >
+                            Track Live
+                            <ChevronRight className="h-3 w-3" />
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {/* ── TAB 1: SPEEDING INCIDENTS LOG ───────────────────────── */}
       {activeTab === "incidents" && (
         <Card className="border border-slate-200/80 shadow-xs p-4 space-y-4">
+          {/* Real-time Fleet Speed Radar Strip */}
+          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+                <Radio className="h-3.5 w-3.5 text-emerald-600 animate-pulse" />
+                <span>Live Fleet Speed Radar</span>
+                <span className="text-[11px] font-normal text-slate-500">
+                  (Real-time telemetry from {TELEMETRY_LABEL})
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab("realtime")}
+                className="text-[11px] text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1 cursor-pointer"
+              >
+                View Full Live Speed Monitor <ChevronRight className="h-3 w-3" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+              {liveVehicles.map((v) => {
+                const spd = typeof v.speed === "number" ? Math.round(v.speed) : 0;
+                const isOver = spd > companySpeedLimit;
+                return (
+                  <div
+                    key={v.id || v.number}
+                    className={`p-2 rounded-xl border bg-white text-xs space-y-1 transition-all ${
+                      isOver
+                        ? "border-red-300 ring-2 ring-red-500/20"
+                        : v.status === "Moving"
+                        ? "border-emerald-200"
+                        : "border-slate-200"
+                    }`}
+                  >
+                    <div className="font-bold text-slate-900 truncate text-[11px]" title={v.number}>
+                      {v.number}
+                    </div>
+                    <div className="flex items-baseline justify-between">
+                      <span
+                        className={`text-sm font-bold ${
+                          isOver ? "text-red-600" : v.status === "Moving" ? "text-emerald-600" : "text-slate-500"
+                        }`}
+                      >
+                        {spd} <span className="text-[10px] font-normal text-slate-400">km/h</span>
+                      </span>
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${
+                          v.status === "Moving" ? "bg-emerald-500 animate-ping" : "bg-amber-400"
+                        }`}
+                      />
+                    </div>
+                    <div className="text-[10px] text-slate-400 truncate">
+                      {v.status === "Moving" ? "Moving" : "Idle"}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Filter Bar */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div className="flex flex-wrap items-center gap-2.5 text-xs">
