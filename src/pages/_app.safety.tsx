@@ -43,7 +43,7 @@ import {
 } from "recharts";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
-import { DEFAULT_SPEED_LIMIT_KMH, getOverspeedStatus } from "@/lib/overspeed";
+import { DEFAULT_SPEED_LIMIT_KMH, getOverspeedStatus, globalOverspeedManager } from "@/lib/overspeed";
 import { useVehicles, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
 import { useOverspeedMonitor } from "@/hooks/useOverspeed";
 
@@ -216,23 +216,58 @@ export default function SpeedingSafetyPage() {
             else if (excess > 10) sev = "High";
             else sev = "Low";
 
+            const driverName = vObj?.driver_name || vObj?.driver || dList.find((d) => d.id === a.driver_id)?.name || dList[idx % dList.length]?.name || "Assigned Driver";
+            const location = a.location || vObj?.location || "NH-47 Highway, Nagercoil Bypass";
+
             generatedIncidents.push({
               id: a.id || `inc-${idx}`,
               vehicleId: a.vehicle_id || (vList[idx % vList.length]?.id ?? "v-1"),
               vehicleNumber: vNum,
-              driverName: dList[idx % dList.length]?.name || "R. Murugan",
+              driverName,
               timestamp: a.time || new Date(Date.now() - idx * 3600 * 1000 * 4).toISOString(),
               recordedSpeed: recSpeed,
               speedLimit: companySpeedLimit,
               excessSpeed: excess,
               durationSeconds: 15 + ((idx * 11) % 65),
-              location: "NH-47 Highway, Nagercoil Bypass",
+              location,
               severity: sev,
               status: a.resolved ? "Resolved" : "New",
             });
           }
         });
-        // Authentic database speeding incidents
+
+        // Also integrate any active live overspeeding vehicles so real-time incidents are immediately visible
+        liveVehicles.forEach((lv) => {
+          const spd = typeof lv.speed === "number" ? lv.speed : 0;
+          if (spd > companySpeedLimit) {
+            const alreadyPresent = generatedIncidents.some(
+              (inc) => inc.vehicleId === lv.id || inc.vehicleNumber === lv.number
+            );
+            if (!alreadyPresent) {
+              const excess = Math.max(0, Math.round(spd - companySpeedLimit));
+              const sev: "Low" | "Medium" | "High" | "Critical" =
+                excess > 20 ? "Critical" : excess > 10 ? "High" : "Medium";
+              generatedIncidents.unshift({
+                id: `live-overspeed-${lv.id}`,
+                vehicleId: lv.id,
+                vehicleNumber: lv.number,
+                driverName: lv.driver || "Assigned Driver",
+                timestamp: new Date().toISOString(),
+                recordedSpeed: spd,
+                speedLimit: companySpeedLimit,
+                excessSpeed: excess,
+                durationSeconds: 30,
+                location: lv.location || "Active Highway Corridor",
+                lat: lv.lat,
+                lng: lv.lng,
+                severity: sev,
+                status: "New",
+              });
+            }
+          }
+        });
+
+        // Authentic database & live speeding incidents
         setIncidents(generatedIncidents);
 
         // Driving Behavior Events
@@ -290,7 +325,19 @@ export default function SpeedingSafetyPage() {
     }
 
     loadData();
-  }, [companySpeedLimit]);
+
+    const channelId = `safety-alerts-realtime-${Math.random().toString(36).substring(2, 9)}`;
+    const channel = supabase
+      .channel(channelId)
+      .on("postgres_changes", { event: "*", schema: "public", table: "alerts" }, () => {
+        loadData();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [companySpeedLimit, liveVehicles.length]);
 
   // Filtered Speeding Incidents
   const filteredIncidents = useMemo(() => {
@@ -377,6 +424,7 @@ export default function SpeedingSafetyPage() {
     }
     setIsResettingAlerts(true);
     try {
+      globalOverspeedManager.reset();
       const { error } = await supabase.from("alerts").delete().eq("type", "Safety");
       if (error) {
         alert("Failed to reset overspeed records: " + error.message);

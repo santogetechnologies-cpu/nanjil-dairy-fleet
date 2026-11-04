@@ -168,13 +168,30 @@ export class OverspeedManager {
       // Down-transitions (Critical -> Warning) do not spam a new alert record
       if (ev.previousLevel === "critical" && ev.currentLevel === "warning") continue;
 
-      // Must be a real Supabase vehicle ID
-      if (!isRealSupabaseVehicleId(ev.vehicleId)) {
-        continue;
+      let targetVehicleId = ev.vehicleId;
+      // Must be a real Supabase vehicle ID; if not, attempt resolving by deviceId or vehicleNumber
+      if (!isRealSupabaseVehicleId(targetVehicleId)) {
+        try {
+          const devId = (ev.vehicleId || "").replace(/^unassigned-/, "");
+          const { data: matched } = await this.supabaseClient
+            .from("vehicles")
+            .select("id")
+            .or(`device_id.eq.${devId},number.eq.${ev.vehicleNumber}`)
+            .limit(1)
+            .maybeSingle();
+
+          if (matched?.id && isRealSupabaseVehicleId(matched.id)) {
+            targetVehicleId = matched.id;
+          } else {
+            continue;
+          }
+        } catch {
+          continue;
+        }
       }
 
       const severity = ev.currentLevel === "critical" ? "High" : "Medium";
-      const cooldownKey = `${ev.vehicleId}:${severity}`;
+      const cooldownKey = `${targetVehicleId}:${severity}`;
       const lastSent = this.lastAlertTimestamps.get(cooldownKey) || 0;
       const now = Date.now();
 
@@ -183,22 +200,25 @@ export class OverspeedManager {
         continue;
       }
 
+      const critThreshold = DEFAULT_SPEED_LIMIT_KMH + CRITICAL_SPEED_DELTA_KMH;
+      const warnThreshold = DEFAULT_SPEED_LIMIT_KMH;
+      const excess = Math.max(0, Math.round(ev.speed - warnThreshold));
       const message =
         ev.currentLevel === "critical"
-          ? `Critical overspeed: ${Math.round(ev.speed)} km/h (critical threshold: ${CRITICAL_SPEED_KMH} km/h)`
-          : `Over-speed warning: ${Math.round(ev.speed)} km/h (warning threshold: ${WARNING_SPEED_KMH} km/h)`;
+          ? `Critical overspeed: ${Math.round(ev.speed)} km/h recorded in ${warnThreshold} km/h zone (excess: +${excess} km/h)`
+          : `Speed recorded at ${Math.round(ev.speed)} km/h in ${warnThreshold} km/h zone (excess: +${excess} km/h)`;
 
       try {
-        // Also check DB for recent active safety alerts for this vehicle within 30 min
-        const thirtyMinsAgo = new Date(now - OVERSPEED_ALERT_COOLDOWN_MS).toISOString();
+        // Also check DB for recent active safety alerts for this vehicle within 15 min
+        const cooldownWindow = new Date(now - OVERSPEED_ALERT_COOLDOWN_MS).toISOString();
         const { data: existing } = await this.supabaseClient
           .from("alerts")
           .select("id")
-          .eq("vehicle_id", ev.vehicleId)
+          .eq("vehicle_id", targetVehicleId)
           .eq("type", "Safety")
           .eq("severity", severity)
           .eq("resolved", false)
-          .gte("time", thirtyMinsAgo)
+          .gte("time", cooldownWindow)
           .limit(1);
 
         if (existing && existing.length > 0) {
@@ -207,7 +227,7 @@ export class OverspeedManager {
         }
 
         const { error } = await this.supabaseClient.from("alerts").insert({
-          vehicle_id: ev.vehicleId,
+          vehicle_id: targetVehicleId,
           type: "Safety",
           severity,
           message,

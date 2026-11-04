@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
+import { globalOverspeedManager } from "@/lib/overspeed";
 
 type ReportType =
   | "daily_activity"
@@ -290,8 +291,17 @@ export default function ReportsPage() {
 
     fetchReportData();
 
+    const channelId = `reports-alerts-realtime-${Math.random().toString(36).substring(2, 9)}`;
+    const channel = supabase
+      .channel(channelId)
+      .on("postgres_changes", { event: "*", schema: "public", table: "alerts" }, () => {
+        if (!cancelled) fetchReportData();
+      })
+      .subscribe();
+
     return () => {
       cancelled = true;
+      supabase.removeChannel(channel);
     };
   }, [selectedReport, dateRange, selectedVehicle]);
 
@@ -323,6 +333,7 @@ export default function ReportsPage() {
     }
     setIsResetting(true);
     try {
+      globalOverspeedManager.reset();
       const { error } = await supabase.from("alerts").delete().eq("type", "Safety");
       if (error) {
         alert("Failed to reset: " + error.message);
