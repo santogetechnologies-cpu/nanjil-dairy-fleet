@@ -7,6 +7,21 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), tsconfigPaths()],
   // Use './' base so Capacitor can load assets from file:// filesystem
   base: "./",
+  optimizeDeps: {
+    include: [
+      "firebase/app",
+      "firebase/auth",
+      "firebase/firestore",
+      "firebase/storage",
+      "@supabase/supabase-js",
+      "react",
+      "react-dom",
+      "react-dom/client",
+      "react-router-dom",
+      "recharts",
+      "lucide-react",
+    ],
+  },
   build: {
     // Increase warning limit — Capacitor bundles are inherently larger
     chunkSizeWarningLimit: 2000,
