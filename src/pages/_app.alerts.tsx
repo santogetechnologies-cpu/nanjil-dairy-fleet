@@ -80,7 +80,7 @@ export default function AlertsPage() {
       const rawAlerts = aRes.data || [];
       const mapped: OperationalAlert[] = rawAlerts.map((a: any, idx: number) => {
         const vObj = vList.find((x) => x.id === a.vehicle_id);
-        const vNum = vObj ? vObj.number : a.vehicle || "TN-74-V-4821";
+        const vNum = vObj ? vObj.number : a.vehicle || (vList[0]?.number || "Fleet Unit");
 
         // Map generic alert message to clean operational types
         const msg = (a.message || "").toLowerCase();
@@ -115,59 +115,8 @@ export default function AlertsPage() {
           assignedPerson: a.resolved ? "Ops Team" : undefined,
         };
       });
-
-      // Provide realistic baseline operational alerts if table is sparse
-      if (mapped.length === 0) {
-        setAlerts([
-          {
-            id: "alt-1",
-            type: "Overspeeding",
-            severity: "High",
-            vehicleNumber: "TN-74-V-4821",
-            driverName: "S. Arumugam",
-            message: "Speed recorded at 74 km/h in 60 km/h zone",
-            timestamp: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
-            location: "Villukuri State Highway (8.2435, 77.3325)",
-            status: "New",
-          },
-          {
-            id: "alt-2",
-            type: "Route Deviation",
-            severity: "Medium",
-            vehicleNumber: "TN-74-V-3912",
-            driverName: "M. Kumar",
-            message: "Vehicle strayed 380m from planned collection route",
-            timestamp: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
-            location: "Eraniel Junction (8.2045, 77.3065)",
-            status: "Acknowledged",
-            assignedPerson: "Fleet Dispatcher",
-          },
-          {
-            id: "alt-3",
-            type: "Excessive Idling",
-            severity: "Low",
-            vehicleNumber: "TN-74-V-8190",
-            driverName: "K. Rajan",
-            message: "Continuous engine idling for 24 minutes at dairy center",
-            timestamp: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
-            location: "Thingal Nagar Center (8.2165, 77.2785)",
-            status: "New",
-          },
-          {
-            id: "alt-4",
-            type: "Maintenance Due",
-            severity: "Critical",
-            vehicleNumber: "TN-74-V-4821",
-            message: "Scheduled 15,000 km periodic engine inspection overdue",
-            timestamp: new Date(Date.now() - 12 * 3600 * 1000).toISOString(),
-            location: "Mulagumoodu Central Workshop",
-            status: "In Progress",
-            assignedPerson: "Chief Workshop Engineer",
-          },
-        ]);
-      } else {
-        setAlerts(mapped);
-      }
+      // Authentic database operational alerts
+      setAlerts(mapped);
     } catch (err) {
       console.warn("Alerts load warning:", err);
     } finally {
@@ -360,7 +309,18 @@ export default function AlertsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredAlerts.map((alt) => (
+              {filteredAlerts.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="text-center py-10 text-slate-400">
+                    <div className="flex flex-col items-center justify-center gap-1.5">
+                      <CheckCircle2 className="h-6 w-6 text-emerald-500" />
+                      <span className="font-semibold text-slate-700">No alerts found</span>
+                      <span className="text-xs text-slate-400">All fleet operations and sensors reporting normal conditions.</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                filteredAlerts.map((alt) => (
                 <tr key={alt.id} className="hover:bg-slate-50/70 transition-colors">
                   <td className="py-3 px-3 font-bold text-slate-900">{alt.type}</td>
                   <td className="py-3 px-3 font-bold text-slate-800">{alt.vehicleNumber}</td>
@@ -417,7 +377,7 @@ export default function AlertsPage() {
                     )}
                   </td>
                 </tr>
-              ))}
+              )))}
             </tbody>
           </table>
         </div>

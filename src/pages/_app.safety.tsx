@@ -26,6 +26,8 @@ import {
   Check,
   Radio,
   Zap,
+  RotateCcw,
+  ShieldCheck,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -200,11 +202,11 @@ export default function SpeedingSafetyPage() {
         rawAlerts.forEach((a: any, idx: number) => {
           const msg = (a.message || "").toLowerCase();
           const vObj = vList.find((x) => x.id === a.vehicle_id);
-          const vNum = vObj ? vObj.number : "TN-74-V-4821";
+          const vNum = vObj ? vObj.number : (vList[0]?.number || "Fleet Unit");
 
           // Parse speed if alert contains number, e.g. "overspeed 68 km/h" or default
           let speedMatch = a.message ? a.message.match(/(\d{2,3})\s*km\/h/i) : null;
-          let recSpeed = speedMatch ? parseInt(speedMatch[1], 10) : 62 + ((idx * 7) % 24);
+          let recSpeed = speedMatch ? parseInt(speedMatch[1], 10) : 0;
 
           // Only consider incidents above configurable limit
           if (recSpeed >= companySpeedLimit) {
@@ -230,64 +232,15 @@ export default function SpeedingSafetyPage() {
             });
           }
         });
-
-        // Ensure minimum baseline realistic speeding events if empty
-        if (generatedIncidents.length === 0) {
-          const defaults: SpeedingIncident[] = [
-            {
-              id: "spd-01",
-              vehicleId: vList[0]?.id || "v-01",
-              vehicleNumber: vList[0]?.number || "TN-74-V-4821",
-              driverName: "S. Arumugam",
-              timestamp: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
-              recordedSpeed: 74,
-              speedLimit: 60,
-              excessSpeed: 14,
-              durationSeconds: 42,
-              location: "Villukuri State Highway (8.2435, 77.3325)",
-              severity: "High",
-              status: "New",
-            },
-            {
-              id: "spd-02",
-              vehicleId: vList[1]?.id || "v-02",
-              vehicleNumber: vList[1]?.number || "TN-74-V-3912",
-              driverName: "M. Kumar",
-              timestamp: new Date(Date.now() - 14 * 3600 * 1000).toISOString(),
-              recordedSpeed: 67,
-              speedLimit: 60,
-              excessSpeed: 7,
-              durationSeconds: 28,
-              location: "Chunkankadai Flyover (8.2045, 77.3821)",
-              severity: "Low",
-              status: "Acknowledged",
-            },
-            {
-              id: "spd-03",
-              vehicleId: vList[2]?.id || "v-03",
-              vehicleNumber: vList[2]?.number || "TN-74-V-8190",
-              driverName: "K. Rajan",
-              timestamp: new Date(Date.now() - 28 * 3600 * 1000).toISOString(),
-              recordedSpeed: 82,
-              speedLimit: 60,
-              excessSpeed: 22,
-              durationSeconds: 58,
-              location: "Suchindram Bypass (8.1565, 77.4562)",
-              severity: "Critical",
-              status: "Under Review",
-            },
-          ];
-          setIncidents(defaults);
-        } else {
-          setIncidents(generatedIncidents);
-        }
+        // Authentic database speeding incidents
+        setIncidents(generatedIncidents);
 
         // Driving Behavior Events
         setBehaviorEvents([
           {
             id: "beh-1",
             type: "Harsh Braking",
-            vehicleNumber: vList[0]?.number || "TN-74-V-4821",
+            vehicleNumber: vList[0]?.number || "Fleet Unit",
             driverName: "S. Arumugam",
             timestamp: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
             source: "Hardware Sensor",
@@ -298,7 +251,7 @@ export default function SpeedingSafetyPage() {
           {
             id: "beh-2",
             type: "Excessive Idling",
-            vehicleNumber: vList[1]?.number || "TN-74-V-3912",
+            vehicleNumber: vList[1]?.number || "Fleet Unit",
             driverName: "M. Kumar",
             timestamp: new Date(Date.now() - 6 * 3600 * 1000).toISOString(),
             source: "GPS Inferred",
@@ -309,7 +262,7 @@ export default function SpeedingSafetyPage() {
           {
             id: "beh-3",
             type: "Sharp Cornering",
-            vehicleNumber: vList[2]?.number || "TN-74-V-8190",
+            vehicleNumber: vList[2]?.number || "Fleet Unit",
             driverName: "K. Rajan",
             timestamp: new Date(Date.now() - 19 * 3600 * 1000).toISOString(),
             source: "GPS Inferred",
@@ -320,7 +273,7 @@ export default function SpeedingSafetyPage() {
           {
             id: "beh-4",
             type: "Continuous Driving",
-            vehicleNumber: vList[0]?.number || "TN-74-V-4821",
+            vehicleNumber: vList[0]?.number || "Fleet Unit",
             driverName: "S. Arumugam",
             timestamp: new Date(Date.now() - 25 * 3600 * 1000).toISOString(),
             source: "GPS Inferred",
@@ -397,12 +350,12 @@ export default function SpeedingSafetyPage() {
     const daysOrder = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const trendChart = daysOrder.map((day) => ({
       day,
-      incidents: dailyCounts[day] || Math.floor(Math.random() * 3),
+      incidents: dailyCounts[day] || 0,
     }));
 
     return {
       totalCount,
-      maxSpeedRecorded: maxSpeedRecorded || 60,
+      maxSpeedRecorded: maxSpeedRecorded || (filteredIncidents.length > 0 ? companySpeedLimit : 0),
       avgExcessSpeed: totalCount > 0 ? Math.round(totalExcess / totalCount) : 0,
       avgDurationSec: totalCount > 0 ? Math.round(totalDurationSec / totalCount) : 0,
       topVehicles,
@@ -412,6 +365,32 @@ export default function SpeedingSafetyPage() {
   }, [filteredIncidents]);
 
   // Handle resolving or acknowledging an incident
+  const [isResettingAlerts, setIsResettingAlerts] = useState(false);
+
+  async function handleResetOverspeedRecords() {
+    if (
+      !confirm(
+        "Are you sure you want to reset all overspeed records? This will clear all historical speeding alerts from the database."
+      )
+    ) {
+      return;
+    }
+    setIsResettingAlerts(true);
+    try {
+      const { error } = await supabase.from("alerts").delete().eq("type", "Safety");
+      if (error) {
+        alert("Failed to reset overspeed records: " + error.message);
+      } else {
+        setIncidents([]);
+        alert("All overspeed records have been successfully reset.");
+      }
+    } catch (err: any) {
+      alert("Error resetting records: " + err.message);
+    } finally {
+      setIsResettingAlerts(false);
+    }
+  }
+
   async function submitIncidentResolution(e: React.FormEvent) {
     e.preventDefault();
     if (!resolvingIncident) return;
@@ -987,8 +966,20 @@ export default function SpeedingSafetyPage() {
               </div>
             </div>
 
-            <div className="text-xs text-slate-500 font-medium">
-              Showing {filteredIncidents.length} events above {companySpeedLimit} km/h
+            <div className="flex items-center gap-3">
+              <div className="text-xs text-slate-500 font-medium">
+                Showing {filteredIncidents.length} events above {companySpeedLimit} km/h
+              </div>
+              <button
+                type="button"
+                onClick={handleResetOverspeedRecords}
+                disabled={isResettingAlerts || incidents.length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Reset / Clear all overspeed records from database"
+              >
+                <RotateCcw className={`h-3.5 w-3.5 ${isResettingAlerts ? "animate-spin" : ""}`} />
+                <span>Reset Overspeed Records ({incidents.length})</span>
+              </button>
             </div>
           </div>
 
@@ -1010,7 +1001,24 @@ export default function SpeedingSafetyPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredIncidents.map((inc) => (
+                {filteredIncidents.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="text-center py-12 text-slate-500">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <div className="h-10 w-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                          <ShieldCheck className="h-6 w-6" />
+                        </div>
+                        <div className="font-semibold text-slate-800 text-sm">
+                          No Speeding Incidents Recorded
+                        </div>
+                        <div className="text-xs text-slate-400 max-w-sm">
+                          All fleet vehicles are operating safely within the {companySpeedLimit} km/h threshold. Overspeed records are clean.
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredIncidents.map((inc) => (
                   <tr key={inc.id} className="hover:bg-slate-50/70 transition-colors">
                     <td className="py-3 px-3 font-bold text-slate-900">{inc.vehicleNumber}</td>
                     <td className="py-3 px-3 text-slate-700">{inc.driverName}</td>
@@ -1075,7 +1083,7 @@ export default function SpeedingSafetyPage() {
                       )}
                     </td>
                   </tr>
-                ))}
+                )))}
               </tbody>
             </table>
           </div>

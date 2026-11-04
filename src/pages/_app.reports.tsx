@@ -18,6 +18,7 @@ import {
   Layers,
   Loader2,
   ShieldAlert,
+  RotateCcw,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
@@ -310,6 +311,32 @@ export default function ReportsPage() {
     document.body.removeChild(link);
   }
 
+  const [isResetting, setIsResetting] = useState(false);
+
+  async function handleResetSpeedingAlerts() {
+    if (
+      !confirm(
+        "Are you sure you want to reset all overspeed records? This will delete all safety speeding incidents from the database."
+      )
+    ) {
+      return;
+    }
+    setIsResetting(true);
+    try {
+      const { error } = await supabase.from("alerts").delete().eq("type", "Safety");
+      if (error) {
+        alert("Failed to reset: " + error.message);
+      } else {
+        setReportRows([]);
+        alert("Overspeed records successfully reset.");
+      }
+    } catch (err: any) {
+      alert("Error: " + err.message);
+    } finally {
+      setIsResetting(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -400,6 +427,18 @@ export default function ReportsPage() {
             <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 font-semibold border border-indigo-200 text-[11px]">
               {reportRows.length} Backend {reportRows.length === 1 ? "Record" : "Records"}
             </span>
+            {selectedReport === "speeding_incidents" && (
+              <button
+                type="button"
+                onClick={handleResetSpeedingAlerts}
+                disabled={isResetting || reportRows.length === 0}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-[11px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                title="Reset / Clear all overspeed records from Supabase"
+              >
+                <RotateCcw className={`h-3 w-3 ${isResetting ? "animate-spin" : ""}`} />
+                <span>Reset Overspeed History</span>
+              </button>
+            )}
             <div className="text-slate-400 font-mono text-[11px]">
               Live Supabase Records
             </div>
