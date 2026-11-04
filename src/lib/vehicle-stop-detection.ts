@@ -168,6 +168,9 @@ export class StopDetectionEngine {
   private confirmedStops: VehicleStopEvent[] = [];
   private onStopConfirmedListeners: Array<(stop: VehicleStopEvent) => void> = [];
   private onStopUpdatedListeners: Array<(stop: VehicleStopEvent) => void> = [];
+  private isSupabaseTableAvailable: boolean = true;
+  private lastTableCheckTime: number = 0;
+  private readonly tableCheckCooldownMs: number = 180000; // 3 minutes backoff
 
   constructor(customConfig?: Partial<StopDetectionConfig>) {
     this.config = { ...DEFAULT_STOP_CONFIG, ...customConfig };
@@ -188,6 +191,15 @@ export class StopDetectionEngine {
 
   public onStopUpdated(listener: (stop: VehicleStopEvent) => void) {
     this.onStopUpdatedListeners.push(listener);
+  }
+
+  public isTableAvailable(): boolean {
+    return this.isSupabaseTableAvailable;
+  }
+
+  public resetTableCheck(): void {
+    this.isSupabaseTableAvailable = true;
+    this.lastTableCheckTime = 0;
   }
 
   /**
@@ -562,9 +574,17 @@ export class StopDetectionEngine {
 
   /**
    * Safely writes a stop event to Supabase vehicle_stop_events.
-   * If table doesn't exist yet or network fails, caches locally without crashing.
+   * If table doesn't exist yet or network fails, caches locally without crashing or spamming 404s.
    */
   public async persistStopToSupabase(stop: VehicleStopEvent): Promise<boolean> {
+    if (!this.isSupabaseTableAvailable) {
+      const elapsed = Date.now() - this.lastTableCheckTime;
+      if (elapsed < this.tableCheckCooldownMs) {
+        // Table not present in Supabase schema cache; avoid redundant 404 network traffic
+        return false;
+      }
+    }
+
     try {
       const payload = {
         id: stop.id,
@@ -589,13 +609,33 @@ export class StopDetectionEngine {
         .upsert(payload, { onConflict: "id" });
 
       if (error) {
-        // Log gracefully; offline or migration pending
-        console.warn("Supabase stop sync notice:", error.message);
+        if (
+          error.code === "PGRST205" ||
+          error.message?.includes("schema cache") ||
+          error.message?.includes("404")
+        ) {
+          if (this.isSupabaseTableAvailable) {
+            console.info(
+              "[Stop Tracking] Supabase table 'vehicle_stop_events' pending migration. All stops are safely persisted in local storage."
+            );
+          }
+          this.isSupabaseTableAvailable = false;
+          this.lastTableCheckTime = Date.now();
+        } else {
+          console.warn("Supabase stop sync notice:", error.message);
+        }
         return false;
       }
+
+      this.isSupabaseTableAvailable = true;
       return true;
-    } catch (err) {
-      console.warn("Supabase stop persist exception:", err);
+    } catch (err: any) {
+      if (err?.message?.includes("404") || err?.code === "PGRST205") {
+        this.isSupabaseTableAvailable = false;
+        this.lastTableCheckTime = Date.now();
+      } else {
+        console.warn("Supabase stop persist exception:", err);
+      }
       return false;
     }
   }
@@ -604,6 +644,13 @@ export class StopDetectionEngine {
    * Loads confirmed stops and active states from Supabase and local storage.
    */
   public async syncFromSupabase(): Promise<VehicleStopEvent[]> {
+    if (!this.isSupabaseTableAvailable) {
+      const elapsed = Date.now() - this.lastTableCheckTime;
+      if (elapsed < this.tableCheckCooldownMs) {
+        return this.confirmedStops;
+      }
+    }
+
     try {
       const { data, error } = await supabase
         .from("vehicle_stop_events")
@@ -611,7 +658,22 @@ export class StopDetectionEngine {
         .order("started_at", { ascending: false })
         .limit(200);
 
-      if (!error && Array.isArray(data)) {
+      if (error) {
+        if (
+          error.code === "PGRST205" ||
+          error.message?.includes("schema cache") ||
+          error.message?.includes("404")
+        ) {
+          this.isSupabaseTableAvailable = false;
+          this.lastTableCheckTime = Date.now();
+        } else {
+          console.warn("Supabase stop sync notice:", error.message);
+        }
+        return this.confirmedStops;
+      }
+
+      if (Array.isArray(data)) {
+        this.isSupabaseTableAvailable = true;
         const mapped: VehicleStopEvent[] = data.map((d: any) => ({
           id: d.id,
           vehicle_id: d.vehicle_id,
@@ -638,8 +700,13 @@ export class StopDetectionEngine {
         this.saveToStorage();
         return mapped;
       }
-    } catch (err) {
-      console.warn("Supabase stop fetch warning:", err);
+    } catch (err: any) {
+      if (err?.message?.includes("404") || err?.code === "PGRST205") {
+        this.isSupabaseTableAvailable = false;
+        this.lastTableCheckTime = Date.now();
+      } else {
+        console.warn("Supabase stop fetch warning:", err);
+      }
     }
     return this.confirmedStops;
   }

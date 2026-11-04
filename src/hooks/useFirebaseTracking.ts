@@ -413,7 +413,7 @@ export function usePureFirebaseTracking() {
           console.log(
             `[Vehicle Mapping] device_id=${devKey} → vehicle=${matchedSupabase.number} (id=${matchedSupabase.id})`,
           );
-        } else {
+        } else if (supabaseVehicles.length > 0) {
           console.warn(
             `[Vehicle Mapping] device_id=${devKey} → UNMATCHED (no Supabase vehicle found)`,
           );

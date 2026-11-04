@@ -65,7 +65,7 @@ type EngineFilter = "all" | "idle" | "parked";
 type StatusFilter = "all" | "ACTIVE" | "COMPLETED" | "INTERRUPTED";
 
 export default function VehicleStopHistoryPage() {
-  const { stops, activeStops, overviewKPIs, isLoading, refreshStops } = useVehicleStopTracking();
+  const { stops, activeStops, overviewKPIs, isLoading, isTableAvailable, refreshStops } = useVehicleStopTracking();
   const liveVehicles = useVehicles();
 
   // Active sub-tab
@@ -401,6 +401,62 @@ export default function VehicleStopHistoryPage() {
           </div>
         }
       />
+
+      {/* ── AUTONOMOUS PERSISTENCE ENGINE NOTICE (When remote DB table is pending) ── */}
+      {!isTableAvailable && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-950">
+          <div className="flex items-center gap-2.5">
+            <span className="p-1.5 bg-amber-100 text-amber-800 rounded-lg shrink-0">
+              <Clock className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="font-bold text-amber-950">
+                Autonomous Stop Tracking Engine Active (Persistent Local Cache)
+              </p>
+              <p className="text-amber-800/90 text-[11px] mt-0.5">
+                Stops and live duration timers are running locally without loss. Run migration <code>20261104143000_create_vehicle_stop_events.sql</code> in the Supabase Dashboard SQL Editor to sync fleet-wide.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard.writeText(`CREATE TABLE IF NOT EXISTS public.vehicle_stop_events (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  vehicle_id        UUID NOT NULL REFERENCES public.vehicles(id) ON DELETE CASCADE,
+  driver_id         UUID REFERENCES public.drivers(id) ON DELETE SET NULL,
+  started_at        TIMESTAMP WITH TIME ZONE NOT NULL,
+  ended_at          TIMESTAMP WITH TIME ZONE,
+  duration_seconds  INTEGER,
+  start_lat         NUMERIC(9,6),
+  start_lng         NUMERIC(9,6),
+  end_lat           NUMERIC(9,6),
+  end_lng           NUMERIC(9,6),
+  location          TEXT,
+  engine_on         BOOLEAN DEFAULT false,
+  status            TEXT NOT NULL CHECK (status IN ('ACTIVE', 'COMPLETED', 'INTERRUPTED')),
+  source            TEXT NOT NULL DEFAULT 'telemetry',
+  created_at        TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now()) NOT NULL,
+  updated_at        TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vehicle_stop_events_vehicle_started ON public.vehicle_stop_events(vehicle_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vehicle_stop_events_status ON public.vehicle_stop_events(status);
+CREATE INDEX IF NOT EXISTS idx_vehicle_stop_events_driver ON public.vehicle_stop_events(driver_id);
+CREATE INDEX IF NOT EXISTS idx_vehicle_stop_events_started_at ON public.vehicle_stop_events(started_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_stop_events_one_active ON public.vehicle_stop_events(vehicle_id) WHERE (status = 'ACTIVE');
+ALTER TABLE public.vehicle_stop_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow select stop events" ON public.vehicle_stop_events FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow insert stop events" ON public.vehicle_stop_events FOR INSERT TO authenticated WITH CHECK (true);
+CREATE POLICY "Allow update stop events" ON public.vehicle_stop_events FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+GRANT SELECT, INSERT, UPDATE ON public.vehicle_stop_events TO anon, authenticated;`);
+              alert("Supabase SQL migration copied to clipboard! Paste and run it in your Supabase Dashboard SQL Editor.");
+            }}
+            className="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 border border-amber-300 text-amber-900 rounded-xl font-semibold transition-colors cursor-pointer shrink-0"
+          >
+            Copy SQL Migration
+          </button>
+        </div>
+      )}
 
       {/* ── SECTION A: OVERVIEW TILES (8 KPIs) ──────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-3">

@@ -87,6 +87,10 @@ export function useVehicleStopTracking() {
 
   // 4. Supabase Realtime channel subscription for multi-user / backend parity
   useEffect(() => {
+    if (!globalStopDetector.isTableAvailable()) {
+      return;
+    }
+
     const channelId = `realtime-stops-${Date.now()}`;
     const channel = supabase
       .channel(channelId)
@@ -181,6 +185,7 @@ export function useVehicleStopTracking() {
     rawActiveStops: activeStops,
     isLoading,
     overviewKPIs,
+    isTableAvailable: globalStopDetector.isTableAvailable(),
     refreshStops: loadStopsFromSupabase,
   };
 }
