@@ -584,59 +584,61 @@ export function AppLayout({ children }: { children: ReactNode }) {
             )}
           </button>
 
-          {/* Breadcrumb Context with interactive module switcher */}
-          <div className="relative">
-            <button
-              onClick={() => setModuleSwitcherOpen(!moduleSwitcherOpen)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors group"
-            >
-              <span className="text-slate-400 font-medium hidden sm:inline">Nanjil</span>
-              <ChevronRight className="h-3.5 w-3.5 text-slate-300 hidden sm:inline" />
-              <currentNav.item.icon className="h-4 w-4 text-indigo-600" />
-              <span className="text-slate-900 font-bold">{currentNav.item.label}</span>
-              <ChevronDown className="h-3 w-3 text-slate-400 group-hover:text-slate-700 transition-transform" />
-            </button>
+          {/* Breadcrumb Context with interactive module switcher (hidden for Admin role) */}
+          {user?.role !== "admin" && (
+            <div className="relative">
+              <button
+                onClick={() => setModuleSwitcherOpen(!moduleSwitcherOpen)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors group"
+              >
+                <span className="text-slate-400 font-medium hidden sm:inline">Nanjil</span>
+                <ChevronRight className="h-3.5 w-3.5 text-slate-300 hidden sm:inline" />
+                <currentNav.item.icon className="h-4 w-4 text-indigo-600" />
+                <span className="text-slate-900 font-bold">{currentNav.item.label}</span>
+                <ChevronDown className="h-3 w-3 text-slate-400 group-hover:text-slate-700 transition-transform" />
+              </button>
 
-            {/* Quick module switcher dropdown */}
-            {moduleSwitcherOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setModuleSwitcherOpen(false)} />
-                <div className="absolute left-0 top-full mt-2 w-72 z-50 rounded-2xl bg-white border border-slate-200 shadow-2xl p-2 text-xs space-y-1 animate-in fade-in zoom-in-95">
-                  <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
-                    Switch Fleet Workspace
+              {/* Quick module switcher dropdown */}
+              {moduleSwitcherOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setModuleSwitcherOpen(false)} />
+                  <div className="absolute left-0 top-full mt-2 w-72 z-50 rounded-2xl bg-white border border-slate-200 shadow-2xl p-2 text-xs space-y-1 animate-in fade-in zoom-in-95">
+                    <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                      Switch Fleet Workspace
+                    </div>
+                    {allNavItems.map((item) => {
+                      const Icon = item.icon;
+                      const isSelected = item.to === currentNav.item.to;
+                      return (
+                        <Link
+                          key={item.to}
+                          to={item.to}
+                          onClick={() => setModuleSwitcherOpen(false)}
+                          className={`flex items-center gap-2.5 px-3 py-2 rounded-xl transition-colors ${
+                            isSelected
+                              ? "bg-indigo-50 text-indigo-700 font-bold"
+                              : "text-slate-700 hover:bg-slate-50"
+                          }`}
+                        >
+                          <Icon className={`h-4 w-4 ${isSelected ? "text-indigo-600" : "text-slate-400"}`} />
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold truncate">{item.label}</div>
+                            {item.description && (
+                              <div className="text-[10px] text-slate-400 truncate">{item.description}</div>
+                            )}
+                          </div>
+                          {isSelected && <Check className="h-3.5 w-3.5 text-indigo-600 shrink-0" />}
+                        </Link>
+                      );
+                    })}
                   </div>
-                  {allNavItems.map((item) => {
-                    const Icon = item.icon;
-                    const isSelected = item.to === currentNav.item.to;
-                    return (
-                      <Link
-                        key={item.to}
-                        to={item.to}
-                        onClick={() => setModuleSwitcherOpen(false)}
-                        className={`flex items-center gap-2.5 px-3 py-2 rounded-xl transition-colors ${
-                          isSelected
-                            ? "bg-indigo-50 text-indigo-700 font-bold"
-                            : "text-slate-700 hover:bg-slate-50"
-                        }`}
-                      >
-                        <Icon className={`h-4 w-4 ${isSelected ? "text-indigo-600" : "text-slate-400"}`} />
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold truncate">{item.label}</div>
-                          {item.description && (
-                            <div className="text-[10px] text-slate-400 truncate">{item.description}</div>
-                          )}
-                        </div>
-                        {isSelected && <Check className="h-3.5 w-3.5 text-indigo-600 shrink-0" />}
-                      </Link>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </div>
+                </>
+              )}
+            </div>
+          )}
 
           {/* ── FLEET PULSE TICKER (REAL-TIME STATUS PILLS) ───────── */}
-          <div className="hidden xl:flex items-center gap-2 ml-2 pl-3 border-l border-slate-200/80">
+          <div className={`hidden xl:flex items-center gap-2 ${user?.role === "admin" ? "" : "ml-2 pl-3 border-l border-slate-200/80"}`}>
             <Link
               to="/vehicles"
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 hover:bg-slate-200/70 text-slate-700 transition-colors"
