@@ -614,11 +614,7 @@ export class StopDetectionEngine {
    */
   public async persistStopToSupabase(stop: VehicleStopEvent): Promise<boolean> {
     if (!this.isSupabaseTableAvailable) {
-      const elapsed = Date.now() - this.lastTableCheckTime;
-      if (elapsed < this.tableCheckCooldownMs) {
-        // Table not present in Supabase schema cache; avoid redundant 404 network traffic
-        return false;
-      }
+      return false;
     }
 
     try {
@@ -681,10 +677,7 @@ export class StopDetectionEngine {
    */
   public async syncFromSupabase(): Promise<VehicleStopEvent[]> {
     if (!this.isSupabaseTableAvailable) {
-      const elapsed = Date.now() - this.lastTableCheckTime;
-      if (elapsed < this.tableCheckCooldownMs) {
-        return this.confirmedStops;
-      }
+      return this.confirmedStops;
     }
 
     try {
