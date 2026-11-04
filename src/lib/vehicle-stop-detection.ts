@@ -168,7 +168,9 @@ export class StopDetectionEngine {
   private confirmedStops: VehicleStopEvent[] = [];
   private onStopConfirmedListeners: Array<(stop: VehicleStopEvent) => void> = [];
   private onStopUpdatedListeners: Array<(stop: VehicleStopEvent) => void> = [];
-  private isSupabaseTableAvailable: boolean = true;
+  private isSupabaseTableAvailable: boolean = typeof localStorage !== "undefined"
+    ? localStorage.getItem("nanjil_stop_table_available") === "true"
+    : false;
   private lastTableCheckTime: number = 0;
   private readonly tableCheckCooldownMs: number = 180000; // 3 minutes backoff
 
@@ -200,6 +202,40 @@ export class StopDetectionEngine {
   public resetTableCheck(): void {
     this.isSupabaseTableAvailable = true;
     this.lastTableCheckTime = 0;
+  }
+
+  public async verifyAndEnableSupabaseSync(): Promise<{ success: boolean; message: string }> {
+    try {
+      const { data, error } = await supabase
+        .from("vehicle_stop_events")
+        .select("id")
+        .limit(1);
+
+      if (error) {
+        this.isSupabaseTableAvailable = false;
+        if (typeof localStorage !== "undefined") {
+          localStorage.removeItem("nanjil_stop_table_available");
+        }
+        return {
+          success: false,
+          message: error.message || "Table vehicle_stop_events not found in Supabase schema cache.",
+        };
+      }
+
+      this.isSupabaseTableAvailable = true;
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem("nanjil_stop_table_available", "true");
+      }
+      return {
+        success: true,
+        message: "Successfully connected to Supabase vehicle_stop_events!",
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err?.message || "Failed to verify table.",
+      };
+    }
   }
 
   /**

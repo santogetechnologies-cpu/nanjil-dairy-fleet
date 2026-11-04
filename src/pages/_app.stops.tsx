@@ -65,7 +65,8 @@ type EngineFilter = "all" | "idle" | "parked";
 type StatusFilter = "all" | "ACTIVE" | "COMPLETED" | "INTERRUPTED";
 
 export default function VehicleStopHistoryPage() {
-  const { stops, activeStops, overviewKPIs, isLoading, isTableAvailable, refreshStops } = useVehicleStopTracking();
+  const { stops, activeStops, overviewKPIs, isLoading, isTableAvailable, refreshStops, verifySupabaseSync } = useVehicleStopTracking();
+  const [isVerifying, setIsVerifying] = useState(false);
   const liveVehicles = useVehicles();
 
   // Active sub-tab
@@ -418,10 +419,32 @@ export default function VehicleStopHistoryPage() {
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              navigator.clipboard.writeText(`CREATE TABLE IF NOT EXISTS public.vehicle_stop_events (
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={isVerifying}
+              onClick={async () => {
+                setIsVerifying(true);
+                try {
+                  const res = await verifySupabaseSync();
+                  if (res.success) {
+                    alert("Connected: " + res.message);
+                    refreshStops();
+                  } else {
+                    alert("Database Notice: " + res.message + "\n\nPlease run the SQL migration in the Supabase Dashboard SQL Editor first.");
+                  }
+                } finally {
+                  setIsVerifying(false);
+                }
+              }}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {isVerifying ? "Verifying..." : "Verify DB Connection"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard.writeText(`CREATE TABLE IF NOT EXISTS public.vehicle_stop_events (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   vehicle_id        UUID NOT NULL REFERENCES public.vehicles(id) ON DELETE CASCADE,
   driver_id         UUID REFERENCES public.drivers(id) ON DELETE SET NULL,
@@ -455,6 +478,7 @@ GRANT SELECT, INSERT, UPDATE ON public.vehicle_stop_events TO anon, authenticate
           >
             Copy SQL Migration
           </button>
+          </div>
         </div>
       )}
 

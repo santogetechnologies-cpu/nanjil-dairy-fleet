@@ -187,6 +187,7 @@ export function useVehicleStopTracking() {
     overviewKPIs,
     isTableAvailable: globalStopDetector.isTableAvailable(),
     refreshStops: loadStopsFromSupabase,
+    verifySupabaseSync: () => globalStopDetector.verifyAndEnableSupabaseSync(),
   };
 }
 
