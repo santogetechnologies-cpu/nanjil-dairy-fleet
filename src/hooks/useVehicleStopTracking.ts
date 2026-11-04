@@ -184,3 +184,4 @@ export function useVehicleStopTracking() {
     refreshStops: loadStopsFromSupabase,
   };
 }
+

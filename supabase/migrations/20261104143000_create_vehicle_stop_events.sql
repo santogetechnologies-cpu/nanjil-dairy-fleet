@@ -150,3 +150,4 @@ JOIN public.vehicles v ON s.vehicle_id = v.id
 LEFT JOIN public.drivers d ON s.driver_id = d.id;
 
 GRANT SELECT ON public.v_vehicle_stop_summary TO anon, authenticated;
+

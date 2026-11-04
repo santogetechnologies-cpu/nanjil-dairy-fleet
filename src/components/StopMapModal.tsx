@@ -245,3 +245,4 @@ export function StopMapModal({ stop, onClose }: Props) {
     </div>
   );
 }
+
