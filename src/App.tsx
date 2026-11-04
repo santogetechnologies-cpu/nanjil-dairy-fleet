@@ -12,6 +12,7 @@ const DashboardPage = lazy(() => import("./pages/_app.dashboard"));
 const TrackingPage = lazy(() => import("./pages/_app.tracking"));
 const RoutesPlannerPage = lazy(() => import("./pages/_app.routes"));
 const TripsPage = lazy(() => import("./pages/_app.trips"));
+const VehicleStopHistoryPage = lazy(() => import("./pages/_app.stops"));
 const SafetyPage = lazy(() => import("./pages/_app.safety"));
 const FuelPage = lazy(() => import("./pages/_app.fuel"));
 const VehiclesPage = lazy(() => import("./pages/_app.vehicles"));
@@ -67,6 +68,8 @@ export default function App() {
           <Route path="/tracking" element={<TrackingPage />} />
           <Route path="/routes" element={<RoutesPlannerPage />} />
           <Route path="/trips" element={<TripsPage />} />
+          <Route path="/stops" element={<VehicleStopHistoryPage />} />
+          <Route path="/stop-history" element={<Navigate to="/stops" replace />} />
           <Route path="/safety" element={<SafetyPage />} />
           <Route path="/fuel" element={<FuelPage />} />
           <Route path="/vehicles" element={<VehiclesPage />} />

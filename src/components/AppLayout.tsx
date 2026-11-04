@@ -244,6 +244,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
           description: "Historical GPS playback & stop audits",
         },
         {
+          to: "/stops",
+          label: "Stop History",
+          icon: Clock,
+          shortcut: "G O",
+          description: "Stationary telemetry & stop duration audits",
+        },
+        {
           to: "/safety",
           label: "Speeding & Driving",
           icon: Gauge,
