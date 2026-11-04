@@ -33,6 +33,7 @@ import {
   Layers,
   Loader2,
   ExternalLink,
+  X,
   ChevronDown,
   Sparkles,
   BarChart3,
@@ -67,6 +68,7 @@ type StatusFilter = "all" | "ACTIVE" | "COMPLETED" | "INTERRUPTED";
 export default function VehicleStopHistoryPage() {
   const { stops, activeStops, overviewKPIs, isLoading, isTableAvailable, refreshStops, verifySupabaseSync } = useVehicleStopTracking();
   const [isVerifying, setIsVerifying] = useState(false);
+  const [isBannerDismissed, setIsBannerDismissed] = useState(false);
   const liveVehicles = useVehicles();
 
   // Active sub-tab
@@ -404,7 +406,7 @@ export default function VehicleStopHistoryPage() {
       />
 
       {/* ── AUTONOMOUS PERSISTENCE ENGINE NOTICE (When remote DB table is pending) ── */}
-      {!isTableAvailable && (
+      {!isTableAvailable && !isBannerDismissed && (
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-950">
           <div className="flex items-center gap-2.5">
             <span className="p-1.5 bg-amber-100 text-amber-800 rounded-lg shrink-0">
@@ -478,6 +480,14 @@ GRANT SELECT, INSERT, UPDATE ON public.vehicle_stop_events TO anon, authenticate
           >
             Copy SQL Migration
           </button>
+            <button
+              type="button"
+              onClick={() => setIsBannerDismissed(true)}
+              className="p-1.5 text-amber-700 hover:text-amber-950 hover:bg-amber-200/60 rounded-xl transition-colors cursor-pointer ml-1"
+              title="Dismiss banner"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
         </div>
       )}
