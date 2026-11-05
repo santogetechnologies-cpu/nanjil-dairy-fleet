@@ -180,7 +180,15 @@ export function parseFirestoreTelemetry(
 
 
 export function usePureFirebaseTracking() {
-  const [supabaseVehicles, setSupabaseVehicles] = useState<any[]>([]);
+  const [supabaseVehicles, setSupabaseVehicles] = useState<any[]>(() => {
+    if (typeof localStorage === "undefined") return [];
+    try {
+      const raw = localStorage.getItem("nanjil_cached_supabase_vehicles");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
   const [firestoreDocs, setFirestoreDocs] = useState<
     Array<{ id: string; data: FirestoreVehicleDoc }>
   >([]);
@@ -241,6 +249,11 @@ export function usePureFirebaseTracking() {
 
         if (!cancelled) {
           setSupabaseVehicles(combined);
+          if (typeof localStorage !== "undefined" && combined.length > 0) {
+            try {
+              localStorage.setItem("nanjil_cached_supabase_vehicles", JSON.stringify(combined));
+            } catch {}
+          }
         }
       } catch (err) {
         console.warn("[Vehicle Mapping] Could not load Supabase vehicles for tracking:", err);

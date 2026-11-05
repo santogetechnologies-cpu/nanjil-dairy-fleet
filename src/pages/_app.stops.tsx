@@ -507,18 +507,20 @@ CREATE POLICY "fleet_stops_mod" ON public.vehicle_stop_events FOR ALL TO authent
   USING (public.get_user_role() IN ('admin', 'manager', 'operations'))
   WITH CHECK (public.get_user_role() IN ('admin', 'manager', 'operations'));
 
-REVOKE ALL ON public.vehicle_stop_events FROM anon;
-REVOKE ALL ON public.stop_tracking_checkpoints FROM anon;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.vehicle_stop_events TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.stop_tracking_checkpoints TO authenticated;
+GRANT USAGE ON SCHEMA public TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.vehicle_stop_events TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.stop_tracking_checkpoints TO anon, authenticated;
+
+CREATE POLICY "anon_select_stop_events" ON public.vehicle_stop_events FOR SELECT TO anon USING (true);
+CREATE POLICY "anon_mod_stop_events" ON public.vehicle_stop_events FOR ALL TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "anon_checkpoints_all" ON public.stop_tracking_checkpoints FOR ALL TO anon USING (true) WITH CHECK (true);
 
 CREATE OR REPLACE VIEW public.v_vehicle_stop_summary WITH (security_invoker = true) AS
 SELECT s.*, v.number AS vehicle_number, v.model AS vehicle_model, COALESCE(d.name, 'Unassigned') AS driver_name
 FROM public.vehicle_stop_events s
 JOIN public.vehicles v ON s.vehicle_id = v.id
 LEFT JOIN public.drivers d ON s.driver_id = d.id;
-REVOKE ALL ON public.v_vehicle_stop_summary FROM anon;
-GRANT SELECT ON public.v_vehicle_stop_summary TO authenticated;`);
+GRANT SELECT ON public.v_vehicle_stop_summary TO anon, authenticated;`);
               alert("Supabase SQL migration copied to clipboard! Paste and run it in your Supabase Dashboard SQL Editor.");
             }}
             className="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 border border-amber-300 text-amber-900 rounded-xl font-semibold transition-colors cursor-pointer shrink-0"

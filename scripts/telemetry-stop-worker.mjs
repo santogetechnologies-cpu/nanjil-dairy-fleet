@@ -133,34 +133,13 @@ async function processTelemetryPoint(pt) {
     return;
   }
 
-  // Check for telemetry gap (> 120s)
-  if (state.lastFreshTelemetryMs > 0 && tsMs - state.lastFreshTelemetryMs > CONFIG.staleThresholdSec * 1000) {
-    if (state.activeStop) {
-      const endIso = new Date(state.lastFreshTelemetryMs).toISOString();
-      const durSec = Math.max(1, Math.round((state.lastFreshTelemetryMs - safeTimestampMs(state.activeStop.started_at)) / 1000));
+  const isStationary = speed <= CONFIG.stopSpeedThresholdKmh;
 
-      await supabase
-        .from("vehicle_stop_events")
-        .update({
-          status: "INTERRUPTED",
-          ended_at: endIso,
-          duration_seconds: durSec,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", state.activeStop.id);
-
-      console.log(`[Worker] Active stop ${state.activeStop.id} for ${vehicleId} marked INTERRUPTED due to telemetry gap.`);
-      state.activeStop = null;
-    }
-    state.provisionalStationaryStartMs = null;
+  // Stationary condition (speed <= 3 km/h): vehicle is stationary, continue stop across latency/refresh
+  if (isStationary) {
     state.movementCandidateStartMs = null;
-  }
-
-  state.lastTimestampMs = tsMs;
-  state.lastFreshTelemetryMs = tsMs;
-
-  // Stationary condition (speed <= 3 km/h)
-  if (speed <= CONFIG.stopSpeedThresholdKmh) {
+    state.lastTimestampMs = tsMs;
+    state.lastFreshTelemetryMs = tsMs;
     state.movementCandidateStartMs = null;
 
     if (state.activeStop) {
@@ -229,12 +208,41 @@ async function processTelemetryPoint(pt) {
     return;
   }
 
-  // Movement condition (speed > 5 km/h)
+  // Movement condition (speed > 3 km/h)
   if (!state.activeStop) {
     state.provisionalStationaryStartMs = null;
     state.movementCandidateStartMs = null;
+    state.lastTimestampMs = tsMs;
+    state.lastFreshTelemetryMs = tsMs;
     return;
   }
+
+  // Active stop movement: check if silence gap > 120s preceded resumption
+  if (state.lastFreshTelemetryMs > 0 && tsMs - state.lastFreshTelemetryMs > CONFIG.staleThresholdSec * 1000) {
+    const endIso = new Date(state.lastFreshTelemetryMs).toISOString();
+    const durSec = Math.max(1, Math.round((state.lastFreshTelemetryMs - safeTimestampMs(state.activeStop.started_at)) / 1000));
+
+    await supabase
+      .from("vehicle_stop_events")
+      .update({
+        status: "INTERRUPTED",
+        ended_at: endIso,
+        duration_seconds: durSec,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", state.activeStop.id);
+
+    console.log(`[Worker] Active stop ${state.activeStop.id} for ${vehicleId} marked INTERRUPTED due to telemetry gap.`);
+    state.activeStop = null;
+    state.provisionalStationaryStartMs = null;
+    state.movementCandidateStartMs = null;
+    state.lastTimestampMs = tsMs;
+    state.lastFreshTelemetryMs = tsMs;
+    return;
+  }
+
+  state.lastTimestampMs = tsMs;
+  state.lastFreshTelemetryMs = tsMs;
 
   if (speed > CONFIG.resumeSpeedThresholdKmh) {
     if (state.movementCandidateStartMs === null) {

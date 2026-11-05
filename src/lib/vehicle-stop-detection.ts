@@ -174,9 +174,11 @@ export class StopDetectionEngine {
     : false;
   private lastTableCheckTime: number = 0;
   private readonly tableCheckCooldownMs: number = 180000; // 3 minutes backoff
+  private engineStartTimeMs: number = Date.now();
 
   constructor(customConfig?: Partial<StopDetectionConfig>) {
     this.config = { ...DEFAULT_STOP_CONFIG, ...customConfig };
+    this.engineStartTimeMs = Date.now();
     this.loadFromStorage();
   }
 
@@ -216,6 +218,12 @@ export class StopDetectionEngine {
         this.isSupabaseTableAvailable = false;
         if (typeof localStorage !== "undefined") {
           localStorage.removeItem("nanjil_stop_table_available");
+        }
+        if (error.code === '42501') {
+          return {
+            success: false,
+            message: 'Supabase table exists but anonymous access is restricted (42501). Run the SQL migration in the Dashboard to grant fleet access.',
+          };
         }
         return {
           success: false,
@@ -268,25 +276,28 @@ export class StopDetectionEngine {
    * resumes movements, and handles disconnections.
    */
   public processTelemetry(point: TelemetryPoint): StopTransitionResult {
-    if (!this.validateTelemetry(point)) {
-      return { vehicleId: point?.vehicleId || "unknown", action: "NONE" };
+    const vehicleId = point.vehicleId;
+    const tsMs = safeTimestampToMs(point.timestamp);
+    if (!vehicleId || !tsMs) {
+      return { vehicleId: vehicleId || 'unknown', action: 'NONE' };
     }
 
-    const vehicleId = point.vehicleId.trim();
-    const tsMs = safeTimestampToMs(point.timestamp)!;
-    const speed = Math.max(0, typeof point.speed === "number" ? point.speed : parseFloat(String(point.speed)) || 0);
-    const lat = typeof point.lat === "number" ? point.lat : parseFloat(String(point.lat));
-    const lng = typeof point.lng === "number" ? point.lng : parseFloat(String(point.lng));
-    const engineOn = Boolean(point.engineOn ?? point.ignition ?? (speed > this.config.stopSpeedThresholdKmh));
-    const location = point.location || (isValidCoordinate(lat, lng) ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : "En Route");
+    const speed = Math.max(0, Number(point.speed) || 0);
+    const lat = Number(point.lat) || 0;
+    const lng = Number(point.lng) || 0;
+    const engineOn = Boolean(point.engineOn);
+    const location = point.location || 'Unknown';
 
+    // Fetch or initialize per-vehicle tracking state
     let state = this.states.get(vehicleId);
     if (!state) {
       state = {
         vehicleId,
-        vehicleNumber: point.vehicleNumber || "Vehicle",
+        vehicleNumber: point.vehicleNumber || 'Vehicle',
         driverId: point.driverId || null,
         driverName: point.driverName || null,
+        lastLat: lat,
+        lastLng: lng,
         lastTimestampMs: 0,
         lastFreshTelemetryMs: tsMs,
         lastSpeed: speed,
@@ -308,143 +319,202 @@ export class StopDetectionEngine {
 
     // ── 1. REJECT DUPLICATE AND OUT-OF-ORDER TELEMETRY ───────────────────────
     if (state.lastTimestampMs > 0 && tsMs <= state.lastTimestampMs) {
-      // Out of order or duplicate point; safely drop without altering confirmed state
-      return { vehicleId, action: "NONE" };
+      return { vehicleId, action: 'NONE' };
     }
 
-    // ── 2. CHECK FOR TELEMETRY GAPS / STALENESS (SIGNAL DISCONNECTION) ────────
-    const timeSinceLastTelemetryMs = tsMs - state.lastFreshTelemetryMs;
-    if (timeSinceLastTelemetryMs > this.config.staleThresholdSec * 1000) {
-      // Signal was interrupted!
-      if (state.activeStop) {
-        // Mark active stop as INTERRUPTED at the last valid telemetry timestamp
-        const interruptedStop: VehicleStopEvent = {
-          ...state.activeStop,
-          ended_at: new Date(state.lastFreshTelemetryMs).toISOString(),
-          duration_seconds: Math.max(1, Math.round((state.lastFreshTelemetryMs - safeTimestampToMs(state.activeStop.started_at)!) / 1000)),
-          status: "INTERRUPTED",
-          updated_at: new Date().toISOString(),
-        };
+    const isStationary = speed <= this.config.stopSpeedThresholdKmh;
 
-        this.updateConfirmedStop(interruptedStop);
-        state.activeStop = null;
-        state.provisionalStationaryStartMs = null;
-        state.movementCandidateStartMs = null;
-        state.lastTimestampMs = tsMs;
-        state.lastFreshTelemetryMs = tsMs;
-        state.lastSpeed = speed;
-
-        return {
-          vehicleId,
-          action: "STOP_INTERRUPTED",
-          stopEvent: interruptedStop,
-        };
-      }
-      // Reset provisional counters on reconnect
-      state.provisionalStationaryStartMs = null;
+    // ── 2. STATIONARY TELEMETRY CONTINUITY (speed <= stopSpeedThresholdKmh) ──
+    if (isStationary) {
       state.movementCandidateStartMs = null;
-    }
 
-    state.lastTimestampMs = tsMs;
-    state.lastFreshTelemetryMs = tsMs;
-    state.lastSpeed = speed;
-
-    // ── 3. STATIONARY CONDITIONS (speed <= stopSpeedThresholdKmh) ────────────
-    if (speed <= this.config.stopSpeedThresholdKmh) {
-      // Cancel any pending movement candidates if vehicle dropped back to stationary
-      if (state.movementCandidateStartMs !== null) {
-        state.movementCandidateStartMs = null;
-      }
-
+      // Case A: Vehicle is already in an ACTIVE confirmed stop
       if (state.activeStop) {
-        // Stop is already active. Update live duration and end coordinates.
+        const distKm = (state.activeStop.start_lat && state.activeStop.start_lng && lat && lng)
+          ? haversineDistanceKm(state.activeStop.start_lat, state.activeStop.start_lng, lat, lng)
+          : 0;
+
+        // If telemetry had a silence gap (> 120s) AND vehicle reappeared at a different location (> 200m away):
+        // The vehicle drove while offline. Finalize previous stop as INTERRUPTED, and start tracking at new location.
+        const timeSinceLastTelemetryMs = tsMs - state.lastFreshTelemetryMs;
+        if (timeSinceLastTelemetryMs > this.config.staleThresholdSec * 1000 && distKm > 0.2) {
+          const interruptedStop: VehicleStopEvent = {
+            ...state.activeStop,
+            ended_at: new Date(state.lastFreshTelemetryMs).toISOString(),
+            duration_seconds: Math.max(1, Math.round((state.lastFreshTelemetryMs - safeTimestampToMs(state.activeStop.started_at)!) / 1000)),
+            status: "INTERRUPTED",
+            updated_at: new Date().toISOString(),
+          };
+
+          this.updateConfirmedStop(interruptedStop);
+          state.activeStop = null;
+          state.provisionalStationaryStartMs = tsMs;
+          state.provisionalLat = lat;
+          state.provisionalLng = lng;
+          state.provisionalLocation = location;
+          state.provisionalEngineOn = engineOn;
+          state.movementCandidateStartMs = null;
+          state.lastTimestampMs = tsMs;
+          state.lastFreshTelemetryMs = tsMs;
+          state.lastSpeed = speed;
+          state.lastLat = lat;
+          state.lastLng = lng;
+          this.saveToStorage();
+
+          return {
+            vehicleId,
+            action: "STOP_INTERRUPTED",
+            stopEvent: interruptedStop,
+          };
+        }
+
+        // Same location: CONTINUITY! Continue active stop across reload, temporary latency, or slow pings.
         const startMs = safeTimestampToMs(state.activeStop.started_at)!;
         const currentDurationSec = Math.max(1, Math.round((tsMs - startMs) / 1000));
         state.activeStop.duration_seconds = currentDurationSec;
         state.activeStop.end_lat = lat;
         state.activeStop.end_lng = lng;
         state.activeStop.engine_on = engineOn;
-        state.activeStop.updated_at = new Date().toISOString();
+        state.activeStop.updated_at = new Date(tsMs).toISOString();
 
+        state.lastTimestampMs = tsMs;
+        state.lastFreshTelemetryMs = tsMs;
+        state.lastSpeed = speed;
+        state.lastLat = lat;
+        state.lastLng = lng;
+
+        const idx = this.confirmedStops.findIndex(s => s.id === state.activeStop!.id);
+        if (idx !== -1) {
+          this.confirmedStops[idx] = { ...state.activeStop };
+        }
+
+        this.saveToStorage();
         return { vehicleId, action: "NONE", stopEvent: state.activeStop };
       }
+      // Case B: Provisional stationary timer is ticking (< 2 min threshold)
+      if (state.provisionalStationaryStartMs !== null) {
+        state.lastTimestampMs = tsMs;
+        state.lastFreshTelemetryMs = tsMs;
+        state.lastSpeed = speed;
+        state.lastLat = lat;
+        state.lastLng = lng;
 
-      // No active stop yet: track provisional stationary state
-      if (state.provisionalStationaryStartMs === null) {
-        // Start provisional timer at the FIRST stationary point
-        state.provisionalStationaryStartMs = tsMs;
-        state.provisionalLat = lat;
-        state.provisionalLng = lng;
-        state.provisionalLocation = location;
-        state.provisionalEngineOn = engineOn;
+        const stationaryDurationSec = Math.round((tsMs - state.provisionalStationaryStartMs) / 1000);
+        if (stationaryDurationSec >= this.config.stopDurationThresholdSec) {
+          // Confirm Stop!
+          const startedAtIso = new Date(state.provisionalStationaryStartMs).toISOString();
+          const confirmedStop: VehicleStopEvent = {
+            id: generateUuid(),
+            dedup_key: `live:${vehicleId}:${startedAtIso}`,
+            vehicle_id: vehicleId,
+            vehicle_number: state.vehicleNumber,
+            driver_id: state.driverId,
+            driver_name: state.driverName,
+            started_at: startedAtIso,
+            ended_at: null,
+            duration_seconds: stationaryDurationSec,
+            start_lat: state.provisionalLat || lat,
+            start_lng: state.provisionalLng || lng,
+            end_lat: lat,
+            end_lng: lng,
+            location: state.provisionalLocation || location,
+            engine_on: state.provisionalEngineOn,
+            status: 'ACTIVE',
+            source: point.source || 'telemetry',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
 
-        return { vehicleId, action: "PROVISIONAL_STARTED" };
+          state.activeStop = confirmedStop;
+          this.addConfirmedStop(confirmedStop);
+          this.saveToStorage();
+          this.persistStopToSupabase(confirmedStop);
+
+          return {
+            vehicleId,
+            action: 'STOP_CONFIRMED',
+            stopEvent: confirmedStop,
+          };
+        }
+
+        this.saveToStorage();
+        return { vehicleId, action: 'NONE' };
       }
 
-      // Check if continuous stationary duration >= 2 minutes (120 seconds)
-      const stationaryDurationSec = Math.round((tsMs - state.provisionalStationaryStartMs) / 1000);
-      if (stationaryDurationSec >= this.config.stopDurationThresholdSec) {
-        // ── CONFIRM STOP! ────────────────────────────────────────────────────
-        // Note: The stop started at provisionalStationaryStartMs, NOT now!
-        const startedAtIso = new Date(state.provisionalStationaryStartMs).toISOString();
-        const confirmedStop: VehicleStopEvent = {
-          id: generateUuid(),
-          dedup_key: `live:${vehicleId}:${startedAtIso}`,
-          vehicle_id: vehicleId,
-          vehicle_number: state.vehicleNumber,
-          driver_id: state.driverId,
-          driver_name: state.driverName,
-          started_at: startedAtIso,
-          ended_at: null,
-          duration_seconds: stationaryDurationSec,
-          start_lat: state.provisionalLat || lat,
-          start_lng: state.provisionalLng || lng,
-          end_lat: lat,
-          end_lng: lng,
-          location: state.provisionalLocation || location,
-          engine_on: state.provisionalEngineOn,
-          status: "ACTIVE",
-          source: point.source || "telemetry",
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
+      // Case C: First stationary observation — start provisional timer
+      state.provisionalStationaryStartMs = tsMs;
+      state.provisionalLat = lat;
+      state.provisionalLng = lng;
+      state.provisionalLocation = location;
+      state.provisionalEngineOn = engineOn;
+      state.lastTimestampMs = tsMs;
+      state.lastFreshTelemetryMs = tsMs;
+      state.lastSpeed = speed;
+      state.lastLat = lat;
+      state.lastLng = lng;
 
-        state.activeStop = confirmedStop;
-        this.addConfirmedStop(confirmedStop);
-
-        return {
-          vehicleId,
-          action: "STOP_CONFIRMED",
-          stopEvent: confirmedStop,
-        };
-      }
-
-      return { vehicleId, action: "NONE" };
+      this.saveToStorage();
+      return { vehicleId, action: 'PROVISIONAL_STARTED' };
     }
 
-    // ── 4. MOVEMENT CONDITIONS (speed > stopSpeedThresholdKmh) ───────────────
-    // If not in an active stop, any movement cleanly clears the provisional stationary timer
+    // ── 3. MOVEMENT TELEMETRY (speed > stopSpeedThresholdKmh) ─────────────────
     if (!state.activeStop) {
       state.provisionalStationaryStartMs = null;
       state.provisionalLat = null;
       state.provisionalLng = null;
       state.movementCandidateStartMs = null;
-      return { vehicleId, action: "NONE" };
+      state.lastTimestampMs = tsMs;
+      state.lastFreshTelemetryMs = tsMs;
+      state.lastSpeed = speed;
+      state.lastLat = lat;
+      state.lastLng = lng;
+      this.saveToStorage();
+      return { vehicleId, action: 'NONE' };
     }
 
-    // Vehicle is in an ACTIVE stop and is now moving:
+    // Active stop resumption: check if silence gap > 120s preceded movement
+    const timeSinceLastTelemetryMs = tsMs - state.lastFreshTelemetryMs;
+    if (timeSinceLastTelemetryMs > this.config.staleThresholdSec * 1000) {
+      const interruptedStop: VehicleStopEvent = {
+        ...state.activeStop,
+        ended_at: new Date(state.lastFreshTelemetryMs).toISOString(),
+        duration_seconds: Math.max(1, Math.round((state.lastFreshTelemetryMs - safeTimestampToMs(state.activeStop.started_at)!) / 1000)),
+        status: 'INTERRUPTED',
+        updated_at: new Date().toISOString(),
+      };
+
+      this.updateConfirmedStop(interruptedStop);
+      state.activeStop = null;
+      state.provisionalStationaryStartMs = null;
+      state.movementCandidateStartMs = null;
+      state.lastTimestampMs = tsMs;
+      state.lastFreshTelemetryMs = tsMs;
+      state.lastSpeed = speed;
+      state.lastLat = lat;
+      state.lastLng = lng;
+      this.saveToStorage();
+
+      return {
+        vehicleId,
+        action: 'STOP_INTERRUPTED',
+        stopEvent: interruptedStop,
+      };
+    }
+
+    // Sustained movement check (speed > resumeSpeedThresholdKmh for >= 15s)
     if (speed > this.config.resumeSpeedThresholdKmh) {
       if (state.movementCandidateStartMs === null) {
-        // First movement observation
         state.movementCandidateStartMs = tsMs;
-        return { vehicleId, action: "NONE" };
+        state.lastTimestampMs = tsMs;
+        state.lastFreshTelemetryMs = tsMs;
+        state.lastSpeed = speed;
+        state.lastLat = lat;
+        state.lastLng = lng;
+        return { vehicleId, action: 'NONE' };
       }
 
-      // Check if movement is sustained for 15 seconds
       const movementDurationSec = Math.round((tsMs - state.movementCandidateStartMs) / 1000);
       if (movementDurationSec >= this.config.resumeDurationThresholdSec) {
-        // ── CONFIRM JOURNEY RESUMED! ─────────────────────────────────────────
-        // The stop ended at the FIRST movement timestamp (movementCandidateStartMs)
         const stopStartMs = safeTimestampToMs(state.activeStop.started_at)!;
         const totalDurationSec = Math.max(1, Math.round((state.movementCandidateStartMs - stopStartMs) / 1000));
 
@@ -454,7 +524,7 @@ export class StopDetectionEngine {
           duration_seconds: totalDurationSec,
           end_lat: lat,
           end_lng: lng,
-          status: "COMPLETED",
+          status: 'COMPLETED',
           updated_at: new Date().toISOString(),
         };
 
@@ -462,24 +532,31 @@ export class StopDetectionEngine {
         state.activeStop = null;
         state.provisionalStationaryStartMs = null;
         state.movementCandidateStartMs = null;
+        state.lastTimestampMs = tsMs;
+        state.lastFreshTelemetryMs = tsMs;
+        state.lastSpeed = speed;
+        state.lastLat = lat;
+        state.lastLng = lng;
+        this.saveToStorage();
 
         return {
           vehicleId,
-          action: "STOP_COMPLETED",
+          action: 'STOP_COMPLETED',
           stopEvent: completedStop,
         };
       }
     } else {
-      // Speed is between 3 km/h and 5 km/h: minor creep or GPS wobble, reset movement candidate
       state.movementCandidateStartMs = null;
     }
 
-    return { vehicleId, action: "NONE" };
+    state.lastTimestampMs = tsMs;
+    state.lastFreshTelemetryMs = tsMs;
+    state.lastSpeed = speed;
+    state.lastLat = lat;
+    state.lastLng = lng;
+    return { vehicleId, action: 'NONE' };
   }
 
-  /**
-   * Processes a live snapshot of vehicles (e.g. from useVehicles()).
-   */
   public processVehicleBatch(vehicles: Vehicle[]): StopTransitionResult[] {
     const results: StopTransitionResult[] = [];
     const now = Date.now();
@@ -519,6 +596,12 @@ export class StopDetectionEngine {
   public checkStaleness(currentTimeMs: number = Date.now()): VehicleStopEvent[] {
     const interrupted: VehicleStopEvent[] = [];
 
+    // Connection grace period: do not mark active stops interrupted during initial 120s after real browser reload
+    const wallClockAge = Date.now() - this.engineStartTimeMs;
+    if (wallClockAge < this.config.staleThresholdSec * 1000 && Math.abs(currentTimeMs - Date.now()) < 300000) {
+      return interrupted;
+    }
+
     for (const [vehicleId, state] of this.states.entries()) {
       if (state.activeStop && state.lastFreshTelemetryMs > 0) {
         const gapMs = currentTimeMs - state.lastFreshTelemetryMs;
@@ -530,7 +613,7 @@ export class StopDetectionEngine {
             ...state.activeStop,
             ended_at: new Date(state.lastFreshTelemetryMs).toISOString(),
             duration_seconds: durationSec,
-            status: "INTERRUPTED",
+            status: 'INTERRUPTED',
             updated_at: new Date().toISOString(),
           };
 
@@ -545,8 +628,6 @@ export class StopDetectionEngine {
 
     return interrupted;
   }
-
-  // ── STATE & PERSISTENCE ACCESSORS ──────────────────────────────────────────
 
   public getActiveStops(): VehicleStopEvent[] {
     const active: VehicleStopEvent[] = [];
@@ -740,28 +821,30 @@ export class StopDetectionEngine {
 
         // Recover active stops into engine tracking state
         for (const stop of mapped) {
-          if (stop.status === "ACTIVE") {
+          if (stop.status === 'ACTIVE') {
             const startMs = safeTimestampToMs(stop.started_at) || Date.now();
-            const lastMs = safeTimestampToMs(stop.updated_at || stop.started_at) || Date.now();
+            const now = Date.now();
+            const existingState = this.states.get(stop.vehicle_id);
             this.states.set(stop.vehicle_id, {
               vehicleId: stop.vehicle_id,
-              vehicleNumber: stop.vehicle_number || "Vehicle",
-              driverId: stop.driver_id || null,
-              driverName: stop.driver_name || null,
-              lastTimestampMs: lastMs,
-              lastFreshTelemetryMs: lastMs,
-              lastSpeed: 0,
-              provisionalStationaryStartMs: startMs,
+              vehicleNumber: stop.vehicle_number || existingState?.vehicleNumber || 'Vehicle',
+              driverId: stop.driver_id || existingState?.driverId || null,
+              driverName: stop.driver_name || existingState?.driverName || null,
+              provisionalStationaryStartMs: existingState?.provisionalStationaryStartMs || startMs,
               provisionalLat: stop.start_lat,
               provisionalLng: stop.start_lng,
               provisionalLocation: stop.location,
-              provisionalEngineOn: stop.engine_on,
+              provisionalEngineOn: Boolean(stop.engine_on),
               movementCandidateStartMs: null,
               activeStop: stop,
+              lastTimestampMs: now,
+              lastFreshTelemetryMs: now,
+              lastLat: stop.start_lat,
+              lastLng: stop.start_lng,
+              lastSpeed: 0,
             });
           }
         }
-
         this.saveToStorage();
         return mapped;
       }
@@ -1026,9 +1109,9 @@ export class StopDetectionEngine {
   // ── LOCAL STORAGE RECOVERY (BROWSER REFRESH PROTECTION) ───────────────────
 
   private loadFromStorage() {
-    if (typeof localStorage === "undefined") return;
+    if (typeof localStorage === 'undefined') return;
     try {
-      const saved = localStorage.getItem("nanjil_vehicle_stop_events");
+      const saved = localStorage.getItem('nanjil_vehicle_stop_events');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
@@ -1036,12 +1119,45 @@ export class StopDetectionEngine {
         }
       }
 
-      const savedStates = localStorage.getItem("nanjil_vehicle_stop_states");
+      const savedStates = localStorage.getItem('nanjil_vehicle_stop_states');
       if (savedStates) {
         const parsed = JSON.parse(savedStates);
-        if (typeof parsed === "object" && parsed !== null) {
+        if (typeof parsed === 'object' && parsed !== null) {
           for (const [vId, st] of Object.entries(parsed)) {
-            this.states.set(vId, st as VehicleStopTrackingState);
+            const cast = st as VehicleStopTrackingState;
+            if (cast.activeStop) {
+              cast.lastFreshTelemetryMs = Date.now();
+            }
+            this.states.set(vId, cast);
+          }
+        }
+      }
+
+      // Reconcile any active stop in confirmedStops into this.states
+      const now = Date.now();
+      for (const stop of this.confirmedStops) {
+        if (stop.status === 'ACTIVE') {
+          const existing = this.states.get(stop.vehicle_id);
+          if (!existing || !existing.activeStop) {
+            const startMs = safeTimestampToMs(stop.started_at) || now;
+            this.states.set(stop.vehicle_id, {
+              vehicleId: stop.vehicle_id,
+              vehicleNumber: stop.vehicle_number || existing?.vehicleNumber || 'Vehicle',
+              driverId: stop.driver_id || existing?.driverId || null,
+              driverName: stop.driver_name || existing?.driverName || null,
+              provisionalStationaryStartMs: existing?.provisionalStationaryStartMs || startMs,
+              provisionalLat: stop.start_lat,
+              provisionalLng: stop.start_lng,
+              provisionalLocation: stop.location,
+              provisionalEngineOn: Boolean(stop.engine_on),
+              movementCandidateStartMs: null,
+              activeStop: stop,
+              lastTimestampMs: now,
+              lastFreshTelemetryMs: now,
+              lastLat: stop.start_lat,
+              lastLng: stop.start_lng,
+              lastSpeed: 0,
+            });
           }
         }
       }
@@ -1075,12 +1191,12 @@ export class StopDetectionEngine {
   public reset() {
     this.states.clear();
     this.confirmedStops = [];
-    if (typeof localStorage !== "undefined") {
-      localStorage.removeItem("nanjil_vehicle_stop_events");
-      localStorage.removeItem("nanjil_vehicle_stop_states");
+    this.engineStartTimeMs = Date.now();
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('nanjil_vehicle_stop_events');
+      localStorage.removeItem('nanjil_vehicle_stop_states');
     }
   }
 }
-
 // Global Singleton Instance for application-wide continuous stop detection
 export const globalStopDetector = new StopDetectionEngine();

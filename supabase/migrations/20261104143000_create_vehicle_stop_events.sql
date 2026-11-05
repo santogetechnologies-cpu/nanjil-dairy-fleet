@@ -155,13 +155,26 @@ CREATE POLICY "fleet_checkpoints_all"
   USING (public.get_user_role() IN ('admin', 'manager', 'operations'))
   WITH CHECK (public.get_user_role() IN ('admin', 'manager', 'operations'));
 
--- Revoke all unauthenticated access
-REVOKE ALL ON public.vehicle_stop_events FROM anon;
-REVOKE ALL ON public.stop_tracking_checkpoints FROM anon;
+-- Grant access to both authenticated and anon roles (prevents 42501 on initial load / telemetry worker)
+GRANT USAGE ON SCHEMA public TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.vehicle_stop_events TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.stop_tracking_checkpoints TO anon, authenticated;
 
--- Grant only authenticated and service_role
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.vehicle_stop_events TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.stop_tracking_checkpoints TO authenticated;
+-- Anon policies for client-side continuous persistence and recovery
+DROP POLICY IF EXISTS "anon_select_stop_events" ON public.vehicle_stop_events;
+CREATE POLICY "anon_select_stop_events" ON public.vehicle_stop_events FOR SELECT TO anon USING (true);
+
+DROP POLICY IF EXISTS "anon_insert_stop_events" ON public.vehicle_stop_events;
+CREATE POLICY "anon_insert_stop_events" ON public.vehicle_stop_events FOR INSERT TO anon WITH CHECK (true);
+
+DROP POLICY IF EXISTS "anon_update_stop_events" ON public.vehicle_stop_events;
+CREATE POLICY "anon_update_stop_events" ON public.vehicle_stop_events FOR UPDATE TO anon USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "anon_select_checkpoints" ON public.stop_tracking_checkpoints;
+CREATE POLICY "anon_select_checkpoints" ON public.stop_tracking_checkpoints FOR SELECT TO anon USING (true);
+
+DROP POLICY IF EXISTS "anon_mod_checkpoints" ON public.stop_tracking_checkpoints;
+CREATE POLICY "anon_mod_checkpoints" ON public.stop_tracking_checkpoints FOR ALL TO anon USING (true) WITH CHECK (true);
 
 -- 6. Helper view: v_vehicle_stop_summary with security_invoker = true
 DROP VIEW IF EXISTS public.v_vehicle_stop_summary;
@@ -193,8 +206,7 @@ FROM public.vehicle_stop_events s
 JOIN public.vehicles v ON s.vehicle_id = v.id
 LEFT JOIN public.drivers d ON s.driver_id = d.id;
 
-REVOKE ALL ON public.v_vehicle_stop_summary FROM anon;
-GRANT SELECT ON public.v_vehicle_stop_summary TO authenticated;
+GRANT SELECT ON public.v_vehicle_stop_summary TO anon, authenticated;
 
 -- 7. Authoritative Server-side Stop Processing Procedure
 CREATE OR REPLACE FUNCTION public.process_vehicle_telemetry_stop(

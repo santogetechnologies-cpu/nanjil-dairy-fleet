@@ -219,7 +219,8 @@ test("9. Reconnection: Correct tracking resumes", () => {
   // Initial stop and disconnect
   engine.processTelemetry({ vehicleId: vId, timestamp: t0, speed: 0, lat: 8.2605, lng: 77.2884 });
   engine.processTelemetry({ vehicleId: vId, timestamp: t0 + 120 * 1000, speed: 0, lat: 8.2605, lng: 77.2884 });
-  engine.processTelemetry({ vehicleId: vId, timestamp: t0 + 1000 * 1000, speed: 0, lat: 8.2605, lng: 77.2884 }); // triggers interrupted
+  // GPS disconnects: actual telemetry timeout (silence > 120s) triggers INTERRUPTED
+  engine.checkStaleness(t0 + 1000 * 1000);
 
   // Fresh stationary telemetry begins at t = 2000s
   const tFresh = t0 + 2000 * 1000;
@@ -975,3 +976,117 @@ test("35. Historical active-stop recovery: Latest stationary reading within 120s
   assert.equal(active[0].status, "ACTIVE", "Stationary vehicle reporting recently must remain ACTIVE");
 });
 
+
+test("36. Browser refresh: Active stop survives 5m and 15m reload without becoming INTERRUPTED", () => {
+  const engine1 = new StopDetectionEngine({ staleThresholdSec: 120 });
+  const vId = "veh-refresh-5m-15m";
+  const t0 = 1730700000000;
+
+  // Initial 2-minute stationary period
+  engine1.processTelemetry({ vehicleId: vId, timestamp: t0, speed: 0, lat: 8.2605, lng: 77.2884 });
+  const confirmRes = engine1.processTelemetry({ vehicleId: vId, timestamp: t0 + 120 * 1000, speed: 0, lat: 8.2605, lng: 77.2884 });
+  assert.equal(confirmRes.action, "STOP_CONFIRMED");
+  const stopId = confirmRes.stopEvent.id;
+
+  // Simulated browser refresh after 5 minutes (300s):
+  // New engine instance boots up with recovered active stop
+  const engine2 = new StopDetectionEngine({ staleThresholdSec: 120 });
+  const activeStop = { ...confirmRes.stopEvent, duration_seconds: 120 };
+  engine2.confirmedStops = [activeStop];
+  engine2.states.set(vId, {
+    vehicleId: vId,
+    vehicleNumber: "TN 75 S 1688",
+    driverId: null,
+    driverName: null,
+    lastTimestampMs: t0 + 120 * 1000,
+    lastFreshTelemetryMs: t0 + 120 * 1000,
+    lastSpeed: 0,
+    provisionalStationaryStartMs: t0,
+    provisionalLat: 8.2605,
+    provisionalLng: 77.2884,
+    provisionalLocation: "Nanjil Depot",
+    provisionalEngineOn: true,
+    movementCandidateStartMs: null,
+    activeStop: activeStop,
+  });
+
+  // Incoming live batch 5 minutes after stop started: vehicle still idle at depot (gap = 180s > 120s)
+  const batchRes5m = engine2.processVehicleBatch([{
+    id: vId,
+    number: "TN 75 S 1688",
+    speed: 0,
+    lat: 8.2605,
+    lng: 77.2884,
+    engineOn: true,
+    location: "Nanjil Depot",
+    lastUpdate: new Date(t0 + 300 * 1000).toISOString(),
+  }]);
+
+  const activeStops5m = engine2.getActiveStops();
+  assert.equal(activeStops5m.length, 1, "Active stop must remain active after 5-minute refresh");
+  assert.equal(activeStops5m[0].id, stopId, "Stop ID must be preserved");
+  assert.equal(activeStops5m[0].status, "ACTIVE", "Status must remain ACTIVE, not INTERRUPTED");
+  assert.equal(activeStops5m[0].duration_seconds, 300, "Duration must accurately reach 300 seconds");
+
+  // Simulated browser refresh after 15 minutes (900s):
+  const batchRes15m = engine2.processVehicleBatch([{
+    id: vId,
+    number: "TN 75 S 1688",
+    speed: 0,
+    lat: 8.2605,
+    lng: 77.2884,
+    engineOn: true,
+    location: "Nanjil Depot",
+    lastUpdate: new Date(t0 + 900 * 1000).toISOString(),
+  }]);
+
+  const activeStops15m = engine2.getActiveStops();
+  assert.equal(activeStops15m.length, 1, "Active stop must remain active after 15-minute refresh");
+  assert.equal(activeStops15m[0].status, "ACTIVE", "Status must remain ACTIVE");
+  assert.equal(activeStops15m[0].duration_seconds, 900, "Duration must accurately reach 900 seconds (15 minutes)");
+  assert.equal(safeTimestampToMs(activeStops15m[0].started_at), t0, "Original started_at must be preserved");
+});
+
+test("37. Provisional stationary continuity: < 2 min state preserved across refresh", () => {
+  const engine1 = new StopDetectionEngine();
+  const vId = "veh-provisional-refresh";
+  const t0 = 1730700000000;
+
+  // Vehicle stopped for 60 seconds (provisional, not yet confirmed)
+  const p1 = engine1.processTelemetry({ vehicleId: vId, timestamp: t0, speed: 0, lat: 8.2605, lng: 77.2884 });
+  assert.equal(p1.action, "PROVISIONAL_STARTED");
+  engine1.processTelemetry({ vehicleId: vId, timestamp: t0 + 60 * 1000, speed: 0, lat: 8.2605, lng: 77.2884 });
+
+  // Simulate refresh: engine2 recovers state with provisionalStationaryStartMs = t0
+  const engine2 = new StopDetectionEngine();
+  engine2.states.set(vId, {
+    vehicleId: vId,
+    vehicleNumber: "TN 75 S 9826",
+    driverId: null,
+    driverName: null,
+    lastTimestampMs: t0 + 60 * 1000,
+    lastFreshTelemetryMs: t0 + 60 * 1000,
+    lastSpeed: 0,
+    provisionalStationaryStartMs: t0,
+    provisionalLat: 8.2605,
+    provisionalLng: 77.2884,
+    provisionalLocation: "Depot",
+    provisionalEngineOn: true,
+    movementCandidateStartMs: null,
+    activeStop: null,
+  });
+
+  // Next point arrives at t0 + 120s (cumulative 2 minutes has elapsed)
+  const pConfirm = engine2.processTelemetry({
+    vehicleId: vId,
+    timestamp: t0 + 120 * 1000,
+    speed: 0,
+    lat: 8.2605,
+    lng: 77.2884,
+  });
+
+  assert.equal(pConfirm.action, "STOP_CONFIRMED", "Stop must confirm after cumulative 2 minutes");
+  assert.equal(pConfirm.stopEvent?.status, "ACTIVE");
+  assert.equal(safeTimestampToMs(pConfirm.stopEvent?.started_at), t0, "Must retain original t0 timestamp");
+  assert.equal(pConfirm.stopEvent?.duration_seconds, 120);
+});
