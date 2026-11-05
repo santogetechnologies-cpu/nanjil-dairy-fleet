@@ -462,8 +462,9 @@ export class StopDetectionEngine {
         const timeSinceLastTelemetryMs = tsMs - state.lastFreshTelemetryMs;
         if (timeSinceLastTelemetryMs > this.config.staleThresholdSec * 1000 && distKm > 0.2) {
           const interruptedStop: VehicleStopEvent = {
-            ...state.activeStop,
-            ended_at: new Date(state.lastFreshTelemetryMs).toISOString(),
+        ...state.activeStop,
+        dedup_key: state.activeStop.dedup_key || `live:${vehicleId}:${state.activeStop.started_at}`,
+        ended_at: new Date(state.lastFreshTelemetryMs).toISOString(),
             duration_seconds: Math.max(1, Math.round((state.lastFreshTelemetryMs - safeTimestampToMs(state.activeStop.started_at)!) / 1000)),
             status: "INTERRUPTED",
             updated_at: new Date().toISOString(),
@@ -643,6 +644,7 @@ export class StopDetectionEngine {
 
         const completedStop: VehicleStopEvent = {
           ...state.activeStop,
+          dedup_key: state.activeStop.dedup_key || `live:${vehicleId}:${state.activeStop.started_at}`,
           ended_at: new Date(state.movementCandidateStartMs).toISOString(),
           duration_seconds: totalDurationSec,
           end_lat: lat,
@@ -893,11 +895,13 @@ export class StopDetectionEngine {
     try {
       const dedupKey =
         stop.dedup_key ||
-        (stop.status === "ACTIVE"
-          ? `live:${stop.vehicle_id}:${stop.started_at}`
-          : `hist:${stop.vehicle_id}:${stop.started_at}`);
+        (stop.source === "historical" || stop.id?.startsWith("hist-")
+          ? `hist:${stop.vehicle_id}:${stop.started_at}`
+          : `live:${stop.vehicle_id}:${stop.started_at}`);
 
-      const payload = {
+      stop.dedup_key = dedupKey;
+
+      const payload: any = {
         id: stop.id,
         dedup_key: dedupKey,
         vehicle_id: stop.vehicle_id,
@@ -916,9 +920,29 @@ export class StopDetectionEngine {
         updated_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase
+      let { data: upsertData, error } = await supabase
         .from("vehicle_stop_events")
-        .upsert(payload, { onConflict: "dedup_key" });
+        .upsert(payload, { onConflict: "dedup_key" })
+        .select("id, dedup_key")
+        .maybeSingle();
+
+      // If primary key collision occurs (legacy row in DB already has this id with a different or null dedup_key),
+      // update the existing row directly by its authoritative primary key
+      if (error && (error.code === "23505" || error.message?.includes("vehicle_stop_events_pkey"))) {
+        const updateRes = await supabase
+          .from("vehicle_stop_events")
+          .update(payload)
+          .eq("id", stop.id)
+          .select("id, dedup_key")
+          .maybeSingle();
+        error = updateRes.error;
+        upsertData = updateRes.data;
+      }
+
+      if (upsertData?.id) {
+        stop.id = upsertData.id;
+        if (upsertData.dedup_key) stop.dedup_key = upsertData.dedup_key;
+      }
 
       if (error) {
         if (
@@ -985,7 +1009,7 @@ export class StopDetectionEngine {
         this.isSupabaseTableAvailable = true;
         const mapped: VehicleStopEvent[] = data.map((d: any) => ({
           id: d.id,
-          dedup_key: d.dedup_key,
+          dedup_key: d.dedup_key || (d.status === "ACTIVE" ? `live:${d.vehicle_id}:${d.started_at}` : `hist:${d.vehicle_id}:${d.started_at}`),
           vehicle_id: d.vehicle_id,
           vehicle_number: d.vehicles?.number || d.vehicle_number || "Fleet Unit",
           vehicle_model: d.vehicles?.model,
