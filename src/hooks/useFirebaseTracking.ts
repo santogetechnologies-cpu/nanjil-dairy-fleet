@@ -412,18 +412,20 @@ export function usePureFirebaseTracking() {
       const { cleanDevId, rawDevId } = extractTelemetryDeviceId(data, docId);
       const parsed = parseFirestoreTelemetry(data);
 
+      const lookupDevId = cleanDevId || normalizeDeviceId(docId) || normalizeDeviceId(rawDevId);
+
       // Match against Supabase vehicles using Supabase vehicles.device_id as authoritative mapping key
-      // Compare the complete normalized device ID (DO NOT use partial/endsWith matching)
+      // Fallback immediately to the 7 authoritative physical GPS units
       const matchedSupabase = supabaseVehicles.find((sv) => {
         const sDevId = normalizeDeviceId(sv.device_id);
-        if (!cleanDevId || !sDevId) return false;
-        return cleanDevId === sDevId;
-      }) || (cleanDevId && KNOWN_NANJIL_DEVICE_MAP[cleanDevId] ? {
-        id: KNOWN_NANJIL_DEVICE_MAP[cleanDevId].id,
-        number: KNOWN_NANJIL_DEVICE_MAP[cleanDevId].number,
-        model: KNOWN_NANJIL_DEVICE_MAP[cleanDevId].model,
-        type: "Vehicle",
-        device_id: cleanDevId,
+        if (!lookupDevId || !sDevId) return false;
+        return lookupDevId === sDevId;
+      }) || (lookupDevId && KNOWN_NANJIL_DEVICE_MAP[lookupDevId] ? {
+        id: KNOWN_NANJIL_DEVICE_MAP[lookupDevId].id,
+        number: KNOWN_NANJIL_DEVICE_MAP[lookupDevId].number,
+        model: KNOWN_NANJIL_DEVICE_MAP[lookupDevId].model,
+        type: "Tanker",
+        device_id: lookupDevId,
       } as any : undefined);
 
       // If cleanDevId is 15 digits but not in loaded Supabase vehicles, trigger direct lookup on base vehicles table
@@ -473,7 +475,7 @@ export function usePureFirebaseTracking() {
       }
 
       const vehicleId =
-        matchedSupabase?.id || (cleanDevId ? `unassigned-${cleanDevId}` : `unassigned-${docId}`);
+        matchedSupabase?.id || (lookupDevId ? `unassigned-${lookupDevId}` : `unassigned-${docId}`);
       const driverName = matchedSupabase?.driver_name || data.driver || "Unassigned";
       const driverId = matchedSupabase?.driver_id || data.driver_id || "";
       const vehicleType = matchedSupabase?.type || data.type || "Vehicle";

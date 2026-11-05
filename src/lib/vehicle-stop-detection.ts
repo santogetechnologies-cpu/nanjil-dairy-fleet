@@ -42,6 +42,21 @@ export const DEFAULT_STOP_CONFIG: StopDetectionConfig = {
 // ── TYPES ────────────────────────────────────────────────────────────────────
 export type StopStatus = "ACTIVE" | "COMPLETED" | "INTERRUPTED";
 
+export function isPlaceholderVehicleNumber(num: string | null | undefined): boolean {
+  if (!num) return true;
+  const s = num.trim().toLowerCase();
+  return (
+    s === "" ||
+    s === "unassigned vehicle" ||
+    s === "unassigned" ||
+    s === "fleet asset" ||
+    s === "fleet unit" ||
+    s === "vehicle" ||
+    s === "unknown" ||
+    s === "other"
+  );
+}
+
 export const KNOWN_NANJIL_DEVICE_MAP: Record<string, { id: string; number: string; model: string }> = {
   "863110086146753": { id: "09b85a4a-1d9f-43f0-8343-ace9d27a1670", number: "TN 75 F 4323", model: "Eicher Pro 2049" },
   "863110086146985": { id: "1b115b9d-6357-4a9e-8e76-1d59497695af", number: "TN 75 S 9826", model: "Tata 407 Gold SFC" },
@@ -49,7 +64,7 @@ export const KNOWN_NANJIL_DEVICE_MAP: Record<string, { id: string; number: strin
   "863110086162107": { id: "7b9543e8-bcdd-4fb6-ad83-a78d92be4176", number: "TN 75 S 1688", model: "20 KL" },
   "863110086164111": { id: "f30c9dcd-56a2-4b6c-bb93-d1f4c458682c", number: "TN 75 BF 0320", model: "Mahindra Bolero Maxi Truck" },
   "863110086186932": { id: "d3887a78-ac32-4b63-b3c0-61563ad9f3d7", number: "TN 75 M 0041", model: "75 kl" },
-  "863110086192104": { id: "d0fea864-64a4-4148-b3b2-600f68459583", number: "TN 75 BC 2219", model: "Unknown Model" },
+  "863110086192104": { id: "d0fea864-64a4-4148-b3b2-600f68459583", number: "TN 75 BC 2219", model: "Tanker 10KL" },
 };
 
 /** Authoritative 7 GPS hardware device IDs present in Nanjil Dairy Fleet */
@@ -75,16 +90,11 @@ export function resolveVehicleMetadata(
   currentNumber?: string | null,
   currentModel?: string | null
 ): { id?: string; number: string; model?: string } {
-  const isPlaceholderNumber =
-    !currentNumber ||
-    currentNumber === "Unassigned Vehicle" ||
-    currentNumber === "Fleet Asset" ||
-    currentNumber === "Fleet Unit" ||
-    currentNumber === "Vehicle" ||
-    currentNumber === "Unknown";
+  const isPlaceholder = isPlaceholderVehicleNumber(currentNumber);
 
-  if (!isPlaceholderNumber) {
-    return { id: vehicleId || undefined, number: currentNumber!, model: currentModel || undefined };
+  // If already a valid, non-placeholder vehicle number, preserve it!
+  if (!isPlaceholder && currentNumber) {
+    return { id: vehicleId || undefined, number: currentNumber, model: currentModel || undefined };
   }
 
   const cleanVid = (vehicleId || "").trim();
@@ -128,7 +138,7 @@ export function resolveVehicleMetadata(
             }
             return false;
           });
-          if (matched && matched.number) {
+          if (matched && matched.number && !isPlaceholderVehicleNumber(matched.number)) {
             return {
               id: matched.id,
               number: matched.number,
@@ -158,8 +168,13 @@ export function isGpsVehicle(v: { id?: string; number?: string; device_id?: stri
   if (cleanId && NANJIL_7_GPS_VEHICLE_IDS.has(cleanId)) return true;
 
   for (const meta of Object.values(KNOWN_NANJIL_DEVICE_MAP)) {
-    if (meta.number.replace(/\s+/g, "").toUpperCase() === cleanNum) return true;
-    if (cleanId && meta.id === cleanId) return true;
+    if (meta.number.replace(/\s+/g, "").toUpperCase() === cleanNum) {
+      // If object has an explicit foreign UUID that is NOT one of the 7 GPS vehicles and has no GPS device_id, reject it
+      if (cleanId && !NANJIL_7_GPS_VEHICLE_IDS.has(cleanId) && !devId) {
+        return false;
+      }
+      return true;
+    }
   }
   return false;
 }
@@ -786,15 +801,25 @@ export class StopDetectionEngine {
       if (state.activeStop) {
         const s = { ...state.activeStop };
         const meta = resolveVehicleMetadata(s.vehicle_id, s.dedup_key, s.vehicle_number, s.vehicle_model);
-        if (meta.number && meta.number !== s.vehicle_number) {
+        if (meta.number && meta.number !== "Unassigned Vehicle" && meta.number !== "Fleet Asset") {
           s.vehicle_number = meta.number;
           if (meta.model) s.vehicle_model = meta.model;
-          if (meta.id) s.vehicle_id = meta.id;
-        }
-        // Exclude unresolvable phantom stops and enforce strictly 1 active stop per vehicle
-        if (s.vehicle_number && s.vehicle_number !== "Unassigned Vehicle" && s.vehicle_number !== "Fleet Asset") {
+          if (s.vehicle_id && s.vehicle_id.startsWith("unassigned-") && meta.id) {
+            s.vehicle_id = meta.id;
+          }
+          const isSpecific = !isPlaceholderVehicleNumber(meta.number);
+          const key = isSpecific ? meta.number.replace(/\s+/g, "").toUpperCase() : s.vehicle_id;
+          const existing = activeMap.get(key);
+          if (!existing || (safeTimestampToMs(s.started_at) || 0) > (safeTimestampToMs(existing.started_at) || 0)) {
+            activeMap.set(key, s);
+          }
+        } else if (!s.vehicle_id.startsWith("unassigned-") && s.vehicle_number !== "Unassigned Vehicle" && s.vehicle_number !== "Fleet Asset") {
+          // Unit test or custom vehicle IDs (e.g. veh-pagination-test)
           const key = s.vehicle_id || s.vehicle_number;
-          activeMap.set(key, s);
+          const existing = activeMap.get(key);
+          if (!existing || (safeTimestampToMs(s.started_at) || 0) > (safeTimestampToMs(existing.started_at) || 0)) {
+            activeMap.set(key, s);
+          }
         }
       }
     }
@@ -806,13 +831,15 @@ export class StopDetectionEngine {
     for (const raw of this.confirmedStops) {
       const s = { ...raw };
       const meta = resolveVehicleMetadata(s.vehicle_id, s.dedup_key, s.vehicle_number, s.vehicle_model);
-      if (meta.number && meta.number !== s.vehicle_number) {
+      if (meta.number && meta.number !== "Unassigned Vehicle" && meta.number !== "Fleet Asset") {
         s.vehicle_number = meta.number;
         s.vehicle_model = meta.model || s.vehicle_model;
-        s.vehicle_id = meta.id || s.vehicle_id;
+        if (s.vehicle_id && s.vehicle_id.startsWith("unassigned-") && meta.id) {
+          s.vehicle_id = meta.id;
+        }
       }
-      // Filter out corrupted unassigned placeholder stops from history display
-      if (!s.vehicle_number || s.vehicle_number === "Unassigned Vehicle" || s.vehicle_number === "Fleet Asset") {
+      // Filter out unassigned placeholder stops from history display
+      if (s.vehicle_number === "Unassigned Vehicle" || s.vehicle_number === "Fleet Asset" || s.vehicle_id.startsWith("unassigned-")) {
         continue;
       }
       if (!unique.has(s.id)) {
@@ -831,7 +858,7 @@ export class StopDetectionEngine {
     if (meta.number && meta.number !== stop.vehicle_number) {
       stop.vehicle_number = meta.number;
       if (meta.model) stop.vehicle_model = meta.model;
-      if (meta.id) stop.vehicle_id = meta.id;
+      if (meta.id && stop.vehicle_id.startsWith("unassigned-")) stop.vehicle_id = meta.id;
     }
     // Deduplicate by ID
     const idx = this.confirmedStops.findIndex((s) => s.id === stop.id);
@@ -860,7 +887,7 @@ export class StopDetectionEngine {
     if (meta.number && meta.number !== stop.vehicle_number) {
       stop.vehicle_number = meta.number;
       if (meta.model) stop.vehicle_model = meta.model;
-      if (meta.id) stop.vehicle_id = meta.id;
+      if (meta.id && stop.vehicle_id.startsWith("unassigned-")) stop.vehicle_id = meta.id;
     }
     const idx = this.confirmedStops.findIndex((s) => s.id === stop.id);
     if (idx >= 0) {
@@ -920,23 +947,57 @@ export class StopDetectionEngine {
         updated_at: new Date().toISOString(),
       };
 
+      if (stop.status === "ACTIVE") {
+        // Enforce idx_vehicle_stop_events_one_active by deactivating any previously active stop for this vehicle
+        await supabase
+          .from("vehicle_stop_events")
+          .update({
+            status: "INTERRUPTED",
+            ended_at: stop.started_at,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("vehicle_id", stop.vehicle_id)
+          .eq("status", "ACTIVE")
+          .neq("dedup_key", dedupKey);
+      }
+
       let { data: upsertData, error } = await supabase
         .from("vehicle_stop_events")
         .upsert(payload, { onConflict: "dedup_key" })
         .select("id, dedup_key")
         .maybeSingle();
 
-      // If primary key collision occurs (legacy row in DB already has this id with a different or null dedup_key),
-      // update the existing row directly by its authoritative primary key
-      if (error && (error.code === "23505" || error.message?.includes("vehicle_stop_events_pkey"))) {
-        const updateRes = await supabase
-          .from("vehicle_stop_events")
-          .update(payload)
-          .eq("id", stop.id)
-          .select("id, dedup_key")
-          .maybeSingle();
-        error = updateRes.error;
-        upsertData = updateRes.data;
+      // If collision occurs on primary key or idx_vehicle_stop_events_one_active
+      if (
+        error &&
+        (error.code === "23505" ||
+          error.message?.includes("idx_vehicle_stop_events_one_active") ||
+          error.message?.includes("vehicle_stop_events_pkey"))
+      ) {
+        if (stop.status === "ACTIVE") {
+          const updateActiveRes = await supabase
+            .from("vehicle_stop_events")
+            .update(payload)
+            .eq("vehicle_id", stop.vehicle_id)
+            .eq("status", "ACTIVE")
+            .select("id, dedup_key")
+            .maybeSingle();
+          if (!updateActiveRes.error && updateActiveRes.data) {
+            error = null;
+            upsertData = updateActiveRes.data;
+          }
+        } else {
+          const updateRes = await supabase
+            .from("vehicle_stop_events")
+            .update(payload)
+            .eq("id", stop.id)
+            .select("id, dedup_key")
+            .maybeSingle();
+          if (!updateRes.error && updateRes.data) {
+            error = null;
+            upsertData = updateRes.data;
+          }
+        }
       }
 
       if (upsertData?.id) {
@@ -1007,36 +1068,55 @@ export class StopDetectionEngine {
 
       if (Array.isArray(data)) {
         this.isSupabaseTableAvailable = true;
-        const mapped: VehicleStopEvent[] = data.map((d: any) => ({
-          id: d.id,
-          dedup_key: d.dedup_key || (d.status === "ACTIVE" ? `live:${d.vehicle_id}:${d.started_at}` : `hist:${d.vehicle_id}:${d.started_at}`),
-          vehicle_id: d.vehicle_id,
-          vehicle_number: d.vehicles?.number || d.vehicle_number || "Fleet Unit",
-          vehicle_model: d.vehicles?.model,
-          driver_id: d.driver_id,
-          driver_name: d.drivers?.name || d.driver_name || "Unassigned",
-          started_at: d.started_at,
-          ended_at: d.ended_at,
-          duration_seconds: Number(d.duration_seconds) || 0,
-          start_lat: Number(d.start_lat) || 0,
-          start_lng: Number(d.start_lng) || 0,
-          end_lat: d.end_lat ? Number(d.end_lat) : null,
-          end_lng: d.end_lng ? Number(d.end_lng) : null,
-          location: d.location || "Nagercoil Depot",
-          engine_on: Boolean(d.engine_on),
-          status: d.status as StopStatus,
-          source: d.source || "telemetry",
-          created_at: d.created_at,
-          updated_at: d.updated_at,
-        }));
+        const mapped: VehicleStopEvent[] = [];
+        const now = Date.now();
+
+        for (const d of data) {
+          const meta = resolveVehicleMetadata(d.vehicle_id, d.dedup_key, d.vehicles?.number || d.vehicle_number, d.vehicles?.model);
+          if (meta.number && !isPlaceholderVehicleNumber(meta.number)) {
+            const startMs = safeTimestampToMs(d.started_at) || now;
+            let status = d.status as StopStatus;
+            let endedAt = d.ended_at;
+
+            // If an active stop started > 24 hours ago, close it as INTERRUPTED
+            if (status === "ACTIVE" && now - startMs > 24 * 3600 * 1000) {
+              status = "INTERRUPTED";
+              endedAt = endedAt || new Date(startMs + (Number(d.duration_seconds) || 120) * 1000).toISOString();
+            }
+
+            mapped.push({
+              id: d.id,
+              dedup_key: d.dedup_key || (status === "ACTIVE" ? `live:${meta.id || d.vehicle_id}:${d.started_at}` : `hist:${meta.id || d.vehicle_id}:${d.started_at}`),
+              vehicle_id: meta.id || d.vehicle_id,
+              vehicle_number: meta.number,
+              vehicle_model: meta.model || d.vehicles?.model,
+              driver_id: d.driver_id,
+              driver_name: d.drivers?.name || d.driver_name || "Unassigned",
+              started_at: d.started_at,
+              ended_at: endedAt,
+              duration_seconds: Number(d.duration_seconds) || 0,
+              start_lat: Number(d.start_lat) || 0,
+              start_lng: Number(d.start_lng) || 0,
+              end_lat: d.end_lat ? Number(d.end_lat) : null,
+              end_lng: d.end_lng ? Number(d.end_lng) : null,
+              location: d.location || "Nagercoil Depot",
+              engine_on: Boolean(d.engine_on),
+              status: status,
+              source: d.source || "telemetry",
+              created_at: d.created_at,
+              updated_at: d.updated_at,
+            });
+          }
+        }
 
         this.confirmedStops = mapped;
 
-        // Recover active stops into engine tracking state
+        // Recover active stops into engine tracking state (enforcing at most 1 active stop per vehicle)
+        const recoveredVehicles = new Set<string>();
         for (const stop of mapped) {
-          if (stop.status === 'ACTIVE') {
-            const startMs = safeTimestampToMs(stop.started_at) || Date.now();
-            const now = Date.now();
+          if (stop.status === 'ACTIVE' && !recoveredVehicles.has(stop.vehicle_id)) {
+            recoveredVehicles.add(stop.vehicle_id);
+            const startMs = safeTimestampToMs(stop.started_at) || now;
             const existingState = this.states.get(stop.vehicle_id);
             this.states.set(stop.vehicle_id, {
               vehicleId: stop.vehicle_id,
@@ -1324,20 +1404,30 @@ export class StopDetectionEngine {
   private loadFromStorage() {
     if (typeof localStorage === 'undefined') return;
     try {
+      const now = Date.now();
       const saved = localStorage.getItem('nanjil_vehicle_stop_events');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          this.confirmedStops = parsed;
-          // Reconcile vehicle numbers in loadFromStorage
-          for (const s of this.confirmedStops) {
+          const cleaned: VehicleStopEvent[] = [];
+          for (const raw of parsed) {
+            const s = { ...raw };
             const meta = resolveVehicleMetadata(s.vehicle_id, s.dedup_key, s.vehicle_number, s.vehicle_model);
-            if (meta.number && meta.number !== s.vehicle_number) {
+            if (meta.number && !isPlaceholderVehicleNumber(meta.number)) {
               s.vehicle_number = meta.number;
               if (meta.model) s.vehicle_model = meta.model;
               if (meta.id) s.vehicle_id = meta.id;
+
+              // If marked ACTIVE but started > 24 hours ago, close as INTERRUPTED
+              const startMs = safeTimestampToMs(s.started_at) || 0;
+              if (s.status === "ACTIVE" && now - startMs > 24 * 3600 * 1000) {
+                s.status = "INTERRUPTED";
+                s.ended_at = new Date(startMs + (s.duration_seconds || 120) * 1000).toISOString();
+              }
+              cleaned.push(s);
             }
           }
+          this.confirmedStops = cleaned;
         }
       }
 
@@ -1348,26 +1438,40 @@ export class StopDetectionEngine {
           for (const [vId, st] of Object.entries(parsed)) {
             const cast = st as VehicleStopTrackingState;
             if (cast.activeStop) {
-              cast.lastFreshTelemetryMs = Date.now();
               const meta = resolveVehicleMetadata(cast.activeStop.vehicle_id, cast.activeStop.dedup_key, cast.activeStop.vehicle_number, cast.activeStop.vehicle_model);
-              if (meta.number && meta.number !== cast.activeStop.vehicle_number) {
+              if (meta.number && !isPlaceholderVehicleNumber(meta.number)) {
                 cast.activeStop.vehicle_number = meta.number;
                 if (meta.model) cast.activeStop.vehicle_model = meta.model;
-                if (meta.id) cast.activeStop.vehicle_id = meta.id;
-              }
-              if (meta.number && meta.number !== cast.vehicleNumber) {
+                if (meta.id) {
+                  cast.activeStop.vehicle_id = meta.id;
+                  cast.vehicleId = meta.id;
+                }
                 cast.vehicleNumber = meta.number;
+
+                // If active stop is older than 24 hours, close it
+                const startMs = safeTimestampToMs(cast.activeStop.started_at) || 0;
+                if (now - startMs > 24 * 3600 * 1000) {
+                  cast.activeStop = null;
+                }
+              } else {
+                // Cannot resolve vehicle -> discard phantom ghost state
+                continue;
               }
+            } else if (isPlaceholderVehicleNumber(cast.vehicleNumber)) {
+              continue;
             }
-            this.states.set(vId, cast);
+
+            const targetKey = cast.activeStop?.vehicle_id || cast.vehicleId || vId;
+            if (!targetKey.startsWith("unassigned-")) {
+              this.states.set(targetKey, cast);
+            }
           }
         }
       }
 
-      // Reconcile any active stop in confirmedStops into this.states
-      const now = Date.now();
+      // Reconcile any active stop in confirmedStops into this.states (strictly 1 active per vehicle)
       for (const stop of this.confirmedStops) {
-        if (stop.status === 'ACTIVE') {
+        if (stop.status === 'ACTIVE' && !isPlaceholderVehicleNumber(stop.vehicle_number)) {
           const existing = this.states.get(stop.vehicle_id);
           if (!existing || !existing.activeStop) {
             const startMs = safeTimestampToMs(stop.started_at) || now;

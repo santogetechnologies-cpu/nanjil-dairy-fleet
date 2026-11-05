@@ -112,7 +112,7 @@ export default function TripHistoryPage() {
         supabase.from("vehicle_assignments").select("id, vehicle_id, driver_id, assigned_at, unassigned_at, is_active, drivers(id, name, phone)"),
       ]);
 
-      // Construct authoritative GPS vehicles list (7 physical GPS units)
+      // Strictly construct the 7 authentic physical GPS vehicles in Nanjil Dairy Fleet
       const uniqueGpsMap = new Map<string, any>();
       Object.entries(KNOWN_NANJIL_DEVICE_MAP).forEach(([devId, meta]) => {
         const key = meta.number.replace(/\s+/g, "").toUpperCase();
@@ -125,17 +125,19 @@ export default function TripHistoryPage() {
         });
       });
 
-      // Overlay with Supabase vehicles metadata
+      // Overlay with Supabase metadata matching the EXACT authentic UUID or matching hardware device_id
       if (vRes.data && vRes.data.length > 0) {
         vRes.data.forEach((v: any) => {
-          if (isGpsVehicle(v)) {
-            const key = (v.number || "").replace(/\s+/g, "").toUpperCase();
-            if (uniqueGpsMap.has(key)) {
-              const existing = uniqueGpsMap.get(key);
+          const vDevId = v.device_id ? String(v.device_id).trim() : "";
+          for (const [key, existing] of uniqueGpsMap.entries()) {
+            if (v.id === existing.id || (vDevId && vDevId === existing.device_id)) {
               uniqueGpsMap.set(key, {
                 ...existing,
-                ...v,
-                id: v.id || existing.id,
+                model: v.model || existing.model,
+                type: v.type || existing.type,
+                // Guarantee authoritative UUID is preserved
+                id: existing.id,
+                device_id: existing.device_id,
               });
             }
           }

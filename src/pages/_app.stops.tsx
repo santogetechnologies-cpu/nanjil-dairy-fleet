@@ -81,6 +81,36 @@ export default function VehicleStopHistoryPage() {
   const [isBannerDismissed, setIsBannerDismissed] = useState(false);
   const liveVehicles = useVehicles();
 
+  // Purge any ghost unassigned states from local storage on mount
+  useEffect(() => {
+    if (typeof localStorage !== "undefined") {
+      try {
+        const rawStates = localStorage.getItem("nanjil_vehicle_stop_states");
+        if (rawStates) {
+          const parsed = JSON.parse(rawStates);
+          let changed = false;
+          for (const key of Object.keys(parsed)) {
+            if (key.startsWith("unassigned-")) {
+              delete parsed[key];
+              changed = true;
+            }
+          }
+          if (changed) {
+            localStorage.setItem("nanjil_vehicle_stop_states", JSON.stringify(parsed));
+          }
+        }
+      } catch {}
+    }
+  }, []);
+
+  // Filter out any unassigned placeholder phantom stops
+  const validActiveStops = useMemo(() => {
+    return activeStops.filter((stop) => {
+      const meta = resolveVehicleMetadata(stop.vehicle_id, stop.dedup_key, stop.vehicle_number, stop.vehicle_model);
+      return meta.number && meta.number !== "Unassigned Vehicle" && meta.number !== "Fleet Asset";
+    });
+  }, [activeStops]);
+
   // Active sub-tab
   const [activeTab, setActiveTab] = useState<ActiveTab>("live");
 
@@ -364,7 +394,7 @@ export default function VehicleStopHistoryPage() {
       {/* ── HEADER ──────────────────────────────────────────────── */}
       <PageHeader
         title="Vehicle Stop History"
-        subtitle={`Automated Stationary Telemetry Tracking · 2-Min Confirmation Threshold · ${activeStops.length} Stopped (${overviewKPIs.currentlyIdleCount} Idle, ${overviewKPIs.currentlyParkedCount} Parked)`}
+        subtitle={`Automated Stationary Telemetry Tracking · 2-Min Confirmation Threshold · ${validActiveStops.length} Stopped (${overviewKPIs.currentlyIdleCount} Idle, ${overviewKPIs.currentlyParkedCount} Parked)`}
         actions={
           <div className="flex items-center gap-2">
             <div className="bg-slate-100 p-1 rounded-xl flex items-center text-xs font-semibold">
@@ -383,7 +413,7 @@ export default function VehicleStopHistoryPage() {
                 </span>
                 <span>Live Stopped</span>
                 <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
-                  {activeStops.length}
+                  {validActiveStops.length}
                 </span>
               </button>
 
@@ -657,7 +687,7 @@ GRANT SELECT ON public.v_vehicle_stop_summary TO anon, authenticated;`);
               </div>
               <div>
                 <h3 className="text-sm font-bold text-slate-900">
-                  Currently Stationary Vehicles ({activeStops.length})
+                  Currently Stationary Vehicles ({validActiveStops.length})
                 </h3>
                 <p className="text-[11px] text-slate-500">
                   Live stop timer updates every second · Automatic movement detection at &gt;5 km/h
@@ -688,7 +718,7 @@ GRANT SELECT ON public.v_vehicle_stop_summary TO anon, authenticated;`);
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {activeStops.length === 0 ? (
+                {validActiveStops.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="text-center py-12 text-slate-400">
                       <div className="flex flex-col items-center justify-center gap-2">
@@ -705,7 +735,7 @@ GRANT SELECT ON public.v_vehicle_stop_summary TO anon, authenticated;`);
                     </td>
                   </tr>
                 ) : (
-                  activeStops.map((stop) => {
+                  validActiveStops.map((stop) => {
                     const isLongStop = stop.duration_seconds >= 30 * 60; // 30 min+
                     const meta = resolveVehicleMetadata(stop.vehicle_id, stop.dedup_key, stop.vehicle_number, stop.vehicle_model);
                     return (
