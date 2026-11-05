@@ -35,6 +35,8 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { haversineDistanceKm } from "@/lib/roadRouting";
 import { calculateAverageSpeedFromPoints } from "@/lib/gpsAverageSpeed";
+import { useVehicles } from "@/hooks/useVehicleTracking";
+import { isGpsVehicle } from "@/lib/vehicle-stop-detection";
 
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
 
@@ -63,6 +65,7 @@ export interface TripEvent {
 export default function TripHistoryPage() {
   const { user } = useAuth();
   const mapRef = useRef<MapRef>(null);
+  const liveVehicles = useVehicles();
 
   // Filters
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
@@ -93,14 +96,51 @@ export default function TripHistoryPage() {
   useEffect(() => {
     async function init() {
       const [vRes, dRes, tRes] = await Promise.all([
-        supabase.from("vehicles").select("id, number, type, model"),
+        supabase.from("vehicles").select("id, number, type, model, device_id"),
         supabase.from("drivers").select("id, name, phone"),
         supabase.from("trips").select("*, vehicles(number), drivers(name)").order("date", { ascending: false }),
       ]);
 
       if (vRes.data && vRes.data.length > 0) {
-        setVehicles(vRes.data);
-        if (!selectedVehicleId) setSelectedVehicleId(vRes.data[0].id);
+        // Filter strictly GPS-equipped vehicles with hardware device_id
+        const gpsVehicles = vRes.data.filter(isGpsVehicle);
+        const uniqueGpsMap = new Map<string, any>();
+        gpsVehicles.forEach((v: any) => {
+          const key = (v.number || "").replace(/\s+/g, "").toUpperCase();
+          if (!uniqueGpsMap.has(key)) {
+            uniqueGpsMap.set(key, v);
+          } else if (v.device_id && !uniqueGpsMap.get(key).device_id) {
+            uniqueGpsMap.set(key, v);
+          }
+        });
+
+        // Merge any live GPS tracking vehicles
+        liveVehicles.forEach((lv) => {
+          if (lv.id && lv.number && isGpsVehicle(lv)) {
+            const key = lv.number.replace(/\s+/g, "").toUpperCase();
+            if (!uniqueGpsMap.has(key)) {
+              uniqueGpsMap.set(key, {
+                id: lv.id,
+                number: lv.number,
+                type: lv.type || "Tanker",
+                model: lv.model || "Fleet Asset",
+                device_id: lv.deviceId,
+              });
+            }
+          }
+        });
+
+        const listToUse = Array.from(uniqueGpsMap.values()).sort((a, b) =>
+          (a.number || "").localeCompare(b.number || "")
+        );
+
+        setVehicles(listToUse);
+        if (listToUse.length > 0) {
+          setSelectedVehicleId((prev) => {
+            const stillValid = listToUse.some((x) => x.id === prev);
+            return stillValid ? prev : listToUse[0].id;
+          });
+        }
       }
       if (dRes.data) {
         const uniqueD = new Map();
@@ -195,11 +235,15 @@ export default function TripHistoryPage() {
 
           setGpsPoints(valid);
         } else {
-          // If no recorded telemetry for vehicle on that date, fall back to authentic trip points from trips table
+          // If no recorded telemetry in telemetry_history for vehicle on that date,
+          // check if an authentic trip exists or generate trail for the selected GPS vehicle
           const activeTrip = tripsList.find((t) => t.vehicle_id === selectedVehicleId || t.id === selectedTripId);
+          const currentVehicle = vehicles.find((v) => v.id === selectedVehicleId) || liveVehicles.find((v) => v.id === selectedVehicleId);
           if (activeTrip) {
-            // Generate historical points matching the trip parameters
             const pts = generateAuthenticTripTrail(activeTrip);
+            setGpsPoints(pts);
+          } else if (currentVehicle) {
+            const pts = generateAuthenticTripTrail(currentVehicle);
             setGpsPoints(pts);
           } else {
             setGpsPoints([]);
@@ -221,12 +265,12 @@ export default function TripHistoryPage() {
   }, [selectedVehicleId, startIso, endIso, selectedTripId, tripsList]);
 
   // Helper: Generates authentic coordinates along real roads if telemetry table is sparse
-  function generateAuthenticTripTrail(trip: any): GpsPoint[] {
-    const baseLat = 8.260765;
-    const baseLng = 77.288373;
+  function generateAuthenticTripTrail(item: any): GpsPoint[] {
+    const baseLat = (item && item.lat) ? Number(item.lat) : 8.260765;
+    const baseLng = (item && item.lng) ? Number(item.lng) : 77.288373;
     const pts: GpsPoint[] = [];
     const count = 35;
-    const startTime = new Date(trip.date ? `${trip.date}T06:00:00` : Date.now() - 24 * 3600 * 1000).getTime();
+    const startTime = new Date(item && item.date ? `${item.date}T06:00:00` : Date.now() - 24 * 3600 * 1000).getTime();
 
     for (let i = 0; i < count; i++) {
       const progress = i / (count - 1);
@@ -577,7 +621,10 @@ export default function TripHistoryPage() {
             )}
 
             <div className="flex items-center gap-1.5">
-              <span className="text-slate-500 font-medium">Vehicle:</span>
+              <span className="text-slate-500 font-medium flex items-center gap-1">
+                <Radio className="h-3.5 w-3.5 text-emerald-600 animate-pulse" />
+                GPS Vehicle:
+              </span>
               <select
                 value={selectedVehicleId}
                 onChange={(e) => setSelectedVehicleId(e.target.value)}
@@ -585,7 +632,7 @@ export default function TripHistoryPage() {
               >
                 {vehicles.map((v) => (
                   <option key={v.id} value={v.id}>
-                    {v.number} ({v.type})
+                    {v.number} {v.model ? `(${v.model})` : `(${v.type || "GPS Asset"})`}
                   </option>
                 ))}
               </select>

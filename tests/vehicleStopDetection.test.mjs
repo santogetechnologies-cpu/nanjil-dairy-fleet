@@ -8,6 +8,7 @@ import {
   isValidCoordinate,
   haversineDistanceKm,
   resolveVehicleMetadata,
+  isGpsVehicle,
 } from "../src/lib/vehicle-stop-detection.ts";
 
 import { GpsAverageSpeedTracker } from "../src/lib/gpsAverageSpeed.ts";
@@ -1132,4 +1133,22 @@ test("38. Vehicle Registration Resolution: Deterministically resolves device IDs
   const activeStops = engine.getActiveStops();
   assert.equal(activeStops.length, 1);
   assert.equal(activeStops[0].vehicle_number, "TN 75 BF 0320", "Active stop must automatically resolve to TN 75 BF 0320");
+});
+
+test("39. isGpsVehicle: Strictly isolates GPS-equipped vehicles from manual/non-GPS fleet assets", () => {
+  // Real GPS vehicle with device_id
+  assert.equal(isGpsVehicle({ number: "TN 75 F 4323", device_id: "863110086146753" }), true);
+
+  // Real GPS vehicle with deviceId
+  assert.equal(isGpsVehicle({ number: "TN 75 M 0041", deviceId: "863110086186932" }), true);
+
+  // Real GPS vehicle matched by known UUID
+  assert.equal(isGpsVehicle({ id: "7b9543e8-bcdd-4fb6-ad83-a78d92be4176" }), true);
+
+  // Non-GPS assets (from user's screenshot) must return false
+  assert.equal(isGpsVehicle({ number: "TN 75 BE 8960", device_id: null }), false);
+  assert.equal(isGpsVehicle({ number: "TN 75 BJ 9939", device_id: "" }), false);
+  assert.equal(isGpsVehicle({ number: "TN 75 AT 4505" }), false);
+  assert.equal(isGpsVehicle(null), false);
+  assert.equal(isGpsVehicle(undefined), false);
 });

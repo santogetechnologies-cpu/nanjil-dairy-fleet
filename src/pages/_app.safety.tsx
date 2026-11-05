@@ -179,13 +179,14 @@ export default function SpeedingSafetyPage() {
       setIsLoading(true);
       try {
         const [vRes, dRes, aRes, rRes] = await Promise.all([
-          supabase.from("vehicles").select("id, number, type, model"),
+          supabase.from("vehicles").select("id, number, type, model, device_id"),
           supabase.from("drivers").select("id, name, phone, license"),
           supabase.from("alerts").select("*").order("time", { ascending: false }),
           supabase.from("v_driver_safety_ranking").select("*"),
         ]);
 
-        const vList = vRes.data || [];
+        const rawList = vRes.data || [];
+        const vList = rawList.filter(isGpsVehicle);
         setVehicles(vList);
 
         const dMap = new Map();

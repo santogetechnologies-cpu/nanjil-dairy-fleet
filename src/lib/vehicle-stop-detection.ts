@@ -132,6 +132,20 @@ export function resolveVehicleMetadata(
   return { id: vehicleId || undefined, number: currentNumber || "Unassigned Vehicle", model: currentModel || undefined };
 }
 
+/**
+ * Checks whether a vehicle record is an authentic GPS-equipped unit.
+ * Matches by hardware device_id or registered GPS fleet mappings.
+ */
+export function isGpsVehicle(v: { id?: string; number?: string; device_id?: string; deviceId?: string } | null | undefined): boolean {
+  if (!v) return false;
+  const devId = ((v.device_id || v.deviceId || "") as string).trim();
+  if (devId && devId !== "") return true;
+  for (const [knownDevId, meta] of Object.entries(KNOWN_NANJIL_DEVICE_MAP)) {
+    if (v.id === meta.id || devId === knownDevId) return true;
+  }
+  return false;
+}
+
 
 export interface TelemetryPoint {
   vehicleId: string;
