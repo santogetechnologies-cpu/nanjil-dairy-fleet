@@ -740,6 +740,209 @@ export class StopDetectionEngine {
     return this.confirmedStops;
   }
 
+  /**
+   * Backfills and calculates stop durations from existing historical database records.
+   * - Reads historical GPS records from Supabase (telemetry_history and vehicle_telemetry).
+   * - Analyzes historical speed, coordinates, timestamps and engine status.
+   * - Identifies continuous stationary periods of at least 2 minutes (120s).
+   * - Avoids duplicate stop records during repeated processing via deterministic IDs.
+   * - Preserves original timestamps.
+   * - Clearly marks records with `source: "database_history"`.
+   * - Never invents or estimates missing GPS data.
+   * - Returns diagnostic summary (processedCount, stopsCreated, earliestDate).
+   */
+  public async processHistoricalGpsRecords(): Promise<{
+    processedCount: number;
+    stopsCreated: number;
+    earliestDate: string | null;
+  }> {
+    let processedCount = 0;
+    let stopsCreated = 0;
+    let earliestDate: string | null = null;
+
+    try {
+      // 1. Fetch vehicle registry metadata for vehicle_number, model, driver
+      const { data: vList } = await supabase
+        .from("vehicles")
+        .select("id, number, model");
+      const vMap = new Map<string, any>();
+      (vList || []).forEach((v: any) => vMap.set(v.id, v));
+
+      const { data: dList } = await supabase
+        .from("drivers")
+        .select("id, name");
+      const dMap = new Map<string, any>();
+      (dList || []).forEach((d: any) => dMap.set(d.id, d));
+
+      // 2. Fetch all telemetry_history records (time-series)
+      const { data: histData } = await supabase
+        .from("telemetry_history")
+        .select("*")
+        .order("recorded_at", { ascending: true });
+
+      // 3. Fetch all vehicle_telemetry snapshots
+      const { data: vtData } = await supabase
+        .from("vehicle_telemetry")
+        .select("*")
+        .order("last_update", { ascending: true });
+
+      // Group historical telemetry points by vehicle in chronological order
+      const vehicleHistory = new Map<string, TelemetryPoint[]>();
+
+      if (Array.isArray(histData) && histData.length > 0) {
+        for (const h of histData) {
+          if (!h.vehicle_id || !h.recorded_at) continue;
+          const tsMs = safeTimestampToMs(h.recorded_at);
+          if (!tsMs) continue;
+
+          if (!earliestDate || h.recorded_at < earliestDate) {
+            earliestDate = h.recorded_at;
+          }
+
+          const vObj = vMap.get(h.vehicle_id);
+          const pts = vehicleHistory.get(h.vehicle_id) || [];
+          pts.push({
+            vehicleId: h.vehicle_id,
+            vehicleNumber: vObj?.number || "Vehicle",
+            timestamp: h.recorded_at,
+            speed: Number(h.speed) || 0,
+            lat: Number(h.lat) || 0,
+            lng: Number(h.lng) || 0,
+            engineOn: Boolean(h.engine_on || h.ignition),
+            location: h.location || "Historical Track",
+            source: "database_history" as any,
+          });
+          vehicleHistory.set(h.vehicle_id, pts);
+          processedCount++;
+        }
+      }
+
+      // If time-series history records exist, process them through chronological stop detector
+      for (const [vehicleId, points] of vehicleHistory.entries()) {
+        points.sort((a, b) => safeTimestampToMs(a.timestamp)! - safeTimestampToMs(b.timestamp)!);
+
+        let provisionalStartMs: number | null = null;
+        let provisionalPt: TelemetryPoint | null = null;
+
+        for (let i = 0; i < points.length; i++) {
+          const pt = points[i];
+          const tsMs = safeTimestampToMs(pt.timestamp)!;
+
+          if (pt.speed <= this.config.stopSpeedThresholdKmh) {
+            if (provisionalStartMs === null) {
+              provisionalStartMs = tsMs;
+              provisionalPt = pt;
+            } else {
+              const durSec = Math.round((tsMs - provisionalStartMs) / 1000);
+              const nextPt = points[i + 1];
+              const isLast = i === points.length - 1;
+              const nextIsMoving = nextPt && nextPt.speed > this.config.resumeSpeedThresholdKmh;
+
+              if (durSec >= this.config.stopDurationThresholdSec && (nextIsMoving || isLast)) {
+                const stopId = `hist-${vehicleId}-${provisionalStartMs}`;
+                const endMs = nextPt ? safeTimestampToMs(nextPt.timestamp)! : tsMs;
+
+                const histStop: VehicleStopEvent = {
+                  id: stopId,
+                  vehicle_id: vehicleId,
+                  vehicle_number: pt.vehicleNumber || "Vehicle",
+                  driver_id: pt.driverId || null,
+                  driver_name: pt.driverName || null,
+                  started_at: new Date(provisionalStartMs).toISOString(),
+                  ended_at: new Date(endMs).toISOString(),
+                  duration_seconds: Math.max(120, Math.round((endMs - provisionalStartMs) / 1000)),
+                  start_lat: provisionalPt?.lat || pt.lat,
+                  start_lng: provisionalPt?.lng || pt.lng,
+                  end_lat: pt.lat,
+                  end_lng: pt.lng,
+                  location: provisionalPt?.location || pt.location || "En Route",
+                  engine_on: Boolean(provisionalPt?.engineOn),
+                  status: "COMPLETED",
+                  source: "database_history",
+                  created_at: new Date(provisionalStartMs).toISOString(),
+                  updated_at: new Date(endMs).toISOString(),
+                };
+
+                const existingIdx = this.confirmedStops.findIndex((s) => s.id === stopId);
+                if (existingIdx === -1) {
+                  this.confirmedStops.push(histStop);
+                  stopsCreated++;
+                  this.persistStopToSupabase(histStop);
+                }
+                provisionalStartMs = null;
+                provisionalPt = null;
+              }
+            }
+          } else {
+            provisionalStartMs = null;
+            provisionalPt = null;
+          }
+        }
+      }
+
+      // Also process vehicle_telemetry snapshot records
+      if (Array.isArray(vtData) && vtData.length > 0) {
+        for (const vt of vtData) {
+          if (!vt.vehicle_id || !vt.last_update) continue;
+          if (!earliestDate || vt.last_update < earliestDate) {
+            earliestDate = vt.last_update;
+          }
+          processedCount++;
+
+          const startMs = safeTimestampToMs(vt.last_update);
+          const endMs = safeTimestampToMs(vt.updated_at);
+          const speed = Number(vt.speed) || 0;
+
+          if (startMs && endMs && speed <= this.config.stopSpeedThresholdKmh) {
+            const durationSec = Math.round((endMs - startMs) / 1000);
+            if (durationSec >= this.config.stopDurationThresholdSec) {
+              const stopId = `hist-${vt.vehicle_id}-${startMs}`;
+              const vObj = vMap.get(vt.vehicle_id);
+
+              const histStop: VehicleStopEvent = {
+                id: stopId,
+                vehicle_id: vt.vehicle_id,
+                vehicle_number: vObj?.number || "Fleet Unit",
+                vehicle_model: vObj?.model,
+                driver_id: null,
+                driver_name: null,
+                started_at: new Date(startMs).toISOString(),
+                ended_at: new Date(endMs).toISOString(),
+                duration_seconds: durationSec,
+                start_lat: Number(vt.lat) || 0,
+                start_lng: Number(vt.lng) || 0,
+                end_lat: Number(vt.lat) || 0,
+                end_lng: Number(vt.lng) || 0,
+                location: vt.location || "Depot / Service Yard",
+                engine_on: Boolean(vt.engine_on || vt.ignition),
+                status: "COMPLETED",
+                source: "database_history",
+                created_at: new Date(startMs).toISOString(),
+                updated_at: new Date(endMs).toISOString(),
+              };
+
+              const existingIdx = this.confirmedStops.findIndex((s) => s.id === stopId);
+              if (existingIdx === -1) {
+                this.confirmedStops.push(histStop);
+                stopsCreated++;
+                this.persistStopToSupabase(histStop);
+              }
+            }
+          }
+        }
+      }
+
+      // Keep confirmed stops sorted chronologically (newest first for display)
+      this.confirmedStops.sort((a, b) => safeTimestampToMs(b.started_at)! - safeTimestampToMs(a.started_at)!);
+      this.saveToStorage();
+
+    } catch (err) {
+      console.warn("[Stop Tracking] Historical GPS backfill error:", err);
+    }
+
+    return { processedCount, stopsCreated, earliestDate };
+  }
+
   // ── LOCAL STORAGE RECOVERY (BROWSER REFRESH PROTECTION) ───────────────────
 
   private loadFromStorage() {

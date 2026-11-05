@@ -38,6 +38,7 @@ import {
   Sparkles,
   BarChart3,
   Eye,
+  Database,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -66,7 +67,16 @@ type EngineFilter = "all" | "idle" | "parked";
 type StatusFilter = "all" | "ACTIVE" | "COMPLETED" | "INTERRUPTED";
 
 export default function VehicleStopHistoryPage() {
-  const { stops, activeStops, overviewKPIs, isLoading, isTableAvailable, refreshStops, verifySupabaseSync } = useVehicleStopTracking();
+  const {
+    stops,
+    activeStops,
+    overviewKPIs,
+    isLoading,
+    isTableAvailable,
+    refreshStops,
+    verifySupabaseSync,
+    historicalStats,
+  } = useVehicleStopTracking();
   const [isVerifying, setIsVerifying] = useState(false);
   const [isBannerDismissed, setIsBannerDismissed] = useState(false);
   const liveVehicles = useVehicles();
@@ -81,6 +91,7 @@ export default function VehicleStopHistoryPage() {
   const [durationFilter, setDurationFilter] = useState<DurationFilter>("all");
   const [engineFilter, setEngineFilter] = useState<EngineFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
   // Pagination
@@ -159,6 +170,12 @@ export default function VehicleStopHistoryPage() {
       // Status Filter
       if (statusFilter !== "all" && stop.status !== statusFilter) return false;
 
+      // Source Filter
+      if (sourceFilter !== "all") {
+        const itemSource = stop.source || "telemetry";
+        if (itemSource !== sourceFilter) return false;
+      }
+
       // Search Query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -170,7 +187,7 @@ export default function VehicleStopHistoryPage() {
 
       return true;
     });
-  }, [stops, dateFilter, vehicleFilter, driverFilter, durationFilter, engineFilter, statusFilter, searchQuery]);
+  }, [stops, dateFilter, vehicleFilter, driverFilter, durationFilter, engineFilter, statusFilter, sourceFilter, searchQuery]);
 
   // Paginated Slices
   const totalPages = Math.max(1, Math.ceil(filteredStops.length / pageSize));
@@ -182,7 +199,7 @@ export default function VehicleStopHistoryPage() {
   // Reset page when filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [dateFilter, vehicleFilter, driverFilter, durationFilter, engineFilter, statusFilter, searchQuery, pageSize]);
+  }, [dateFilter, vehicleFilter, driverFilter, durationFilter, engineFilter, statusFilter, sourceFilter, searchQuery, pageSize]);
 
   // ── ANALYTICS AGGREGATIONS ──────────────────────────────────────────────────
   const analyticsData = useMemo(() => {
@@ -298,6 +315,7 @@ export default function VehicleStopHistoryPage() {
       "Location",
       "Engine Status",
       "Stop Status",
+      "Data Source",
     ];
 
     const rows = filteredStops.map((s) => [
@@ -312,6 +330,7 @@ export default function VehicleStopHistoryPage() {
       `"${(s.location || "En Route").replace(/"/g, '""')}"`,
       s.engine_on ? '"Idle (Engine ON)"' : '"Parked (Engine OFF)"',
       `"${s.status}"`,
+      s.source === "database_history" ? '"Historical GPS (DB)"' : '"Live GPS Telemetry"',
     ]);
 
     const csvContent = "\uFEFF" + [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
@@ -749,6 +768,33 @@ GRANT SELECT, INSERT, UPDATE ON public.vehicle_stop_events TO anon, authenticate
       {/* ── SECTION C: STOP HISTORY LOG TAB ─────────────────────── */}
       {activeTab === "history" && (
         <Card className="border border-slate-200/80 shadow-xs p-4 space-y-4">
+          {/* Dual GPS Processing Engine Summary */}
+          {historicalStats && (
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2.5">
+                <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg shrink-0">
+                  <Database className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-800 flex items-center gap-2">
+                    <span>Unified GPS Engine: Historical Database & Live Telemetry Stream</span>
+                    <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[10px]">
+                      Dual Source
+                    </Badge>
+                  </div>
+                  <div className="text-slate-500 text-[11px] mt-0.5">
+                    Earliest GPS Date: <span className="font-semibold text-slate-700">{historicalStats.earliestDate ? new Date(historicalStats.earliestDate).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "N/A"}</span> · 
+                    Usable Database Records: <span className="font-semibold text-slate-700">{historicalStats.processedCount} records</span> · 
+                    Stationary Periods Backfilled: <span className="font-semibold text-slate-700">{historicalStats.stopsCreated}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-400 font-mono shrink-0">
+                Rule: Speed ≤ 3 km/h for ≥ 2 continuous mins
+              </div>
+            </div>
+          )}
+
           {/* Filters Bar */}
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -846,6 +892,20 @@ GRANT SELECT, INSERT, UPDATE ON public.vehicle_stop_events TO anon, authenticate
                   <option value="INTERRUPTED">Interrupted</option>
                 </select>
               </div>
+
+              {/* Source Filter */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500 font-medium">Source:</span>
+                <select
+                  value={sourceFilter}
+                  onChange={(e) => setSourceFilter(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 outline-none cursor-pointer"
+                >
+                  <option value="all">All Sources</option>
+                  <option value="database_history">Historical GPS</option>
+                  <option value="telemetry">Live GPS</option>
+                </select>
+              </div>
             </div>
 
             {/* Search Box */}
@@ -875,13 +935,14 @@ GRANT SELECT, INSERT, UPDATE ON public.vehicle_stop_events TO anon, authenticate
                   <th className="py-2.5 px-3">Location / Address</th>
                   <th className="py-2.5 px-3">Engine</th>
                   <th className="py-2.5 px-3">Status</th>
+                  <th className="py-2.5 px-3">Source</th>
                   <th className="py-2.5 px-3 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {paginatedStops.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="text-center py-12 text-slate-400">
+                    <td colSpan={11} className="text-center py-12 text-slate-400">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <Clock className="h-8 w-8 text-slate-300" />
                         <div className="font-semibold text-slate-700">No Stop Records Found</div>
@@ -961,6 +1022,18 @@ GRANT SELECT, INSERT, UPDATE ON public.vehicle_stop_events TO anon, authenticate
                         >
                           {stop.status}
                         </Badge>
+                      </td>
+
+                      <td className="py-3 px-3">
+                        {stop.source === "database_history" ? (
+                          <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-200 text-[10px] whitespace-nowrap">
+                            Historical GPS
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px] whitespace-nowrap">
+                            Live GPS
+                          </Badge>
+                        )}
                       </td>
 
                       <td className="py-3 px-3 text-right">

@@ -36,14 +36,24 @@ export function useVehicleStopTracking() {
   const [activeStops, setActiveStops] = useState<VehicleStopEvent[]>(() => globalStopDetector.getActiveStops());
   const [isLoading, setIsLoading] = useState(true);
   const [tick, setTick] = useState(0);
+  const [historicalStats, setHistoricalStats] = useState<{
+    processedCount: number;
+    stopsCreated: number;
+    earliestDate: string | null;
+  } | null>(null);
 
-  // 1. Initial Load & Sync from Supabase
+  // 1. Initial Load & Sync from Supabase + Historical GPS Processing
   const loadStopsFromSupabase = async () => {
     setIsLoading(true);
     try {
       const dbStops = await globalStopDetector.syncFromSupabase();
       setStops(dbStops);
       setActiveStops(globalStopDetector.getActiveStops());
+
+      // Backfill and process historical GPS records from database
+      const stats = await globalStopDetector.processHistoricalGpsRecords();
+      setHistoricalStats(stats);
+      setStops(globalStopDetector.getAllConfirmedStops());
     } catch (err) {
       console.warn("Failed to sync stop events from Supabase:", err);
     } finally {
@@ -188,6 +198,8 @@ export function useVehicleStopTracking() {
     isTableAvailable: globalStopDetector.isTableAvailable(),
     refreshStops: loadStopsFromSupabase,
     verifySupabaseSync: () => globalStopDetector.verifyAndEnableSupabaseSync(),
+    historicalStats,
+    processHistoricalGpsRecords: () => globalStopDetector.processHistoricalGpsRecords(),
   };
 }
 
