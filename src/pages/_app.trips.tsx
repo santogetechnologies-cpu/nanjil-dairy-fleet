@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { PageHeader } from "@/components/AppLayout";
 import { Badge, Button, Card } from "@/components/ui-kit";
 import {
@@ -28,38 +28,36 @@ import {
   Eye,
   SkipBack,
   SkipForward,
+  Sliders,
+  ShieldCheck,
+  Map as MapIcon,
 } from "lucide-react";
 import MapGL, { Marker, Source, Layer, NavigationControl, MapRef } from "react-map-gl/maplibre";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
-import { haversineDistanceKm } from "@/lib/roadRouting";
 import { useVehicles } from "@/hooks/useVehicleTracking";
 import { isGpsVehicle, KNOWN_NANJIL_DEVICE_MAP } from "@/lib/vehicle-stop-detection";
+import {
+  GpsPoint,
+  RouteSegment,
+  JourneyMetrics,
+  DerivedJourney,
+  TimelineEvent,
+  getIstDateRange,
+  formatIstDateTime,
+  formatIstTime,
+  isValidUuid,
+  fetchPaginatedTelemetryHistory,
+  splitPointsIntoSegments,
+  buildSegmentedGeoJson,
+  calculateJourneyMetrics,
+  resolveDriverForJourney,
+  deriveJourneysFromTelemetry,
+  generateJourneyTimelineEvents,
+} from "@/lib/tripHistoryEngine";
 
 const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
-
-export interface GpsPoint {
-  id: string;
-  lat: number;
-  lng: number;
-  speed: number;
-  ignition: boolean;
-  recorded_at: string;
-  odometer?: number;
-  isGap?: boolean;
-}
-
-export interface TripEvent {
-  id: string;
-  type: "start" | "stop" | "speeding" | "gap" | "end";
-  timestamp: string;
-  title: string;
-  description: string;
-  pointIndex: number;
-  durationMins?: number;
-  speed?: number;
-}
 
 export default function TripHistoryPage() {
   const { user } = useAuth();
@@ -69,21 +67,31 @@ export default function TripHistoryPage() {
   // Filters
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [selectedDriverId, setSelectedDriverId] = useState("All");
-  const [dateFilterMode, setDateFilterMode] = useState<"today" | "yesterday" | "last7" | "custom">("today");
+  const [dateFilterMode, setDateFilterMode] = useState<"today" | "yesterday" | "last7" | "last30" | "custom">("today");
   const [customStartDate, setCustomStartDate] = useState(
     new Date(Date.now() - 24 * 3600 * 1000).toISOString().split("T")[0]
   );
   const [customEndDate, setCustomEndDate] = useState(new Date().toISOString().split("T")[0]);
+  const [journeyStatusFilter, setJourneyStatusFilter] = useState<"All" | "Completed" | "Ongoing" | "Stationary">("All");
+  const [minDistanceKm, setMinDistanceKm] = useState(0);
 
-  // Master Data (Strictly the 7 physical GPS vehicles)
+  // Master Data
   const [vehicles, setVehicles] = useState<any[]>([]);
   const [drivers, setDrivers] = useState<any[]>([]);
-  const [tripsList, setTripsList] = useState<any[]>([]);
-  const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
+  const [vehicleAssignments, setVehicleAssignments] = useState<any[]>([]);
+  const [tripsTableRecords, setTripsTableRecords] = useState<any[]>([]);
 
-  // GPS Telemetry History Points (Real backend data only)
-  const [gpsPoints, setGpsPoints] = useState<GpsPoint[]>([]);
+  // Telemetry Fetch State
+  const [allRangeGpsPoints, setAllRangeGpsPoints] = useState<GpsPoint[]>([]);
   const [isLoadingGps, setIsLoadingGps] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState<{ loaded: number; total?: number } | null>(null);
+  const [queryError, setQueryError] = useState<string | null>(null);
+  const [queryEarliest, setQueryEarliest] = useState<string | null>(null);
+  const [queryLatest, setQueryLatest] = useState<string | null>(null);
+
+  // Derived Journeys State
+  const [derivedJourneys, setDerivedJourneys] = useState<DerivedJourney[]>([]);
+  const [selectedJourneyId, setSelectedJourneyId] = useState<string | "all">("all");
 
   // Playback Controls State
   const [isPlaying, setIsPlaying] = useState(false);
@@ -91,16 +99,20 @@ export default function TripHistoryPage() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const playbackTimerRef = useRef<any>(null);
 
-  // Load Vehicles (strictly 7 GPS units), Drivers & Trips
+  // Active abort controller for cancelling stale async queries
+  const fetchAbortRef = useRef<AbortController | null>(null);
+
+  // 1. Load Vehicles, Drivers, Vehicle Assignments & Trips from Supabase
   useEffect(() => {
     async function init() {
-      const [vRes, dRes, tRes] = await Promise.all([
+      const [vRes, dRes, tRes, aRes] = await Promise.all([
         supabase.from("vehicles").select("id, number, type, model, device_id"),
         supabase.from("drivers").select("id, name, phone"),
         supabase.from("trips").select("*, vehicles(number), drivers(name)").order("date", { ascending: false }),
+        supabase.from("vehicle_assignments").select("id, vehicle_id, driver_id, assigned_at, unassigned_at, is_active, drivers(id, name, phone)"),
       ]);
 
-      // Strictly construct the 7 GPS vehicles present in Nanjil Dairy fleet
+      // Construct authoritative GPS vehicles list (7 physical GPS units)
       const uniqueGpsMap = new Map<string, any>();
       Object.entries(KNOWN_NANJIL_DEVICE_MAP).forEach(([devId, meta]) => {
         const key = meta.number.replace(/\s+/g, "").toUpperCase();
@@ -113,7 +125,7 @@ export default function TripHistoryPage() {
         });
       });
 
-      // Overlay with Supabase vehicles attributes if present
+      // Overlay with Supabase vehicles metadata
       if (vRes.data && vRes.data.length > 0) {
         vRes.data.forEach((v: any) => {
           if (isGpsVehicle(v)) {
@@ -167,203 +179,168 @@ export default function TripHistoryPage() {
         });
         setDrivers(Array.from(uniqueD.values()));
       }
+
       if (tRes.data) {
-        setTripsList(tRes.data);
-        if (tRes.data.length > 0 && !selectedTripId) {
-          setSelectedTripId(tRes.data[0].id);
-        }
+        setTripsTableRecords(tRes.data);
+      }
+
+      if (aRes.data) {
+        setVehicleAssignments(aRes.data);
       }
     }
     init();
   }, []);
 
-  // Compute Target Date Range
-  const { startIso, endIso } = useMemo(() => {
-    const now = new Date();
-    if (dateFilterMode === "today") {
-      const s = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-      const e = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-      return { startIso: s.toISOString(), endIso: e.toISOString() };
-    }
-    if (dateFilterMode === "yesterday") {
-      const y = new Date(now.getTime() - 24 * 3600 * 1000);
-      const s = new Date(y.getFullYear(), y.getMonth(), y.getDate(), 0, 0, 0);
-      const e = new Date(y.getFullYear(), y.getMonth(), y.getDate(), 23, 59, 59);
-      return { startIso: s.toISOString(), endIso: e.toISOString() };
-    }
-    if (dateFilterMode === "last7") {
-      const past = new Date(now.getTime() - 7 * 24 * 3600 * 1000);
-      return { startIso: past.toISOString(), endIso: now.toISOString() };
-    }
-    // Custom
-    const s = new Date(`${customStartDate}T00:00:00`);
-    const e = new Date(`${customEndDate}T23:59:59`);
-    return { startIso: s.toISOString(), endIso: e.toISOString() };
+  // 2. Compute Target Date Range in Asia/Kolkata (IST = UTC+05:30)
+  const dateRange = useMemo(() => {
+    return getIstDateRange(dateFilterMode, customStartDate, customEndDate);
   }, [dateFilterMode, customStartDate, customEndDate]);
 
-  // Load Authentic Historical GPS Coordinates (No Synthetic Points!)
+  // Selected vehicle object
+  const selectedVehicle = useMemo(() => {
+    return vehicles.find((v) => v.id === selectedVehicleId);
+  }, [vehicles, selectedVehicleId]);
+
+  // 3. Paginated Historical GPS Telemetry Fetching (With strict UUID & Cancellation)
   useEffect(() => {
     if (!selectedVehicleId) return;
 
-    let cancelled = false;
-    async function fetchHistoricalTrail() {
-      setIsLoadingGps(true);
-      setIsPlaying(false);
-      setCurrentIndex(0);
-
-      try {
-        const targetVehicle = vehicles.find((v) => v.id === selectedVehicleId);
-        const candidateIds = [selectedVehicleId];
-        if (targetVehicle?.device_id) candidateIds.push(targetVehicle.device_id);
-        for (const [devId, meta] of Object.entries(KNOWN_NANJIL_DEVICE_MAP)) {
-          if (meta.id === selectedVehicleId) {
-            candidateIds.push(devId);
-            candidateIds.push(meta.id);
-          }
-        }
-        const uniqueCandidateIds = Array.from(new Set(candidateIds.filter(Boolean)));
-
-        const { data, error } = await supabase
-          .from("telemetry_history")
-          .select("id, vehicle_id, lat, lng, speed, ignition, engine_on, recorded_at, odometer")
-          .in("vehicle_id", uniqueCandidateIds)
-          .gte("recorded_at", startIso)
-          .lte("recorded_at", endIso)
-          .order("recorded_at", { ascending: true });
-
-        if (cancelled) return;
-
-        const collected: GpsPoint[] = [];
-
-        if (data && data.length > 0) {
-          for (let i = 0; i < data.length; i++) {
-            const p = data[i];
-            const lat = Number(p.lat);
-            const lng = Number(p.lng);
-            if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0 && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-              collected.push({
-                id: String(p.id),
-                lat,
-                lng,
-                speed: Math.max(0, Math.round(Number(p.speed) || 0)),
-                ignition: Boolean(p.ignition ?? p.engine_on),
-                recorded_at: p.recorded_at,
-                odometer: p.odometer ? Number(p.odometer) : undefined,
-              });
-            }
-          }
-        }
-
-        // Also check if authentic live breadcrumbs were cached in localStorage
-        if (typeof localStorage !== "undefined") {
-          try {
-            const cached = localStorage.getItem(`nanjil_real_gps_trail_${selectedVehicleId}`);
-            if (cached) {
-              const parsed: GpsPoint[] = JSON.parse(cached);
-              if (Array.isArray(parsed)) {
-                const sTime = new Date(startIso).getTime();
-                const eTime = new Date(endIso).getTime();
-                for (const cp of parsed) {
-                  const ts = new Date(cp.recorded_at).getTime();
-                  if (ts >= sTime && ts <= eTime && cp.lat && cp.lng && cp.lat !== 0 && cp.lng !== 0) {
-                    collected.push(cp);
-                  }
-                }
-              }
-            }
-          } catch {}
-        }
-
-        // Deduplicate points by timestamp (within 2 seconds) and sort chronologically
-        const uniqueMap = new Map<string, GpsPoint>();
-        for (const pt of collected) {
-          const key = pt.recorded_at.substring(0, 19); // YYYY-MM-DDTHH:mm:ss
-          if (!uniqueMap.has(key)) {
-            uniqueMap.set(key, pt);
-          }
-        }
-
-        const sorted = Array.from(uniqueMap.values()).sort(
-          (a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime()
-        );
-
-        // Detect Gaps (> 15 minutes between points)
-        for (let i = 1; i < sorted.length; i++) {
-          const t0 = new Date(sorted[i - 1].recorded_at).getTime();
-          const t1 = new Date(sorted[i].recorded_at).getTime();
-          if (t1 - t0 > 15 * 60 * 1000) {
-            sorted[i].isGap = true;
-          }
-        }
-
-        // Strictly set genuine records (empty array if no recorded GPS data)
-        setGpsPoints(sorted);
-      } catch (err) {
-        console.warn("Telemetry history fetch error:", err);
-        setGpsPoints([]);
-      } finally {
-        if (!cancelled) setIsLoadingGps(false);
-      }
-    }
-
-    fetchHistoricalTrail();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedVehicleId, startIso, endIso, vehicles]);
-
-  // Real-time live telemetry breadcrumb accumulation for selected vehicle
-  useEffect(() => {
-    if (!selectedVehicleId || liveVehicles.length === 0) return;
-    const currentVeh = vehicles.find((v) => v.id === selectedVehicleId);
-    const v = liveVehicles.find(
-      (x) => x.id === selectedVehicleId || (currentVeh && x.number === currentVeh.number)
-    );
-    if (!v || !v.lat || !v.lng) return;
-
-    const lat = Number(v.lat);
-    const lng = Number(v.lng);
-    if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0 || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    // Validate that selectedVehicleId is a valid UUID
+    if (!isValidUuid(selectedVehicleId)) {
+      setQueryError(`Invalid vehicle ID: ${selectedVehicleId}`);
+      setAllRangeGpsPoints([]);
+      setDerivedJourneys([]);
       return;
     }
 
-    const recordedAt = v.last_update ? new Date(v.last_update).toISOString() : new Date().toISOString();
-    const newPt: GpsPoint = {
-      id: `live-${Date.now()}`,
-      lat,
-      lng,
-      speed: Math.max(0, Math.round(Number(v.speed) || 0)),
-      ignition: Boolean(v.engine_on || v.ignition),
-      recorded_at: recordedAt,
-      odometer: v.odometer ? Number(v.odometer) : undefined,
-    };
+    // Abort any ongoing query
+    if (fetchAbortRef.current) {
+      fetchAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
 
-    if (dateFilterMode === "today") {
-      setGpsPoints((prev) => {
-        if (prev.length > 0) {
-          const last = prev[prev.length - 1];
-          const timeDiff = Math.abs(new Date(recordedAt).getTime() - new Date(last.recorded_at).getTime());
-          if (timeDiff < 5000 && Math.abs(last.lat - lat) < 0.0001 && Math.abs(last.lng - lng) < 0.0001) {
-            return prev;
+    setIsLoadingGps(true);
+    setQueryError(null);
+    setIsPlaying(false);
+    setCurrentIndex(0);
+    setLoadingProgress(null);
+
+    async function fetchHistory() {
+      try {
+        const res = await fetchPaginatedTelemetryHistory(
+          supabase,
+          selectedVehicleId, // Authoritative UUID only
+          dateRange.startUtcIso,
+          dateRange.endUtcIso,
+          1000,
+          (loaded, total) => {
+            setLoadingProgress({ loaded, total });
+          },
+          controller.signal
+        );
+
+        if (controller.signal.aborted) return;
+
+        if (res.error) {
+          setQueryError(res.error);
+          setAllRangeGpsPoints([]);
+          setDerivedJourneys([]);
+        } else {
+          setAllRangeGpsPoints(res.data);
+          setQueryEarliest(res.earliestTimestamp || null);
+          setQueryLatest(res.latestTimestamp || null);
+
+          // Derive distinct journeys or correlate with trips table
+          if (selectedVehicle) {
+            const derived = deriveJourneysFromTelemetry(
+              res.data,
+              selectedVehicle,
+              tripsTableRecords,
+              vehicleAssignments,
+              drivers
+            );
+            setDerivedJourneys(derived);
+            setSelectedJourneyId("all");
           }
         }
-        const updated = [...prev, newPt];
-        if (typeof localStorage !== "undefined") {
-          try {
-            localStorage.setItem(`nanjil_real_gps_trail_${selectedVehicleId}`, JSON.stringify(updated.slice(-500)));
-          } catch {}
+      } catch (err: any) {
+        if (!controller.signal.aborted) {
+          console.warn("Telemetry fetch error:", err);
+          setQueryError(err?.message || "Failed to load telemetry history");
+          setAllRangeGpsPoints([]);
+          setDerivedJourneys([]);
         }
-        return updated;
-      });
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoadingGps(false);
+          setLoadingProgress(null);
+        }
+      }
     }
-  }, [liveVehicles, selectedVehicleId, dateFilterMode, vehicles]);
 
-  // Selected Vehicle Last Known Authentic Location
+    fetchHistory();
+
+    return () => {
+      controller.abort();
+    };
+  }, [selectedVehicleId, dateRange.startUtcIso, dateRange.endUtcIso, selectedVehicle]);
+
+  // 4. Determine Active Points for Display & Playback (Selected Journey vs All Points)
+  const activeGpsPoints = useMemo(() => {
+    if (selectedJourneyId === "all") {
+      return allRangeGpsPoints;
+    }
+    const found = derivedJourneys.find((j) => j.id === selectedJourneyId);
+    return found ? found.points : allRangeGpsPoints;
+  }, [selectedJourneyId, derivedJourneys, allRangeGpsPoints]);
+
+  // 5. Segment Route to prevent drawing straight lines across signal gaps
+  const { segments: activeSegments, gapIndices } = useMemo(() => {
+    return splitPointsIntoSegments(activeGpsPoints, 15);
+  }, [activeGpsPoints]);
+
+  // 6. Build MultiLineString GeoJSON for MapLibre
+  const segmentedGeoJson = useMemo(() => {
+    return buildSegmentedGeoJson(activeSegments);
+  }, [activeSegments]);
+
+  // 7. Calculate Mathematical Metrics & Events for Active Route
+  const tripStats = useMemo(() => {
+    return calculateJourneyMetrics(activeGpsPoints, 15, 60);
+  }, [activeGpsPoints]);
+
+  const timelineEvents = useMemo(() => {
+    const activeJourney = derivedJourneys.find((j) => j.id === selectedJourneyId);
+    return generateJourneyTimelineEvents(activeGpsPoints, activeJourney, 60);
+  }, [activeGpsPoints, selectedJourneyId, derivedJourneys]);
+
+  // 8. Filtered Journeys List (Respecting Driver, Status, and Min Distance Filters)
+  const filteredJourneys = useMemo(() => {
+    return derivedJourneys.filter((j) => {
+      // Driver filter
+      if (selectedDriverId !== "All") {
+        if (j.driver_id !== selectedDriverId && j.driver_name !== selectedDriverId) {
+          return false;
+        }
+      }
+      // Status filter
+      if (journeyStatusFilter !== "All") {
+        if (j.status !== journeyStatusFilter) return false;
+      }
+      // Distance filter
+      if (minDistanceKm > 0 && j.metrics.totalDistanceKm < minDistanceKm) {
+        return false;
+      }
+      return true;
+    });
+  }, [derivedJourneys, selectedDriverId, journeyStatusFilter, minDistanceKm]);
+
+  // 9. Selected Vehicle Authentic Position (No Fake Fallback Location!)
   const vehicleCurrentPosition = useMemo(() => {
-    const currentVeh = vehicles.find((v) => v.id === selectedVehicleId);
+    // Check if liveVehicles has authentic non-zero coordinates
     const live = liveVehicles.find(
-      (v) => v.id === selectedVehicleId || (currentVeh && v.number === currentVeh.number)
+      (v) => v.id === selectedVehicleId || (selectedVehicle && v.number === selectedVehicle.number)
     );
     if (live && live.lat && live.lng && Number(live.lat) !== 0 && Number(live.lng) !== 0) {
       return {
@@ -374,178 +351,27 @@ export default function TripHistoryPage() {
         isLive: true,
       };
     }
-    // Nanjil Dairy base plant depot default
-    return {
-      lat: 8.260765,
-      lng: 77.288373,
-      speed: 0,
-      status: "Stationary",
-      isLive: false,
-    };
-  }, [liveVehicles, selectedVehicleId, vehicles]);
-
-  // Calculate Mathematical Trip Statistics & Synchronized Events (Real Data Only)
-  const { tripStats, timelineEvents } = useMemo(() => {
-    if (!gpsPoints || gpsPoints.length === 0) {
+    // If no live coordinates, check latest point in historical records
+    if (allRangeGpsPoints.length > 0) {
+      const last = allRangeGpsPoints[allRangeGpsPoints.length - 1];
       return {
-        tripStats: {
-          totalDistanceKm: 0,
-          totalDurationMins: 0,
-          drivingDurationMins: 0,
-          idleDurationMins: 0,
-          stationaryDurationMins: 0,
-          maxSpeed: 0,
-          avgSpeed: 0,
-          speedingCount: 0,
-          stopsCount: 0,
-          gapsCount: 0,
-        },
-        timelineEvents: [],
+        lat: last.lat,
+        lng: last.lng,
+        speed: last.speed,
+        status: "Historical",
+        isLive: false,
       };
     }
+    // No GPS data available at all (NEVER fabricate depot coordinates!)
+    return null;
+  }, [liveVehicles, selectedVehicleId, selectedVehicle, allRangeGpsPoints]);
 
-    let totalDist = 0;
-    let maxSpd = 0;
-    let speedingCount = 0;
-    let gapsCount = 0;
-    const events: TripEvent[] = [];
+  // 10. Active Point for Playback
+  const currentPoint = activeGpsPoints[currentIndex] || activeGpsPoints[0] || null;
 
-    // Departure Event
-    events.push({
-      id: "ev-start",
-      type: "start",
-      timestamp: gpsPoints[0].recorded_at,
-      title: "Trip Departure",
-      description: `Vehicle departed at ${new Date(gpsPoints[0].recorded_at).toLocaleTimeString()}`,
-      pointIndex: 0,
-    });
-
-    let idleMinutes = 0;
-    let drivingMinutes = 0;
-    let currentStopStartIndex = -1;
-
-    for (let i = 0; i < gpsPoints.length; i++) {
-      const p = gpsPoints[i];
-      if (p.speed > maxSpd) maxSpd = p.speed;
-
-      // Speeding check (> 60 km/h)
-      if (p.speed > 60) {
-        speedingCount++;
-        if (i === 0 || gpsPoints[i - 1].speed <= 60) {
-          events.push({
-            id: `ev-speed-${i}`,
-            type: "speeding",
-            timestamp: p.recorded_at,
-            title: `Speeding Alert (${p.speed} km/h)`,
-            description: `Exceeded 60 km/h threshold by +${p.speed - 60} km/h`,
-            pointIndex: i,
-            speed: p.speed,
-          });
-        }
-      }
-
-      // Signal Gap check
-      if (p.isGap) {
-        gapsCount++;
-        events.push({
-          id: `ev-gap-${i}`,
-          type: "gap",
-          timestamp: p.recorded_at,
-          title: "GPS Signal Loss (Gap)",
-          description: "Device stopped transmitting coordinates for >15 minutes",
-          pointIndex: i,
-        });
-      }
-
-      // Accumulate haversine distance
-      if (i > 0 && !p.isGap) {
-        const d = haversineDistanceKm(gpsPoints[i - 1].lat, gpsPoints[i - 1].lng, p.lat, p.lng);
-        totalDist += d;
-      }
-
-      // Stop detection (Speed == 0)
-      if (p.speed === 0) {
-        if (currentStopStartIndex === -1) currentStopStartIndex = i;
-        idleMinutes += 2;
-      } else {
-        drivingMinutes += 2;
-        if (currentStopStartIndex !== -1) {
-          const stopDuration = Math.max(2, (i - currentStopStartIndex) * 2);
-          events.push({
-            id: `ev-stop-${currentStopStartIndex}`,
-            type: "stop",
-            timestamp: gpsPoints[currentStopStartIndex].recorded_at,
-            title: `Recorded Stop (${stopDuration}m)`,
-            description: `Stationary from ${new Date(gpsPoints[currentStopStartIndex].recorded_at).toLocaleTimeString()}`,
-            pointIndex: currentStopStartIndex,
-            durationMins: stopDuration,
-          });
-          currentStopStartIndex = -1;
-        }
-      }
-    }
-
-    // Arrival Event
-    const lastIndex = gpsPoints.length - 1;
-    if (gpsPoints.length > 1) {
-      events.push({
-        id: "ev-end",
-        type: "end",
-        timestamp: gpsPoints[lastIndex].recorded_at,
-        title: "Trip Arrival & Parking",
-        description: `Last recorded location at ${new Date(gpsPoints[lastIndex].recorded_at).toLocaleTimeString()}`,
-        pointIndex: lastIndex,
-      });
-    }
-
-    // Time calculations
-    const tStart = new Date(gpsPoints[0].recorded_at).getTime();
-    const tEnd = new Date(gpsPoints[lastIndex].recorded_at).getTime();
-    const totalDurationMins = Math.max(1, Math.round((tEnd - tStart) / (1000 * 60)));
-
-    // Mathematical Average Speed = Total Distance / Driving Time (NOT average of instantaneous speeds)
-    const avgSpeed =
-      drivingMinutes > 0
-        ? Math.round((totalDist / (drivingMinutes / 60)) * 10) / 10
-        : Math.round((totalDist / (totalDurationMins / 60)) * 10) / 10;
-
-    return {
-      tripStats: {
-        totalDistanceKm: Math.round(totalDist * 10) / 10,
-        totalDurationMins: totalDurationMins || (idleMinutes + drivingMinutes),
-        drivingDurationMins: drivingMinutes,
-        idleDurationMins: idleMinutes,
-        stationaryDurationMins: idleMinutes,
-        maxSpeed: maxSpd,
-        avgSpeed: isNaN(avgSpeed) ? 0 : avgSpeed,
-        speedingCount,
-        stopsCount: events.filter((e) => e.type === "stop").length,
-        gapsCount,
-      },
-      timelineEvents: events,
-    };
-  }, [gpsPoints]);
-
-  // Build GeoJSON path from recorded GPS coordinates
-  const historicalGeoJson = useMemo(() => {
-    if (!gpsPoints || gpsPoints.length < 2) return null;
-    const coords = gpsPoints.map((p) => [p.lng, p.lat]);
-    return {
-      type: "Feature" as const,
-      properties: {},
-      geometry: {
-        type: "LineString" as const,
-        coordinates: coords,
-      },
-    };
-  }, [gpsPoints]);
-
-  // Current active point during playback
-  const currentPoint = gpsPoints[currentIndex] || gpsPoints[0] || null;
-
-  // Playback Animation Loop
+  // 11. Playback Animation Loop (accounting for actual timestamps & selected speed)
   useEffect(() => {
-    if (!isPlaying || gpsPoints.length === 0) {
+    if (!isPlaying || activeGpsPoints.length === 0) {
       if (playbackTimerRef.current) clearInterval(playbackTimerRef.current);
       return;
     }
@@ -554,7 +380,7 @@ export default function TripHistoryPage() {
 
     playbackTimerRef.current = setInterval(() => {
       setCurrentIndex((prev) => {
-        if (prev >= gpsPoints.length - 1) {
+        if (prev >= activeGpsPoints.length - 1) {
           setIsPlaying(false);
           return prev;
         }
@@ -565,46 +391,93 @@ export default function TripHistoryPage() {
     return () => {
       if (playbackTimerRef.current) clearInterval(playbackTimerRef.current);
     };
-  }, [isPlaying, playbackSpeed, gpsPoints.length]);
+  }, [isPlaying, playbackSpeed, activeGpsPoints.length]);
 
-  // Center map on playback position or initial load
-  useEffect(() => {
-    if (mapRef.current) {
-      if (currentPoint) {
-        mapRef.current.easeTo({
-          center: [currentPoint.lng, currentPoint.lat],
-          duration: 400,
-        });
-      } else if (vehicleCurrentPosition) {
-        mapRef.current.easeTo({
-          center: [vehicleCurrentPosition.lng, vehicleCurrentPosition.lat],
-          duration: 400,
-        });
-      }
+  // 12. Center map on playback position or auto-fit route bounds on load
+  const fitMapToBounds = useCallback(() => {
+    if (!mapRef.current || activeGpsPoints.length < 2) return;
+    let minLng = activeGpsPoints[0].lng;
+    let maxLng = activeGpsPoints[0].lng;
+    let minLat = activeGpsPoints[0].lat;
+    let maxLat = activeGpsPoints[0].lat;
+
+    for (const p of activeGpsPoints) {
+      if (p.lng < minLng) minLng = p.lng;
+      if (p.lng > maxLng) maxLng = p.lng;
+      if (p.lat < minLat) minLat = p.lat;
+      if (p.lat > maxLat) maxLat = p.lat;
     }
-  }, [currentIndex, currentPoint, vehicleCurrentPosition]);
 
-  // Jump playback to a specific point index
+    mapRef.current.fitBounds(
+      [
+        [minLng, minLat],
+        [maxLng, maxLat],
+      ],
+      { padding: 60, duration: 800 }
+    );
+  }, [activeGpsPoints]);
+
+  useEffect(() => {
+    if (activeGpsPoints.length >= 2) {
+      fitMapToBounds();
+    }
+  }, [activeGpsPoints.length, selectedJourneyId]);
+
+  // Center map smoothly on active playback marker
+  useEffect(() => {
+    if (mapRef.current && isPlaying && currentPoint) {
+      mapRef.current.easeTo({
+        center: [currentPoint.lng, currentPoint.lat],
+        duration: 350,
+      });
+    }
+  }, [currentIndex, isPlaying, currentPoint]);
+
+  // Jump to specific point index
   function jumpToPointIndex(index: number) {
-    if (index >= 0 && index < gpsPoints.length) {
+    if (index >= 0 && index < activeGpsPoints.length) {
       setCurrentIndex(index);
     }
   }
 
-  // CSV Export Functionality
+  // Select Journey Handler
+  function handleSelectJourney(journeyId: string | "all") {
+    setSelectedJourneyId(journeyId);
+    setIsPlaying(false);
+    setCurrentIndex(0);
+  }
+
+  // CSV Export Functionality (Respecting active filters & genuine points)
   function exportTripCsv() {
-    if (!gpsPoints.length) return;
+    if (!activeGpsPoints.length) return;
     const rows = [
-      ["Index", "Timestamp", "Latitude", "Longitude", "Speed_Kmh", "Ignition", "Odometer_Km", "SignalGap"],
-      ...gpsPoints.map((p, idx) => [
+      [
+        "Index",
+        "Timestamp_IST",
+        "Timestamp_UTC",
+        "Vehicle_Number",
+        "Latitude",
+        "Longitude",
+        "Speed_Kmh",
+        "Ignition",
+        "Odometer_Km",
+        "Engine_Hours",
+        "Signal_Gap",
+        "Source",
+      ],
+      ...activeGpsPoints.map((p, idx) => [
         idx + 1,
+        formatIstDateTime(p.recorded_at),
         p.recorded_at,
+        selectedVehicle?.number || "Vehicle",
         p.lat.toFixed(6),
         p.lng.toFixed(6),
         p.speed,
         p.ignition ? "ON" : "OFF",
-        p.odometer || "",
-        p.isGap ? "YES" : "NO",
+        p.odometer != null ? p.odometer : "",
+        p.engine_hours != null ? p.engine_hours : "",
+        p.isGap ? `YES (${p.gapMinutes || 15}m)` : "NO",
+        p.source || "telemetry",
       ]),
     ];
 
@@ -614,7 +487,7 @@ export default function TripHistoryPage() {
     link.setAttribute("href", encodedUri);
     link.setAttribute(
       "download",
-      `Trip_History_${selectedVehicle?.number || "Vehicle"}_${dateFilterMode}.csv`
+      `Trip_History_${selectedVehicle?.number || "Vehicle"}_${dateRange.startIstDate}_to_${dateRange.endIstDate}.csv`
     );
     document.body.appendChild(link);
     link.click();
@@ -626,22 +499,19 @@ export default function TripHistoryPage() {
     window.print();
   }
 
-  const selectedVehicle = vehicles.find((v) => v.id === selectedVehicleId);
-  const selectedDriver = drivers.find((d) => d.id === selectedDriverId);
-
   return (
     <div className="space-y-5">
       {/* ── HEADER ─────────────────────────────────────────────── */}
       <PageHeader
         title="Trip History & GPS Playback"
-        subtitle={`Historical Journey Investigation · Authentic Backend Telemetry · 7 GPS Vehicles`}
+        subtitle={`Historical Journey Investigation · Segmented GPS Routes · Authentic Backend Telemetry`}
         actions={
           <div className="flex items-center gap-2">
             <Button
               onClick={exportTripCsv}
-              disabled={gpsPoints.length === 0}
+              disabled={activeGpsPoints.length === 0}
               className={`border border-slate-200 text-xs font-semibold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs ${
-                gpsPoints.length === 0
+                activeGpsPoints.length === 0
                   ? "bg-slate-100 text-slate-400 cursor-not-allowed"
                   : "bg-white hover:bg-slate-50 text-slate-700"
               }`}
@@ -660,50 +530,42 @@ export default function TripHistoryPage() {
         }
       />
 
+      {/* ── QUERY ERROR BANNER (If database query fails) ─────────── */}
+      {queryError && (
+        <div className="bg-red-50 border border-red-200 rounded-2xl p-3.5 text-xs text-red-800 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-red-600 shrink-0" />
+            <span>
+              <strong>Database Query Error:</strong> {queryError}
+            </span>
+          </div>
+          <Badge variant="outline" className="bg-white border-red-300 text-red-700 text-[10px]">
+            Check RLS Permissions
+          </Badge>
+        </div>
+      )}
+
       {/* ── FILTER TOOLBAR ──────────────────────────────────────── */}
       <Card className="border border-slate-200/80 p-3.5 shadow-xs bg-white">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          {/* Quick Date Filters */}
+          {/* Quick Date Filters (Timezone: Asia/Kolkata) */}
           <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-semibold">
-            <button
-              onClick={() => setDateFilterMode("today")}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                dateFilterMode === "today" ? "bg-white text-slate-900 shadow-xs" : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              Today
-            </button>
-            <button
-              onClick={() => setDateFilterMode("yesterday")}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                dateFilterMode === "yesterday"
-                  ? "bg-white text-slate-900 shadow-xs"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              Yesterday
-            </button>
-            <button
-              onClick={() => setDateFilterMode("last7")}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                dateFilterMode === "last7" ? "bg-white text-slate-900 shadow-xs" : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              Last 7 Days
-            </button>
-            <button
-              onClick={() => setDateFilterMode("custom")}
-              className={`px-3 py-1.5 rounded-lg transition-all ${
-                dateFilterMode === "custom"
-                  ? "bg-white text-slate-900 shadow-xs"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              Custom Range
-            </button>
+            {(["today", "yesterday", "last7", "last30", "custom"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setDateFilterMode(mode)}
+                className={`px-3 py-1.5 rounded-lg transition-all capitalize ${
+                  dateFilterMode === mode
+                    ? "bg-white text-slate-900 shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                {mode === "last7" ? "Last 7 Days" : mode === "last30" ? "Last 30 Days" : mode}
+              </button>
+            ))}
           </div>
 
-          {/* Vehicle & Driver Selectors */}
+          {/* Vehicle, Driver & Status Selectors */}
           <div className="flex flex-wrap items-center gap-2.5 text-xs">
             {dateFilterMode === "custom" && (
               <div className="flex items-center gap-1.5">
@@ -723,6 +585,7 @@ export default function TripHistoryPage() {
               </div>
             )}
 
+            {/* Vehicle Selector (Authoritative UUID only) */}
             <div className="flex items-center gap-1.5">
               <span className="text-slate-500 font-medium flex items-center gap-1">
                 <Radio className="h-3.5 w-3.5 text-emerald-600 animate-pulse" />
@@ -741,6 +604,7 @@ export default function TripHistoryPage() {
               </select>
             </div>
 
+            {/* Driver Selector */}
             <div className="flex items-center gap-1.5">
               <span className="text-slate-500 font-medium">Driver:</span>
               <select
@@ -756,61 +620,121 @@ export default function TripHistoryPage() {
                 ))}
               </select>
             </div>
+
+            {/* Status Filter */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 font-medium">Status:</span>
+              <select
+                value={journeyStatusFilter}
+                onChange={(e: any) => setJourneyStatusFilter(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 outline-none text-xs"
+              >
+                <option value="All">All Statuses</option>
+                <option value="Completed">Completed</option>
+                <option value="Ongoing">Ongoing</option>
+                <option value="Stationary">Stationary</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Date & Range Diagnostics Bar */}
+        <div className="mt-2.5 pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between text-[11px] text-slate-500 gap-2">
+          <div className="flex items-center gap-3">
+            <span>
+              <strong>Calendar Range (IST):</strong> {dateRange.displayLabel}
+            </span>
+            {queryEarliest && queryLatest && (
+              <span className="text-slate-400">
+                · GPS Records: {formatIstTime(queryEarliest)} to {formatIstTime(queryLatest)} ({allRangeGpsPoints.length} points)
+              </span>
+            )}
+            {loadingProgress && (
+              <span className="flex items-center gap-1 text-indigo-600 font-medium">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading {loadingProgress.loaded} {loadingProgress.total ? `of ${loadingProgress.total}` : "records"}...
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400">Timezone: Asia/Kolkata (IST, UTC+05:30)</span>
+            <Badge variant="outline" className="text-[10px] bg-slate-50">
+              {derivedJourneys.length} Journeys Detected
+            </Badge>
           </div>
         </div>
       </Card>
 
-      {/* ── SUMMARY STATS BAR (Real Data Only) ───────────────────── */}
+      {/* ── SUMMARY STATS BAR (Real Mathematical Metrics) ───────── */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+        {/* Total Distance (GPS vs Odometer) */}
         <div className="bg-white border border-slate-200/80 p-3 rounded-2xl shadow-xs">
-          <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Total Distance</div>
+          <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">GPS Distance</div>
           <div className="text-lg font-bold text-slate-900 mt-1">
             {tripStats.totalDistanceKm} <span className="text-xs font-normal text-slate-500">km</span>
           </div>
-        </div>
-
-        <div className="bg-white border border-slate-200/80 p-3 rounded-2xl shadow-xs">
-          <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Trip Duration</div>
-          <div className="text-lg font-bold text-slate-900 mt-1">
-            {Math.floor(tripStats.totalDurationMins / 60)}h {tripStats.totalDurationMins % 60}m
+          <div className="text-[10px] text-slate-400 mt-0.5">
+            Odometer: {tripStats.odometerDistanceKm != null ? `${tripStats.odometerDistanceKm} km` : "N/A"}
           </div>
         </div>
 
+        {/* Total Duration */}
+        <div className="bg-white border border-slate-200/80 p-3 rounded-2xl shadow-xs">
+          <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Total Duration</div>
+          <div className="text-lg font-bold text-slate-900 mt-1">
+            {Math.floor(tripStats.totalDurationSeconds / 3600)}h {Math.floor((tripStats.totalDurationSeconds % 3600) / 60)}m
+          </div>
+          <div className="text-[10px] text-slate-400 mt-0.5">
+            Driving: {Math.floor(tripStats.drivingDurationSeconds / 60)}m · Stopped: {Math.floor(tripStats.stoppedDurationSeconds / 60)}m
+          </div>
+        </div>
+
+        {/* Average Speed */}
         <div className="bg-white border border-slate-200/80 p-3 rounded-2xl shadow-xs">
           <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Average Speed</div>
           <div className="text-lg font-bold text-slate-900 mt-1 flex items-baseline gap-1">
-            {tripStats.avgSpeed} <span className="text-xs font-normal text-slate-500">km/h</span>
+            {tripStats.avgSpeedKmh} <span className="text-xs font-normal text-slate-500">km/h</span>
           </div>
-          <div className="text-[10px] text-slate-400">Accurate dist / time</div>
+          <div className="text-[10px] text-slate-400 mt-0.5">Distance / driving time</div>
         </div>
 
+        {/* Max Speed */}
         <div className="bg-white border border-slate-200/80 p-3 rounded-2xl shadow-xs">
           <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Max Speed</div>
           <div className="text-lg font-bold text-slate-900 mt-1 flex items-baseline gap-1">
-            {tripStats.maxSpeed} <span className="text-xs font-normal text-slate-500">km/h</span>
+            {tripStats.maxSpeedKmh} <span className="text-xs font-normal text-slate-500">km/h</span>
+          </div>
+          <div className="text-[10px] text-slate-400 mt-0.5">
+            {tripStats.maxSpeedKmh > 60 ? "Over 60 km/h limit" : "Within speed policy"}
           </div>
         </div>
 
+        {/* Speeding Incidents */}
         <div className="bg-white border border-slate-200/80 p-3 rounded-2xl shadow-xs">
           <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Speeding Alerts</div>
           <div
             className={`text-lg font-bold mt-1 ${
-              tripStats.speedingCount > 0 ? "text-amber-600" : "text-slate-900"
+              tripStats.speedingIncidentsCount > 0 ? "text-amber-600" : "text-slate-900"
             }`}
           >
-            {tripStats.speedingCount} <span className="text-xs font-normal text-slate-500">incidents</span>
+            {tripStats.speedingIncidentsCount} <span className="text-xs font-normal text-slate-500">incidents</span>
           </div>
+          <div className="text-[10px] text-slate-400 mt-0.5">&gt; 60 km/h threshold</div>
         </div>
 
+        {/* Stops & Signal Gaps */}
         <div className="bg-white border border-slate-200/80 p-3 rounded-2xl shadow-xs">
-          <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Recorded Stops</div>
+          <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Stops & Gaps</div>
           <div className="text-lg font-bold text-slate-900 mt-1 flex items-baseline gap-1">
             {tripStats.stopsCount} <span className="text-xs font-normal text-slate-500">stops</span>
+          </div>
+          <div className="text-[10px] text-slate-400 mt-0.5">
+            Gaps: {tripStats.gapsCount} ({Math.round(tripStats.totalGapDurationSeconds / 60)}m offline)
           </div>
         </div>
       </div>
 
-      {/* ── MAIN PLAYBACK WORKSPACE ─────────────────────────────── */}
+      {/* ── MAIN PLAYBACK & JOURNEY WORKSPACE ───────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* MAP & PLAYBACK CONTROLLER (8 COLS) */}
         <div className="lg:col-span-8 flex flex-col gap-3">
@@ -820,8 +744,8 @@ export default function TripHistoryPage() {
               <MapGL
                 ref={mapRef}
                 initialViewState={{
-                  longitude: currentPoint?.lng || vehicleCurrentPosition.lng,
-                  latitude: currentPoint?.lat || vehicleCurrentPosition.lat,
+                  longitude: currentPoint?.lng || vehicleCurrentPosition?.lng || 77.2884,
+                  latitude: currentPoint?.lat || vehicleCurrentPosition?.lat || 8.2605,
                   zoom: 12,
                 }}
                 mapStyle={MAP_STYLE}
@@ -829,16 +753,16 @@ export default function TripHistoryPage() {
               >
                 <NavigationControl position="top-right" />
 
-                {/* Actual Historical GPS Trail (Blue Polyline) */}
-                {historicalGeoJson && (
-                  <Source id="historical-trail" type="geojson" data={historicalGeoJson}>
+                {/* Segmented Historical GPS Trail (MultiLineString - Breaks at Gaps!) */}
+                {segmentedGeoJson && (
+                  <Source id="historical-trail" type="geojson" data={segmentedGeoJson}>
                     <Layer
                       id="trail-casing"
                       type="line"
                       paint={{
                         "line-color": "#1E293B",
-                        "line-width": 5,
-                        "line-opacity": 0.3,
+                        "line-width": 5.5,
+                        "line-opacity": 0.35,
                       }}
                     />
                     <Layer
@@ -846,37 +770,73 @@ export default function TripHistoryPage() {
                       type="line"
                       paint={{
                         "line-color": "#2563EB",
-                        "line-width": 3.5,
-                        "line-opacity": 0.9,
+                        "line-width": 3.8,
+                        "line-opacity": 0.95,
                       }}
                     />
                   </Source>
                 )}
 
-                {/* Start Point Marker */}
-                {gpsPoints.length > 0 && (
-                  <Marker longitude={gpsPoints[0].lng} latitude={gpsPoints[0].lat} anchor="center">
-                    <div className="h-6 w-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-[10px] shadow-lg border-2 border-white">
+                {/* Start Marker A (Emerald) */}
+                {activeGpsPoints.length > 0 && (
+                  <Marker longitude={activeGpsPoints[0].lng} latitude={activeGpsPoints[0].lat} anchor="center">
+                    <div
+                      className="h-6 w-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-[10px] shadow-lg border-2 border-white cursor-pointer"
+                      title={`Journey Departure: ${formatIstTime(activeGpsPoints[0].recorded_at)}`}
+                    >
                       A
                     </div>
                   </Marker>
                 )}
 
-                {/* End Point Marker */}
-                {gpsPoints.length > 1 && (
+                {/* End Marker B (Slate) */}
+                {activeGpsPoints.length > 1 && (
                   <Marker
-                    longitude={gpsPoints[gpsPoints.length - 1].lng}
-                    latitude={gpsPoints[gpsPoints.length - 1].lat}
+                    longitude={activeGpsPoints[activeGpsPoints.length - 1].lng}
+                    latitude={activeGpsPoints[activeGpsPoints.length - 1].lat}
                     anchor="center"
                   >
-                    <div className="h-6 w-6 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-[10px] shadow-lg border-2 border-white">
+                    <div
+                      className="h-6 w-6 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-[10px] shadow-lg border-2 border-white cursor-pointer"
+                      title={`Journey End: ${formatIstTime(activeGpsPoints[activeGpsPoints.length - 1].recorded_at)}`}
+                    >
                       B
                     </div>
                   </Marker>
                 )}
 
-                {/* If no trail on this date, show current authentic GPS position marker */}
-                {gpsPoints.length === 0 && (
+                {/* Stop Markers (P, Amber) */}
+                {timelineEvents
+                  .filter((e) => e.type === "stop")
+                  .map((e) => (
+                    <Marker key={e.id} longitude={e.lng} latitude={e.lat} anchor="center">
+                      <div
+                        onClick={() => jumpToPointIndex(e.pointIndex)}
+                        className="h-5 w-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-[9px] font-bold shadow-md border border-white cursor-pointer hover:scale-125 transition-transform"
+                        title={e.title}
+                      >
+                        P
+                      </div>
+                    </Marker>
+                  ))}
+
+                {/* Signal Gap Markers (!, Red) */}
+                {timelineEvents
+                  .filter((e) => e.type === "gap")
+                  .map((e) => (
+                    <Marker key={e.id} longitude={e.lng} latitude={e.lat} anchor="center">
+                      <div
+                        onClick={() => jumpToPointIndex(e.pointIndex)}
+                        className="h-5 w-5 rounded-full bg-red-600 text-white flex items-center justify-center text-[9px] font-bold shadow-md border border-white cursor-pointer hover:scale-125 transition-transform"
+                        title={e.title}
+                      >
+                        !
+                      </div>
+                    </Marker>
+                  ))}
+
+                {/* Vehicle Current Position Marker (when no playback or stationary) */}
+                {activeGpsPoints.length === 0 && vehicleCurrentPosition && (
                   <Marker
                     longitude={vehicleCurrentPosition.lng}
                     latitude={vehicleCurrentPosition.lat}
@@ -887,48 +847,11 @@ export default function TripHistoryPage() {
                         <Truck className="h-4 w-4" />
                       </div>
                       <div className="absolute -top-7 bg-slate-900 text-white text-[10px] font-semibold px-2 py-0.5 rounded shadow whitespace-nowrap pointer-events-none">
-                        {selectedVehicle?.number || "Vehicle"} (Current Position)
+                        {selectedVehicle?.number || "Vehicle"} ({vehicleCurrentPosition.status})
                       </div>
                     </div>
                   </Marker>
                 )}
-
-                {/* Stop Markers */}
-                {timelineEvents
-                  .filter((e) => e.type === "stop")
-                  .map((e) => {
-                    const pt = gpsPoints[e.pointIndex];
-                    if (!pt) return null;
-                    return (
-                      <Marker key={e.id} longitude={pt.lng} latitude={pt.lat} anchor="center">
-                        <div
-                          onClick={() => jumpToPointIndex(e.pointIndex)}
-                          className="h-5 w-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-[9px] font-bold shadow-md border border-white cursor-pointer hover:scale-125 transition-transform"
-                          title={e.title}
-                        >
-                          P
-                        </div>
-                      </Marker>
-                    );
-                  })}
-
-                {/* Signal Gap Markers */}
-                {timelineEvents
-                  .filter((e) => e.type === "gap")
-                  .map((e) => {
-                    const pt = gpsPoints[e.pointIndex];
-                    if (!pt) return null;
-                    return (
-                      <Marker key={e.id} longitude={pt.lng} latitude={pt.lat} anchor="center">
-                        <div
-                          className="h-5 w-5 rounded-full bg-red-600 text-white flex items-center justify-center text-[9px] font-bold shadow-md border border-white"
-                          title="GPS Signal Gap"
-                        >
-                          !
-                        </div>
-                      </Marker>
-                    );
-                  })}
 
                 {/* ACTIVE PLAYBACK VEHICLE MARKER */}
                 {currentPoint && (
@@ -943,7 +866,7 @@ export default function TripHistoryPage() {
               </MapGL>
 
               {/* HUD OVERLAY (Top-Left on Map) */}
-              <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl p-3 shadow-lg text-xs space-y-1.5 min-w-[210px] z-10">
+              <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl p-3 shadow-lg text-xs space-y-1.5 min-w-[220px] z-10">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
                   <span className="font-bold text-slate-800">
                     {selectedVehicle?.number || "Vehicle"}
@@ -960,9 +883,9 @@ export default function TripHistoryPage() {
                       ? currentPoint.speed > 0
                         ? "Moving"
                         : "Stationary"
-                      : vehicleCurrentPosition.isLive
-                      ? "Online (Live)"
-                      : "GPS Gateway Active"}
+                      : vehicleCurrentPosition
+                      ? vehicleCurrentPosition.status
+                      : "No GPS Available"}
                   </Badge>
                 </div>
                 <div className="flex items-baseline justify-between">
@@ -972,11 +895,11 @@ export default function TripHistoryPage() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-500">Timestamp:</span>
+                  <span className="text-slate-500">Timestamp (IST):</span>
                   <span className="font-semibold text-slate-700">
                     {currentPoint
-                      ? new Date(currentPoint.recorded_at).toLocaleTimeString()
-                      : "No Journey Recorded"}
+                      ? formatIstTime(currentPoint.recorded_at)
+                      : "No Active Coordinates"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-[10px] text-slate-400">
@@ -984,18 +907,35 @@ export default function TripHistoryPage() {
                   <span>
                     {currentPoint
                       ? `${currentPoint.lat.toFixed(4)}, ${currentPoint.lng.toFixed(4)}`
-                      : `${vehicleCurrentPosition.lat.toFixed(4)}, ${vehicleCurrentPosition.lng.toFixed(4)}`}
+                      : vehicleCurrentPosition
+                      ? `${vehicleCurrentPosition.lat.toFixed(4)}, ${vehicleCurrentPosition.lng.toFixed(4)}`
+                      : "Unavailable"}
                   </span>
                 </div>
               </div>
 
-              {/* EMPTY STATE BANNER (When no historical trail on selected date) */}
-              {gpsPoints.length === 0 && !isLoadingGps && (
+              {/* MAP ACTION CONTROLS (Top-Right under Navigation) */}
+              {activeGpsPoints.length >= 2 && (
+                <div className="absolute top-3 right-12 z-10">
+                  <button
+                    onClick={fitMapToBounds}
+                    className="p-1.5 rounded-lg bg-white/90 backdrop-blur-sm border border-slate-200 text-slate-700 hover:bg-white shadow-xs text-xs flex items-center gap-1 font-medium"
+                    title="Fit route to map bounds"
+                  >
+                    <MapIcon className="h-3.5 w-3.5" />
+                    <span>Fit Bounds</span>
+                  </button>
+                </div>
+              )}
+
+              {/* EMPTY STATE BANNER (When no records in date range) */}
+              {activeGpsPoints.length === 0 && !isLoadingGps && !queryError && (
                 <div className="absolute bottom-3 left-3 right-3 bg-amber-50/95 backdrop-blur-sm border border-amber-200 rounded-xl p-2.5 shadow-md flex items-center justify-between z-10 text-xs">
                   <div className="flex items-center gap-2 text-amber-800">
                     <Activity className="h-4 w-4 text-amber-600 shrink-0" />
                     <span>
-                      <strong>No GPS Telemetry Recorded for Selected Date</strong> (Backend Real Data Only).
+                      <strong>No GPS Telemetry Recorded on Selected Date</strong> ({dateRange.displayLabel}).
+                      Showing authentic backend data only.
                     </span>
                   </div>
                   <Badge variant="outline" className="text-[10px] bg-white border-amber-300 text-amber-700">
@@ -1010,39 +950,43 @@ export default function TripHistoryPage() {
               {/* Timeline Scrubbing Slider */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-xs font-medium text-slate-500">
-                  <span>{gpsPoints[0] ? new Date(gpsPoints[0].recorded_at).toLocaleTimeString() : "00:00"}</span>
+                  <span>
+                    {activeGpsPoints[0]
+                      ? formatIstTime(activeGpsPoints[0].recorded_at)
+                      : "00:00"}
+                  </span>
                   <span className="font-bold text-indigo-700">
                     {currentPoint
-                      ? `${new Date(currentPoint.recorded_at).toLocaleTimeString()} (Point ${
-                          currentIndex + 1
-                        } of ${gpsPoints.length})`
+                      ? `${formatIstTime(currentPoint.recorded_at)} (Point ${currentIndex + 1} of ${
+                          activeGpsPoints.length
+                        })`
                       : "00:00 (No Telemetry to Replay)"}
                   </span>
                   <span>
-                    {gpsPoints.length > 1
-                      ? new Date(gpsPoints[gpsPoints.length - 1].recorded_at).toLocaleTimeString()
+                    {activeGpsPoints.length > 1
+                      ? formatIstTime(activeGpsPoints[activeGpsPoints.length - 1].recorded_at)
                       : "00:00"}
                   </span>
                 </div>
                 <input
                   type="range"
                   min={0}
-                  max={Math.max(0, gpsPoints.length - 1)}
+                  max={Math.max(0, activeGpsPoints.length - 1)}
                   value={currentIndex}
-                  disabled={gpsPoints.length === 0}
+                  disabled={activeGpsPoints.length === 0}
                   onChange={(e) => setCurrentIndex(parseInt(e.target.value, 10))}
                   className={`w-full h-2 rounded-lg appearance-none cursor-pointer accent-indigo-600 ${
-                    gpsPoints.length === 0 ? "bg-slate-100 cursor-not-allowed" : "bg-slate-200"
+                    activeGpsPoints.length === 0 ? "bg-slate-100 cursor-not-allowed" : "bg-slate-200"
                   }`}
                 />
               </div>
 
-              {/* Action Buttons */}
+              {/* Action Buttons & Speed Multipliers */}
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                 <div className="flex items-center gap-1.5">
                   <button
                     onClick={() => setCurrentIndex(0)}
-                    disabled={gpsPoints.length === 0}
+                    disabled={activeGpsPoints.length === 0}
                     className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
                     title="Jump to Start"
                   >
@@ -1051,7 +995,7 @@ export default function TripHistoryPage() {
 
                   <button
                     onClick={() => setCurrentIndex((prev) => Math.max(0, prev - 5))}
-                    disabled={gpsPoints.length === 0}
+                    disabled={activeGpsPoints.length === 0}
                     className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
                     title="Step Backward"
                   >
@@ -1060,16 +1004,16 @@ export default function TripHistoryPage() {
 
                   <button
                     onClick={() => setIsPlaying(!isPlaying)}
-                    disabled={gpsPoints.length === 0}
+                    disabled={activeGpsPoints.length === 0}
                     className={`px-4 py-2 rounded-xl font-semibold text-xs flex items-center gap-1.5 shadow-xs transition-colors ${
-                      gpsPoints.length === 0
+                      activeGpsPoints.length === 0
                         ? "bg-slate-200 text-slate-400 cursor-not-allowed"
                         : "bg-indigo-600 hover:bg-indigo-700 text-white"
                     }`}
                   >
                     {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                     <span>
-                      {gpsPoints.length === 0
+                      {activeGpsPoints.length === 0
                         ? "No Recorded Telemetry"
                         : isPlaying
                         ? "Pause"
@@ -1078,8 +1022,8 @@ export default function TripHistoryPage() {
                   </button>
 
                   <button
-                    onClick={() => setCurrentIndex((prev) => Math.min(gpsPoints.length - 1, prev + 5))}
-                    disabled={gpsPoints.length === 0}
+                    onClick={() => setCurrentIndex((prev) => Math.min(activeGpsPoints.length - 1, prev + 5))}
+                    disabled={activeGpsPoints.length === 0}
                     className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
                     title="Step Forward"
                   >
@@ -1087,8 +1031,8 @@ export default function TripHistoryPage() {
                   </button>
 
                   <button
-                    onClick={() => setCurrentIndex(gpsPoints.length - 1)}
-                    disabled={gpsPoints.length === 0}
+                    onClick={() => setCurrentIndex(activeGpsPoints.length - 1)}
+                    disabled={activeGpsPoints.length === 0}
                     className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
                     title="Jump to End"
                   >
@@ -1096,58 +1040,135 @@ export default function TripHistoryPage() {
                   </button>
                 </div>
 
-                {/* Speed Multipliers */}
-                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold text-slate-700">
-                  <span className="text-[10px] text-slate-400 px-1 uppercase">Speed:</span>
-                  {([1, 2, 5, 10] as const).map((spd) => (
+                {/* Active Selection / Mode Pill */}
+                <div className="flex items-center gap-2">
+                  {selectedJourneyId !== "all" && (
                     <button
-                      key={spd}
-                      onClick={() => setPlaybackSpeed(spd)}
-                      className={`px-2 py-0.5 rounded-lg transition-colors ${
-                        playbackSpeed === spd
-                          ? "bg-white text-indigo-700 shadow-xs"
-                          : "text-slate-600 hover:text-slate-900"
-                      }`}
+                      onClick={() => handleSelectJourney("all")}
+                      className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors"
                     >
-                      {spd}x
+                      Reset to All Journeys
                     </button>
-                  ))}
+                  )}
+                  {/* Speed Multipliers */}
+                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold text-slate-700">
+                    <span className="text-[10px] text-slate-400 px-1 uppercase">Speed:</span>
+                    {([1, 2, 5, 10] as const).map((spd) => (
+                      <button
+                        key={spd}
+                        onClick={() => setPlaybackSpeed(spd)}
+                        className={`px-2 py-0.5 rounded-lg transition-colors ${
+                          playbackSpeed === spd
+                            ? "bg-white text-indigo-700 shadow-xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        }`}
+                      >
+                        {spd}x
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
           </Card>
         </div>
 
-        {/* ── SYNCHRONIZED TIMELINE & INCIDENTS (4 COLS) ──────────── */}
+        {/* ── SIDEBAR: JOURNEYS & SYNCHRONIZED TIMELINE (4 COLS) ───── */}
         <div className="lg:col-span-4 space-y-4">
-          <Card className="border border-slate-200/80 p-4 flex flex-col max-h-[620px] shadow-xs">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5 mb-3">
-              <div>
-                <div className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                  Synchronized Journey Events
-                </div>
-                <div className="text-[10px] text-slate-500">
-                  {timelineEvents.length > 0
-                    ? "Click any event to immediately move playback"
-                    : "Authentic backend events log"}
-                </div>
+          {/* JOURNEY LIST CARD */}
+          <Card className="border border-slate-200/80 p-4 flex flex-col max-h-[310px] shadow-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-2">
+              <div className="flex items-center gap-1.5">
+                <Truck className="h-4 w-4 text-indigo-600" />
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                  Journeys History ({filteredJourneys.length})
+                </span>
               </div>
               <Badge variant="outline" className="text-[10px]">
-                {timelineEvents.length} events
+                {dateRange.displayLabel}
               </Badge>
             </div>
 
-            {/* Event List or Empty State */}
+            {/* Journeys Scroll List */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+              {filteredJourneys.length === 0 ? (
+                <div className="text-center py-6 text-slate-400 text-xs">
+                  No journeys recorded for this filter selection.
+                </div>
+              ) : (
+                filteredJourneys.map((j) => {
+                  const isSelected = selectedJourneyId === j.id;
+                  return (
+                    <div
+                      key={j.id}
+                      onClick={() => handleSelectJourney(j.id)}
+                      className={`p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
+                        isSelected
+                          ? "border-indigo-500 bg-indigo-50/80 ring-1 ring-indigo-300"
+                          : "border-slate-200 bg-white hover:bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-900">
+                          {formatIstTime(j.start_time)} → {formatIstTime(j.end_time)}
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className={`text-[9px] ${
+                            j.status === "Completed"
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-300"
+                              : j.status === "Ongoing"
+                              ? "bg-blue-50 text-blue-700 border-blue-300"
+                              : "bg-slate-50 text-slate-600"
+                          }`}
+                        >
+                          {j.status}
+                        </Badge>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-1 mt-1 text-[11px] text-slate-600">
+                        <div>
+                          <strong>{j.metrics.totalDistanceKm}</strong> km
+                        </div>
+                        <div>
+                          <strong>{Math.round(j.metrics.drivingDurationSeconds / 60)}</strong>m driving
+                        </div>
+                        <div>
+                          <strong>{j.metrics.stopsCount}</strong> stops
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between mt-1 text-[10px] text-slate-400">
+                        <span className="truncate max-w-[140px] flex items-center gap-1">
+                          <User className="h-2.5 w-2.5" />
+                          {j.driver_name}
+                        </span>
+                        <span>Avg: {j.metrics.avgSpeedKmh} km/h</span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </Card>
+
+          {/* SYNCHRONIZED TIMELINE CARD */}
+          <Card className="border border-slate-200/80 p-4 flex flex-col max-h-[300px] shadow-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-2">
+              <div className="flex items-center gap-1.5">
+                <History className="h-4 w-4 text-indigo-600" />
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                  Timeline Events ({timelineEvents.length})
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-400">Click to seek playback</span>
+            </div>
+
+            {/* Event List */}
+            <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
               {timelineEvents.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center p-6 text-center border-2 border-dashed border-slate-200 rounded-xl my-4">
-                  <div className="h-10 w-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mb-2">
-                    <History className="h-5 w-5" />
-                  </div>
-                  <div className="font-semibold text-slate-700 text-xs">No Journey Events Recorded</div>
-                  <div className="text-[11px] text-slate-400 max-w-xs mt-1">
-                    No recorded departures, stops, or speed alerts for {selectedVehicle?.number || "this vehicle"} on the selected date. Backend real data only.
-                  </div>
+                <div className="text-center py-6 text-slate-400 text-xs">
+                  No recorded events for this selection.
                 </div>
               ) : (
                 timelineEvents.map((ev) => {
@@ -1156,48 +1177,53 @@ export default function TripHistoryPage() {
                     <div
                       key={ev.id}
                       onClick={() => jumpToPointIndex(ev.pointIndex)}
-                      className={`p-3 rounded-xl border text-xs cursor-pointer transition-all ${
+                      className={`p-2 rounded-xl border text-xs cursor-pointer transition-all ${
                         isActive
-                          ? "border-indigo-400 bg-indigo-50/70 shadow-xs ring-1 ring-indigo-200"
-                          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/50"
+                          ? "border-indigo-400 bg-indigo-50/70 ring-1 ring-indigo-200"
+                          : "border-slate-200 bg-white hover:bg-slate-50"
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-2 min-w-0">
                           {ev.type === "start" && (
-                            <div className="h-6 w-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold shrink-0">
-                              <Navigation className="h-3 w-3" />
+                            <div className="h-5 w-5 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold shrink-0">
+                              <Navigation className="h-2.5 w-2.5" />
                             </div>
                           )}
                           {ev.type === "stop" && (
-                            <div className="h-6 w-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold shrink-0">
-                              <Clock className="h-3 w-3" />
+                            <div className="h-5 w-5 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold shrink-0">
+                              <Clock className="h-2.5 w-2.5" />
+                            </div>
+                          )}
+                          {ev.type === "resumed" && (
+                            <div className="h-5 w-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold shrink-0">
+                              <Play className="h-2.5 w-2.5" />
                             </div>
                           )}
                           {ev.type === "speeding" && (
-                            <div className="h-6 w-6 rounded-full bg-red-100 text-red-700 flex items-center justify-center font-bold shrink-0">
-                              <AlertTriangle className="h-3 w-3" />
+                            <div className="h-5 w-5 rounded-full bg-red-100 text-red-700 flex items-center justify-center font-bold shrink-0">
+                              <AlertTriangle className="h-2.5 w-2.5" />
                             </div>
                           )}
                           {ev.type === "gap" && (
-                            <div className="h-6 w-6 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center font-bold shrink-0">
-                              <Radio className="h-3 w-3" />
+                            <div className="h-5 w-5 rounded-full bg-slate-100 text-slate-700 flex items-center justify-center font-bold shrink-0">
+                              <Radio className="h-2.5 w-2.5" />
                             </div>
                           )}
                           {ev.type === "end" && (
-                            <div className="h-6 w-6 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold shrink-0">
-                              <CheckCircle2 className="h-3 w-3" />
+                            <div className="h-5 w-5 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold shrink-0">
+                              <CheckCircle2 className="h-2.5 w-2.5" />
                             </div>
                           )}
 
                           <div className="min-w-0">
-                            <div className="font-bold text-slate-900 truncate">{ev.title}</div>
-                            <div className="text-[11px] text-slate-500 mt-0.5">{ev.description}</div>
+                            <div className="font-semibold text-slate-900 truncate text-[11px]">{ev.title}</div>
+                            <div className="text-[10px] text-slate-500 truncate">{ev.description}</div>
                           </div>
                         </div>
 
                         <div className="text-[10px] font-semibold text-slate-400 shrink-0">
-                          {new Date(ev.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          {formatIstTime(ev.timestamp)}
                         </div>
                       </div>
                     </div>

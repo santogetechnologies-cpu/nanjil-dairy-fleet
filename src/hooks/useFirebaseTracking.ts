@@ -195,6 +195,7 @@ export function usePureFirebaseTracking() {
   >([]);
   const pendingBaseLookupsRef = useRef<Set<string>>(new Set());
   const loggedMappingsRef = useRef<Map<string, string>>(new Map());
+  const lastIngestTimesRef = useRef<Map<string, { time: number; speed: number; lat: number; lng: number }>>(new Map());
 
   // GPS-based average speed calculator (incremental, per-device)
   const { updateGpsPoint, getAverageSpeed, registerAlias } = useAverageSpeed();
@@ -362,6 +363,35 @@ export function usePureFirebaseTracking() {
             const speed = typeof data.speed === "number" ? data.speed : parseFloat(String(data.speed || 0));
             const timestamp = extractTelemetryTimestamp(data, docSnap);
             updateGpsPoint(cleanDevId, lat, lng, speed, timestamp);
+
+            // Continuously persist live telemetry into Supabase telemetry_history (throttled)
+            if (/^\d{15}$/.test(cleanDevId) && lat !== 0 && lng !== 0) {
+              const now = Date.now();
+              const last = lastIngestTimesRef.current.get(cleanDevId);
+              const elapsed = last ? now - last.time : 999999;
+              const spdDiff = last ? Math.abs(speed - last.speed) : 999;
+              const posDiff = last ? Math.abs(lat - last.lat) + Math.abs(lng - last.lng) : 999;
+
+              if (elapsed >= 15000 || spdDiff >= 5 || posDiff >= 0.0005) {
+                lastIngestTimesRef.current.set(cleanDevId, { time: now, speed, lat, lng });
+                const engineOn = Boolean(data.engine_on);
+                supabase.rpc("ingest_emqx_telemetry", {
+                  p_device_id: cleanDevId,
+                  p_timestamp: new Date().toISOString(),
+                  p_lat: lat,
+                  p_lng: lng,
+                  p_speed: speed,
+                  p_fuel: data.fuel != null ? Number(data.fuel) : 75,
+                  p_temperature: data.temperature != null ? Number(data.temperature) : 25,
+                  p_humidity: data.humidity != null ? Number(data.humidity) : 60,
+                  p_engine_on: engineOn,
+                  p_ignition: Boolean(data.ignition ?? engineOn),
+                  p_odometer: data.odometer != null ? Number(data.odometer) : null,
+                  p_engine_hours: data.engine_hours != null ? Number(data.engine_hours) : null,
+                  p_location: `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+                }).catch(() => {});
+              }
+            }
           }
         });
         setFirestoreDocs(docs);

@@ -175,7 +175,7 @@ export default function VehicleDetailsPage() {
         supabase.from("fuel_purchase_logs").select("*").eq("vehicle_id", vData.id).order("logged_at", { ascending: true }),
         supabase.from("trips").select("*, drivers(name, phone)").eq("vehicle_id", vData.id).order("date", { ascending: false }),
         supabase.from("alerts").select("*").eq("vehicle_id", vData.id).order("time", { ascending: false }),
-        supabase.from("telemetry_history").select("*").eq("vehicle_id", vData.id).order("recorded_at", { ascending: true }).limit(100),
+        supabase.from("telemetry_history").select("*").eq("vehicle_id", vData.id).order("recorded_at", { ascending: false }).limit(60),
         vData.driver_id ? supabase.from("drivers").select("*").eq("id", vData.driver_id).maybeSingle() : Promise.resolve({ data: null }),
       ]);
 
@@ -209,7 +209,7 @@ export default function VehicleDetailsPage() {
           }))
         );
       }
-      if (thRes.data) setTelemetryHistory(thRes.data);
+      if (thRes.data) setTelemetryHistory([...thRes.data].reverse());
       if (dRes.data) setDriverProfile(dRes.data as Driver);
     } catch (err) {
       console.error("[VehicleDetails] Error loading details:", err);
@@ -438,7 +438,7 @@ export default function VehicleDetailsPage() {
     setLiveSpeedSamples([]);
   }, [vehicleId]);
 
-  // Initialize continuous baseline speed history if no persistent history exists yet
+  // Initialize baseline speed point if vehicle is active and no history exists
   useEffect(() => {
     if (!vehicleId || !v) return;
     const storageKey = `nanjil_speed_history_${vehicleId}`;
@@ -459,35 +459,16 @@ export default function VehicleDetailsPage() {
         // ignore
       }
 
-      // Generate realistic continuous driving profile for the vehicle
       const now = Date.now();
       const currentSpd = Math.round(Number(v.speed || 0));
-      const targetSpeed = currentSpd > 0 ? currentSpd : (v.status === "Moving" ? 48 : 0);
-
-      const profile = targetSpeed > 0
-        ? [0, 18, 32, 40, 45, 48, 52, 49, 44, 38, 20, 0, 0, 15, 30, 42, 46, 50, 47, 43, 46, targetSpeed]
-        : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-      const stepMs = Math.floor((45 * 60 * 1000) / profile.length);
-      const startMs = now - (profile.length * stepMs);
-
-      const baseline = profile.map((spd, idx) => {
-        const pt = new Date(startMs + idx * stepMs);
-        const ratio = targetSpeed > 0 ? targetSpeed / 48 : 1;
-        const val = idx === profile.length - 1 ? targetSpeed : Math.min(80, Math.max(0, Math.round(spd * ratio)));
-        return {
+      const pt = new Date(now);
+      return [
+        {
           t: pt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }),
-          speed: val,
-          rawTime: pt.getTime(),
-        };
-      });
-
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(baseline));
-      } catch {
-        // ignore
-      }
-
-      return baseline;
+          speed: currentSpd,
+          rawTime: now,
+        },
+      ];
     });
   }, [vehicleId, v?.id, v?.speed, v?.status]);
 
@@ -499,9 +480,10 @@ export default function VehicleDetailsPage() {
     const spd = Math.round(Number(v.speed || 0));
     const storageKey = `nanjil_speed_history_${vehicleId}`;
 
+    const newPoint = { t: timeStr, speed: spd, rawTime: now.getTime() };
+
     setLiveSpeedSamples((prev) => {
-      // If empty and not yet initialized, wait for baseline
-      if (prev.length === 0) return prev;
+      if (prev.length === 0) return [newPoint];
 
       // Avoid duplicate consecutive entry with identical second timestamp
       if (prev.length > 0 && prev[prev.length - 1].t === timeStr) {

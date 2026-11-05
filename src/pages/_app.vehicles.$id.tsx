@@ -177,16 +177,18 @@ function VehicleDetailPage() {
         deviceId: vehicleData.device_id || "",
       });
 
-      // 2. Fetch history from telemetry_history
+      // 2. Fetch history from telemetry_history using authoritative UUID
+      const targetVehicleId = vehicleData.id || id;
       const { data: hist } = await supabase
         .from("telemetry_history")
         .select("*")
-        .eq("vehicle_id", id)
-        .order("recorded_at", { ascending: true })
-        .limit(50);
+        .eq("vehicle_id", targetVehicleId)
+        .order("recorded_at", { ascending: false })
+        .limit(60);
 
       if (hist && hist.length > 0) {
-        const mapped = hist.map((h) => {
+        const sorted = [...hist].reverse();
+        const mapped = sorted.map((h) => {
           const d = new Date(h.recorded_at);
           return {
             t: d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
@@ -316,7 +318,7 @@ function VehicleDetailPage() {
     };
   }, [id]);
 
-  // Initialize continuous baseline speed history if no persistent history exists yet
+  // Initialize baseline speed point if vehicle is active and no history exists
   useEffect(() => {
     if (!id || !v) return;
     const storageKey = `nanjil_speed_history_${id}`;
@@ -337,38 +339,20 @@ function VehicleDetailPage() {
         // ignore
       }
 
-      // Generate authentic continuous driving profile based on actual vehicle status & speed
+      // If vehicle currently has telemetry speed, initialize with single authentic point
       const now = Date.now();
       const currentSpd = Math.round(Number(v.speed || 0));
-      const targetSpeed = currentSpd > 0 ? currentSpd : (v.status === "Moving" ? 48 : 0);
-
-      const profile = targetSpeed > 0
-        ? [0, 15, 28, 38, 45, 48, 52, 49, 44, 38, 20, 0, 0, 15, 30, 42, 46, 50, 47, 43, 46, targetSpeed]
-        : [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-      const stepMs = Math.floor((45 * 60 * 1000) / profile.length);
-      const startMs = now - (profile.length * stepMs);
-
-      const baseline: HistoryPoint[] = profile.map((spd, idx) => {
-        const pt = new Date(startMs + idx * stepMs);
-        const ratio = targetSpeed > 0 ? targetSpeed / 48 : 1;
-        const val = idx === profile.length - 1 ? targetSpeed : Math.min(100, Math.max(0, Math.round(spd * ratio)));
-        return {
+      const pt = new Date(now);
+      return [
+        {
           t: pt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }),
           day: pt.toLocaleDateString([], { month: "short", day: "numeric" }),
-          speed: val,
+          speed: currentSpd,
           fuel: Number(v.fuel || 0),
           temp: Number(v.temperature || 0),
-          rawTime: pt.getTime(),
-        };
-      });
-
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(baseline));
-      } catch {
-        // ignore
-      }
-
-      return baseline;
+          rawTime: now,
+        },
+      ];
     });
   }, [id, v?.id, v?.speed, v?.status]);
 
@@ -381,8 +365,17 @@ function VehicleDetailPage() {
     const spd = Math.round(Number(v.speed || 0));
     const storageKey = `nanjil_speed_history_${id}`;
 
+    const newPoint: HistoryPoint = {
+      t: timeStr,
+      day: dayStr,
+      speed: spd,
+      fuel: Number(v.fuel || 0),
+      temp: Number(v.temperature || 0),
+      rawTime: now.getTime(),
+    };
+
     setHistory((prev) => {
-      if (prev.length === 0) return prev;
+      if (prev.length === 0) return [newPoint];
 
       // Avoid duplicate consecutive entry with identical second timestamp
       if (prev[prev.length - 1]?.t === timeStr) {

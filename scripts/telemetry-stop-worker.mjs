@@ -302,23 +302,43 @@ async function handleFirebaseDoc(docId, docData) {
   const tsMs = safeTimestampMs(docData.last_update || docData.timestamp);
   const tsIso = new Date(tsMs).toISOString();
 
-  // Deduplicated insert into telemetry_history
-  const historyPayload = {
-    vehicle_id: vehicle.id,
-    speed,
-    lat,
-    lng,
-    fuel: docData.fuel != null ? Number(docData.fuel) : null,
-    temperature: docData.temperature != null ? Number(docData.temperature) : null,
-    humidity: docData.humidity != null ? Number(docData.humidity) : null,
-    engine_on: engineOn,
-    ignition: Boolean(docData.ignition),
-    location: docData.location || `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
-    source: "firebase",
-    recorded_at: tsIso,
-  };
-
-  await supabase.from("telemetry_history").insert(historyPayload);
+  // Persist into telemetry_history via authorized SECURITY DEFINER RPC
+  const devId15 = String(vehicle.device_id || rawDevId).trim();
+  if (/^\d{15}$/.test(devId15)) {
+    const rpcRes = await supabase.rpc("ingest_emqx_telemetry", {
+      p_device_id: devId15,
+      p_timestamp: tsIso,
+      p_lat: lat,
+      p_lng: lng,
+      p_speed: speed,
+      p_fuel: docData.fuel != null ? Number(docData.fuel) : 75,
+      p_temperature: docData.temperature != null ? Number(docData.temperature) : 25,
+      p_humidity: docData.humidity != null ? Number(docData.humidity) : 60,
+      p_engine_on: engineOn,
+      p_ignition: Boolean(docData.ignition ?? engineOn),
+      p_odometer: docData.odometer != null ? Number(docData.odometer) : null,
+      p_engine_hours: docData.engine_hours != null ? Number(docData.engine_hours) : null,
+      p_location: docData.location || `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+    });
+    if (rpcRes.error) {
+      console.warn(`[Worker] Failed RPC ingestion for ${devId15}:`, rpcRes.error.message);
+    }
+  } else {
+    await supabase.from("telemetry_history").insert({
+      vehicle_id: vehicle.id,
+      speed,
+      lat,
+      lng,
+      fuel: docData.fuel != null ? Number(docData.fuel) : null,
+      temperature: docData.temperature != null ? Number(docData.temperature) : null,
+      humidity: docData.humidity != null ? Number(docData.humidity) : null,
+      engine_on: engineOn,
+      ignition: Boolean(docData.ignition),
+      location: docData.location || `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+      source: "firebase",
+      recorded_at: tsIso,
+    });
+  }
 
   // Run authoritative server-side stop tracking
   await processTelemetryPoint({

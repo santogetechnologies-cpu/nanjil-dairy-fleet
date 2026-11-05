@@ -779,7 +779,7 @@ export class StopDetectionEngine {
   }
 
   public getActiveStops(): VehicleStopEvent[] {
-    const active: VehicleStopEvent[] = [];
+    const activeMap = new Map<string, VehicleStopEvent>();
     for (const state of this.states.values()) {
       if (state.activeStop) {
         const s = { ...state.activeStop };
@@ -789,25 +789,35 @@ export class StopDetectionEngine {
           if (meta.model) s.vehicle_model = meta.model;
           if (meta.id) s.vehicle_id = meta.id;
         }
-        active.push(s);
+        // Exclude unresolvable phantom stops and enforce strictly 1 active stop per vehicle
+        if (s.vehicle_number && s.vehicle_number !== "Unassigned Vehicle" && s.vehicle_number !== "Fleet Asset") {
+          const key = s.vehicle_id || s.vehicle_number;
+          activeMap.set(key, s);
+        }
       }
     }
-    return active;
+    return Array.from(activeMap.values());
   }
 
   public getAllConfirmedStops(): VehicleStopEvent[] {
-    return this.confirmedStops.map((s) => {
+    const unique = new Map<string, VehicleStopEvent>();
+    for (const raw of this.confirmedStops) {
+      const s = { ...raw };
       const meta = resolveVehicleMetadata(s.vehicle_id, s.dedup_key, s.vehicle_number, s.vehicle_model);
       if (meta.number && meta.number !== s.vehicle_number) {
-        return {
-          ...s,
-          vehicle_number: meta.number,
-          vehicle_model: meta.model || s.vehicle_model,
-          vehicle_id: meta.id || s.vehicle_id,
-        };
+        s.vehicle_number = meta.number;
+        s.vehicle_model = meta.model || s.vehicle_model;
+        s.vehicle_id = meta.id || s.vehicle_id;
       }
-      return { ...s };
-    });
+      // Filter out corrupted unassigned placeholder stops from history display
+      if (!s.vehicle_number || s.vehicle_number === "Unassigned Vehicle" || s.vehicle_number === "Fleet Asset") {
+        continue;
+      }
+      if (!unique.has(s.id)) {
+        unique.set(s.id, s);
+      }
+    }
+    return Array.from(unique.values());
   }
 
   public getVehicleState(vehicleId: string): VehicleStopTrackingState | undefined {
