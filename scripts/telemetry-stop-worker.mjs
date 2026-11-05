@@ -361,3 +361,4 @@ main().catch((err) => {
   console.error("[Worker] Fatal error:", err);
   process.exit(1);
 });
+
