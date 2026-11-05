@@ -58,7 +58,8 @@ export interface TelemetryPoint {
 }
 
 export interface VehicleStopEvent {
-  id: string;
+  id: string; // Valid RFC4122 UUID
+  dedup_key?: string; // Deterministic deduplication key (e.g. hist:vehicle_id:started_at or live:vehicle_id:started_at)
   vehicle_id: string;
   vehicle_number?: string;
   vehicle_model?: string;
@@ -385,13 +386,15 @@ export class StopDetectionEngine {
       if (stationaryDurationSec >= this.config.stopDurationThresholdSec) {
         // ── CONFIRM STOP! ────────────────────────────────────────────────────
         // Note: The stop started at provisionalStationaryStartMs, NOT now!
+        const startedAtIso = new Date(state.provisionalStationaryStartMs).toISOString();
         const confirmedStop: VehicleStopEvent = {
           id: generateUuid(),
+          dedup_key: `live:${vehicleId}:${startedAtIso}`,
           vehicle_id: vehicleId,
           vehicle_number: state.vehicleNumber,
           driver_id: state.driverId,
           driver_name: state.driverName,
-          started_at: new Date(state.provisionalStationaryStartMs).toISOString(),
+          started_at: startedAtIso,
           ended_at: null,
           duration_seconds: stationaryDurationSec,
           start_lat: state.provisionalLat || lat,
@@ -610,7 +613,7 @@ export class StopDetectionEngine {
 
   /**
    * Safely writes a stop event to Supabase vehicle_stop_events.
-   * If table doesn't exist yet or network fails, caches locally without crashing or spamming 404s.
+   * If table doesn't exist yet or network fails, queues for retry and caches locally.
    */
   public async persistStopToSupabase(stop: VehicleStopEvent): Promise<boolean> {
     if (!this.isSupabaseTableAvailable) {
@@ -618,8 +621,15 @@ export class StopDetectionEngine {
     }
 
     try {
+      const dedupKey =
+        stop.dedup_key ||
+        (stop.status === "ACTIVE"
+          ? `live:${stop.vehicle_id}:${stop.started_at}`
+          : `hist:${stop.vehicle_id}:${stop.started_at}`);
+
       const payload = {
         id: stop.id,
+        dedup_key: dedupKey,
         vehicle_id: stop.vehicle_id,
         driver_id: stop.driver_id || null,
         started_at: stop.started_at,
@@ -638,7 +648,7 @@ export class StopDetectionEngine {
 
       const { error } = await supabase
         .from("vehicle_stop_events")
-        .upsert(payload, { onConflict: "id" });
+        .upsert(payload, { onConflict: "dedup_key" });
 
       if (error) {
         if (
@@ -673,7 +683,7 @@ export class StopDetectionEngine {
   }
 
   /**
-   * Loads confirmed stops and active states from Supabase and local storage.
+   * Loads confirmed stops and active states from Supabase and recovers active stops.
    */
   public async syncFromSupabase(): Promise<VehicleStopEvent[]> {
     if (!this.isSupabaseTableAvailable) {
@@ -705,6 +715,7 @@ export class StopDetectionEngine {
         this.isSupabaseTableAvailable = true;
         const mapped: VehicleStopEvent[] = data.map((d: any) => ({
           id: d.id,
+          dedup_key: d.dedup_key,
           vehicle_id: d.vehicle_id,
           vehicle_number: d.vehicles?.number || d.vehicle_number || "Fleet Unit",
           vehicle_model: d.vehicles?.model,
@@ -726,6 +737,31 @@ export class StopDetectionEngine {
         }));
 
         this.confirmedStops = mapped;
+
+        // Recover active stops into engine tracking state
+        for (const stop of mapped) {
+          if (stop.status === "ACTIVE") {
+            const startMs = safeTimestampToMs(stop.started_at) || Date.now();
+            const lastMs = safeTimestampToMs(stop.updated_at || stop.started_at) || Date.now();
+            this.states.set(stop.vehicle_id, {
+              vehicleId: stop.vehicle_id,
+              vehicleNumber: stop.vehicle_number || "Vehicle",
+              driverId: stop.driver_id || null,
+              driverName: stop.driver_name || null,
+              lastTimestampMs: lastMs,
+              lastFreshTelemetryMs: lastMs,
+              lastSpeed: 0,
+              provisionalStationaryStartMs: startMs,
+              provisionalLat: stop.start_lat,
+              provisionalLng: stop.start_lng,
+              provisionalLocation: stop.location,
+              provisionalEngineOn: stop.engine_on,
+              movementCandidateStartMs: null,
+              activeStop: stop,
+            });
+          }
+        }
+
         this.saveToStorage();
         return mapped;
       }
@@ -741,15 +777,14 @@ export class StopDetectionEngine {
   }
 
   /**
-   * Backfills and calculates stop durations from existing historical database records.
-   * - Reads historical GPS records from Supabase (telemetry_history and vehicle_telemetry).
-   * - Analyzes historical speed, coordinates, timestamps and engine status.
-   * - Identifies continuous stationary periods of at least 2 minutes (120s).
-   * - Avoids duplicate stop records during repeated processing via deterministic IDs.
-   * - Preserves original timestamps.
-   * - Clearly marks records with `source: "database_history"`.
-   * - Never invents or estimates missing GPS data.
-   * - Returns diagnostic summary (processedCount, stopsCreated, earliestDate).
+   * Backfills and calculates stop durations from actual time-series GPS readings in telemetry_history.
+   * - Queries telemetry_history with pagination and chronological ordering.
+   * - Never uses vehicle_telemetry snapshot intervals.
+   * - Validates coordinates, filters duplicate timestamps, handles telemetry gaps.
+   * - Gaps > 120s are excluded from stationary duration and close stops as INTERRUPTED.
+   * - Uses valid RFC4122 UUID primary keys and deterministic dedup_key with database unique constraint.
+   * - Distinguishes COMPLETED, ACTIVE and INTERRUPTED events.
+   * - Preserves actual historical timestamps and never invents missing data.
    */
   public async processHistoricalGpsRecords(): Promise<{
     processedCount: number;
@@ -761,39 +796,41 @@ export class StopDetectionEngine {
     let earliestDate: string | null = null;
 
     try {
-      // 1. Fetch vehicle registry metadata for vehicle_number, model, driver
-      const { data: vList } = await supabase
-        .from("vehicles")
-        .select("id, number, model");
+      // 1. Fetch vehicle registry metadata
+      const { data: vList } = await supabase.from("vehicles").select("id, number, model");
       const vMap = new Map<string, any>();
       (vList || []).forEach((v: any) => vMap.set(v.id, v));
 
-      const { data: dList } = await supabase
-        .from("drivers")
-        .select("id, name");
+      const { data: dList } = await supabase.from("drivers").select("id, name");
       const dMap = new Map<string, any>();
       (dList || []).forEach((d: any) => dMap.set(d.id, d));
 
-      // 2. Fetch all telemetry_history records (time-series)
-      const { data: histData } = await supabase
-        .from("telemetry_history")
-        .select("*")
-        .order("recorded_at", { ascending: true });
-
-      // 3. Fetch all vehicle_telemetry snapshots
-      const { data: vtData } = await supabase
-        .from("vehicle_telemetry")
-        .select("*")
-        .order("last_update", { ascending: true });
-
-      // Group historical telemetry points by vehicle in chronological order
+      // 2. Paginated fetch of time-series readings from telemetry_history
+      const pageSize = 1000;
+      let page = 0;
+      let hasMore = true;
       const vehicleHistory = new Map<string, TelemetryPoint[]>();
 
-      if (Array.isArray(histData) && histData.length > 0) {
-        for (const h of histData) {
+      while (hasMore) {
+        const { data: pageData, error } = await supabase
+          .from("telemetry_history")
+          .select("*")
+          .order("recorded_at", { ascending: true })
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+
+        if (error || !pageData || pageData.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        for (const h of pageData) {
           if (!h.vehicle_id || !h.recorded_at) continue;
           const tsMs = safeTimestampToMs(h.recorded_at);
           if (!tsMs) continue;
+
+          const lat = Number(h.lat);
+          const lng = Number(h.lng);
+          if (!isValidCoordinate(lat, lng)) continue;
 
           if (!earliestDate || h.recorded_at < earliestDate) {
             earliestDate = h.recorded_at;
@@ -804,29 +841,99 @@ export class StopDetectionEngine {
           pts.push({
             vehicleId: h.vehicle_id,
             vehicleNumber: vObj?.number || "Vehicle",
+            driverId: h.driver_id || null,
+            driverName: h.driver_name || null,
             timestamp: h.recorded_at,
-            speed: Number(h.speed) || 0,
-            lat: Number(h.lat) || 0,
-            lng: Number(h.lng) || 0,
+            speed: Math.max(0, Number(h.speed) || 0),
+            lat,
+            lng,
             engineOn: Boolean(h.engine_on || h.ignition),
             location: h.location || "Historical Track",
-            source: "database_history" as any,
+            source: "database_history",
           });
           vehicleHistory.set(h.vehicle_id, pts);
           processedCount++;
         }
+
+        if (pageData.length < pageSize) {
+          hasMore = false;
+        } else {
+          page++;
+        }
       }
 
-      // If time-series history records exist, process them through chronological stop detector
-      for (const [vehicleId, points] of vehicleHistory.entries()) {
-        points.sort((a, b) => safeTimestampToMs(a.timestamp)! - safeTimestampToMs(b.timestamp)!);
+      const now = Date.now();
+
+      // 3. Process time-series points per vehicle chronologically
+      for (const [vehicleId, rawPoints] of vehicleHistory.entries()) {
+        // Strict chronological sort
+        rawPoints.sort((a, b) => safeTimestampToMs(a.timestamp)! - safeTimestampToMs(b.timestamp)!);
+
+        // Deduplicate consecutive identical timestamps
+        const points: TelemetryPoint[] = [];
+        let lastSeenTs = -1;
+        for (const pt of rawPoints) {
+          const ts = safeTimestampToMs(pt.timestamp)!;
+          if (ts !== lastSeenTs) {
+            points.push(pt);
+            lastSeenTs = ts;
+          }
+        }
 
         let provisionalStartMs: number | null = null;
         let provisionalPt: TelemetryPoint | null = null;
+        let prevPointMs: number | null = null;
 
         for (let i = 0; i < points.length; i++) {
           const pt = points[i];
           const tsMs = safeTimestampToMs(pt.timestamp)!;
+
+          // Check for telemetry gap (> 120s silence)
+          if (prevPointMs !== null && tsMs - prevPointMs > this.config.staleThresholdSec * 1000) {
+            // Signal was disconnected. If provisional stationary duration >= 120s, finalize as INTERRUPTED
+            if (provisionalStartMs !== null) {
+              const stationaryDurationSec = Math.round((prevPointMs - provisionalStartMs) / 1000);
+              if (stationaryDurationSec >= this.config.stopDurationThresholdSec) {
+                const startedAtIso = new Date(provisionalStartMs).toISOString();
+                const dedupKey = `hist:${vehicleId}:${startedAtIso}`;
+
+                const histStop: VehicleStopEvent = {
+                  id: generateUuid(),
+                  dedup_key: dedupKey,
+                  vehicle_id: vehicleId,
+                  vehicle_number: pt.vehicleNumber || "Vehicle",
+                  driver_id: pt.driverId || null,
+                  driver_name: pt.driverName || null,
+                  started_at: startedAtIso,
+                  ended_at: new Date(prevPointMs).toISOString(),
+                  duration_seconds: stationaryDurationSec,
+                  start_lat: provisionalPt?.lat || pt.lat,
+                  start_lng: provisionalPt?.lng || pt.lng,
+                  end_lat: pt.lat,
+                  end_lng: pt.lng,
+                  location: provisionalPt?.location || pt.location || "En Route",
+                  engine_on: Boolean(provisionalPt?.engineOn),
+                  status: "INTERRUPTED",
+                  source: "database_history",
+                  created_at: startedAtIso,
+                  updated_at: new Date(prevPointMs).toISOString(),
+                };
+
+                const existingIdx = this.confirmedStops.findIndex(
+                  (s) => s.dedup_key === dedupKey || s.id === histStop.id
+                );
+                if (existingIdx === -1) {
+                  this.confirmedStops.push(histStop);
+                  stopsCreated++;
+                  this.persistStopToSupabase(histStop);
+                }
+              }
+            }
+            provisionalStartMs = null;
+            provisionalPt = null;
+          }
+
+          prevPointMs = tsMs;
 
           if (pt.speed <= this.config.stopSpeedThresholdKmh) {
             if (provisionalStartMs === null) {
@@ -839,17 +946,32 @@ export class StopDetectionEngine {
               const nextIsMoving = nextPt && nextPt.speed > this.config.resumeSpeedThresholdKmh;
 
               if (durSec >= this.config.stopDurationThresholdSec && (nextIsMoving || isLast)) {
-                const stopId = `hist-${vehicleId}-${provisionalStartMs}`;
-                const endMs = nextPt ? safeTimestampToMs(nextPt.timestamp)! : tsMs;
+                const startedAtIso = new Date(provisionalStartMs).toISOString();
+                const dedupKey = `hist:${vehicleId}:${startedAtIso}`;
+
+                // Distinguish ACTIVE vs COMPLETED vs INTERRUPTED
+                let stopStatus: StopStatus = "COMPLETED";
+                let endMs = nextPt ? safeTimestampToMs(nextPt.timestamp)! : tsMs;
+
+                if (isLast) {
+                  // If stationary reading was within stale threshold of current wall time, mark ACTIVE
+                  if (now - tsMs <= this.config.staleThresholdSec * 1000) {
+                    stopStatus = "ACTIVE";
+                    endMs = tsMs;
+                  } else {
+                    stopStatus = "INTERRUPTED";
+                  }
+                }
 
                 const histStop: VehicleStopEvent = {
-                  id: stopId,
+                  id: generateUuid(),
+                  dedup_key: dedupKey,
                   vehicle_id: vehicleId,
                   vehicle_number: pt.vehicleNumber || "Vehicle",
                   driver_id: pt.driverId || null,
                   driver_name: pt.driverName || null,
-                  started_at: new Date(provisionalStartMs).toISOString(),
-                  ended_at: new Date(endMs).toISOString(),
+                  started_at: startedAtIso,
+                  ended_at: stopStatus === "ACTIVE" ? null : new Date(endMs).toISOString(),
                   duration_seconds: Math.max(120, Math.round((endMs - provisionalStartMs) / 1000)),
                   start_lat: provisionalPt?.lat || pt.lat,
                   start_lng: provisionalPt?.lng || pt.lng,
@@ -857,20 +979,31 @@ export class StopDetectionEngine {
                   end_lng: pt.lng,
                   location: provisionalPt?.location || pt.location || "En Route",
                   engine_on: Boolean(provisionalPt?.engineOn),
-                  status: "COMPLETED",
+                  status: stopStatus,
                   source: "database_history",
-                  created_at: new Date(provisionalStartMs).toISOString(),
+                  created_at: startedAtIso,
                   updated_at: new Date(endMs).toISOString(),
                 };
 
-                const existingIdx = this.confirmedStops.findIndex((s) => s.id === stopId);
+                const existingIdx = this.confirmedStops.findIndex(
+                  (s) => s.dedup_key === dedupKey || s.id === histStop.id
+                );
                 if (existingIdx === -1) {
-                  this.confirmedStops.push(histStop);
-                  stopsCreated++;
-                  this.persistStopToSupabase(histStop);
+                  // Check that we don't overwrite an existing active stop for this vehicle
+                  const activeIdx = this.confirmedStops.findIndex(
+                    (s) => s.vehicle_id === vehicleId && s.status === "ACTIVE"
+                  );
+                  if (stopStatus !== "ACTIVE" || activeIdx === -1) {
+                    this.confirmedStops.push(histStop);
+                    stopsCreated++;
+                    this.persistStopToSupabase(histStop);
+                  }
                 }
-                provisionalStartMs = null;
-                provisionalPt = null;
+
+                if (stopStatus !== "ACTIVE") {
+                  provisionalStartMs = null;
+                  provisionalPt = null;
+                }
               }
             }
           } else {
@@ -880,62 +1013,9 @@ export class StopDetectionEngine {
         }
       }
 
-      // Also process vehicle_telemetry snapshot records
-      if (Array.isArray(vtData) && vtData.length > 0) {
-        for (const vt of vtData) {
-          if (!vt.vehicle_id || !vt.last_update) continue;
-          if (!earliestDate || vt.last_update < earliestDate) {
-            earliestDate = vt.last_update;
-          }
-          processedCount++;
-
-          const startMs = safeTimestampToMs(vt.last_update);
-          const endMs = safeTimestampToMs(vt.updated_at);
-          const speed = Number(vt.speed) || 0;
-
-          if (startMs && endMs && speed <= this.config.stopSpeedThresholdKmh) {
-            const durationSec = Math.round((endMs - startMs) / 1000);
-            if (durationSec >= this.config.stopDurationThresholdSec) {
-              const stopId = `hist-${vt.vehicle_id}-${startMs}`;
-              const vObj = vMap.get(vt.vehicle_id);
-
-              const histStop: VehicleStopEvent = {
-                id: stopId,
-                vehicle_id: vt.vehicle_id,
-                vehicle_number: vObj?.number || "Fleet Unit",
-                vehicle_model: vObj?.model,
-                driver_id: null,
-                driver_name: null,
-                started_at: new Date(startMs).toISOString(),
-                ended_at: new Date(endMs).toISOString(),
-                duration_seconds: durationSec,
-                start_lat: Number(vt.lat) || 0,
-                start_lng: Number(vt.lng) || 0,
-                end_lat: Number(vt.lat) || 0,
-                end_lng: Number(vt.lng) || 0,
-                location: vt.location || "Depot / Service Yard",
-                engine_on: Boolean(vt.engine_on || vt.ignition),
-                status: "COMPLETED",
-                source: "database_history",
-                created_at: new Date(startMs).toISOString(),
-                updated_at: new Date(endMs).toISOString(),
-              };
-
-              const existingIdx = this.confirmedStops.findIndex((s) => s.id === stopId);
-              if (existingIdx === -1) {
-                this.confirmedStops.push(histStop);
-                stopsCreated++;
-                this.persistStopToSupabase(histStop);
-              }
-            }
-          }
-        }
-      }
-
-      // Keep confirmed stops sorted chronologically (newest first for display)
+      // Sort confirmed stops chronologically (newest first for display)
       this.confirmedStops.sort((a, b) => safeTimestampToMs(b.started_at)! - safeTimestampToMs(a.started_at)!);
       this.saveToStorage();
-
     } catch (err) {
       console.warn("[Stop Tracking] Historical GPS backfill error:", err);
     }

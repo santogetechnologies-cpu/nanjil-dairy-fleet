@@ -465,8 +465,10 @@ export default function VehicleStopHistoryPage() {
             <button
               type="button"
               onClick={() => {
-                navigator.clipboard.writeText(`CREATE TABLE IF NOT EXISTS public.vehicle_stop_events (
+                navigator.clipboard.writeText(`-- Hardened Vehicle Stop Tracking Migration
+CREATE TABLE IF NOT EXISTS public.vehicle_stop_events (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  dedup_key         TEXT UNIQUE,
   vehicle_id        UUID NOT NULL REFERENCES public.vehicles(id) ON DELETE CASCADE,
   driver_id         UUID REFERENCES public.drivers(id) ON DELETE SET NULL,
   started_at        TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -483,16 +485,40 @@ export default function VehicleStopHistoryPage() {
   created_at        TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now()) NOT NULL,
   updated_at        TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now()) NOT NULL
 );
+ALTER TABLE public.vehicle_stop_events ADD COLUMN IF NOT EXISTS dedup_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_stop_events_dedup ON public.vehicle_stop_events(dedup_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_stop_events_one_active ON public.vehicle_stop_events(vehicle_id) WHERE (status = 'ACTIVE');
 CREATE INDEX IF NOT EXISTS idx_vehicle_stop_events_vehicle_started ON public.vehicle_stop_events(vehicle_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vehicle_stop_events_status ON public.vehicle_stop_events(status);
-CREATE INDEX IF NOT EXISTS idx_vehicle_stop_events_driver ON public.vehicle_stop_events(driver_id);
-CREATE INDEX IF NOT EXISTS idx_vehicle_stop_events_started_at ON public.vehicle_stop_events(started_at DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_stop_events_one_active ON public.vehicle_stop_events(vehicle_id) WHERE (status = 'ACTIVE');
+
+CREATE TABLE IF NOT EXISTS public.stop_tracking_checkpoints (
+  source            TEXT PRIMARY KEY,
+  last_recorded_at  TIMESTAMP WITH TIME ZONE,
+  updated_at        TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc', now()) NOT NULL
+);
+
 ALTER TABLE public.vehicle_stop_events ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow select stop events" ON public.vehicle_stop_events FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Allow insert stop events" ON public.vehicle_stop_events FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY "Allow update stop events" ON public.vehicle_stop_events FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
-GRANT SELECT, INSERT, UPDATE ON public.vehicle_stop_events TO anon, authenticated;`);
+ALTER TABLE public.stop_tracking_checkpoints ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "fleet_stops_select" ON public.vehicle_stop_events FOR SELECT TO authenticated
+  USING (public.get_user_role() IN ('admin', 'manager', 'operations') OR driver_id IN (SELECT id FROM public.drivers WHERE profile_id = auth.uid()));
+
+CREATE POLICY "fleet_stops_mod" ON public.vehicle_stop_events FOR ALL TO authenticated
+  USING (public.get_user_role() IN ('admin', 'manager', 'operations'))
+  WITH CHECK (public.get_user_role() IN ('admin', 'manager', 'operations'));
+
+REVOKE ALL ON public.vehicle_stop_events FROM anon;
+REVOKE ALL ON public.stop_tracking_checkpoints FROM anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.vehicle_stop_events TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.stop_tracking_checkpoints TO authenticated;
+
+CREATE OR REPLACE VIEW public.v_vehicle_stop_summary WITH (security_invoker = true) AS
+SELECT s.*, v.number AS vehicle_number, v.model AS vehicle_model, COALESCE(d.name, 'Unassigned') AS driver_name
+FROM public.vehicle_stop_events s
+JOIN public.vehicles v ON s.vehicle_id = v.id
+LEFT JOIN public.drivers d ON s.driver_id = d.id;
+REVOKE ALL ON public.v_vehicle_stop_summary FROM anon;
+GRANT SELECT ON public.v_vehicle_stop_summary TO authenticated;`);
               alert("Supabase SQL migration copied to clipboard! Paste and run it in your Supabase Dashboard SQL Editor.");
             }}
             className="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 border border-amber-300 text-amber-900 rounded-xl font-semibold transition-colors cursor-pointer shrink-0"

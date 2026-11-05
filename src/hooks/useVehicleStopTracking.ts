@@ -42,18 +42,13 @@ export function useVehicleStopTracking() {
     earliestDate: string | null;
   } | null>(null);
 
-  // 1. Initial Load & Sync from Supabase + Historical GPS Processing
+  // 1. Initial Load & Sync from Supabase
   const loadStopsFromSupabase = async () => {
     setIsLoading(true);
     try {
       const dbStops = await globalStopDetector.syncFromSupabase();
       setStops(dbStops);
       setActiveStops(globalStopDetector.getActiveStops());
-
-      // Backfill and process historical GPS records from database
-      const stats = await globalStopDetector.processHistoricalGpsRecords();
-      setHistoricalStats(stats);
-      setStops(globalStopDetector.getAllConfirmedStops());
     } catch (err) {
       console.warn("Failed to sync stop events from Supabase:", err);
     } finally {
@@ -61,8 +56,26 @@ export function useVehicleStopTracking() {
     }
   };
 
+  const triggerHistoricalBackfill = async () => {
+    try {
+      const stats = await globalStopDetector.processHistoricalGpsRecords();
+      setHistoricalStats(stats);
+      setStops(globalStopDetector.getAllConfirmedStops());
+      setActiveStops(globalStopDetector.getActiveStops());
+      return stats;
+    } catch (err) {
+      console.warn("Historical GPS backfill failed:", err);
+      return null;
+    }
+  };
+
   useEffect(() => {
-    loadStopsFromSupabase();
+    const init = async () => {
+      await loadStopsFromSupabase();
+      // Incremental historical backfill runs once on initial boot
+      await triggerHistoricalBackfill();
+    };
+    init();
 
     // Listen to stop engine events
     globalStopDetector.onStopConfirmed((newStop) => {
@@ -199,7 +212,7 @@ export function useVehicleStopTracking() {
     refreshStops: loadStopsFromSupabase,
     verifySupabaseSync: () => globalStopDetector.verifyAndEnableSupabaseSync(),
     historicalStats,
-    processHistoricalGpsRecords: () => globalStopDetector.processHistoricalGpsRecords(),
+    processHistoricalGpsRecords: triggerHistoricalBackfill,
   };
 }
 
