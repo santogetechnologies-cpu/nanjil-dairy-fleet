@@ -703,6 +703,7 @@ export class StopDetectionEngine {
 
     for (const v of vehicles) {
       if (!v || !v.id) continue;
+      if (isPlaceholderVehicleNumber(v.number) || String(v.id).startsWith("unassigned-")) continue;
       // Reconcile any unassigned stop records with authentic vehicle number
       if (v.number && v.number !== 'Unassigned Vehicle' && v.number !== 'Fleet Asset') {
         for (const s of this.confirmedStops) {

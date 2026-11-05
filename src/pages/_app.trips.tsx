@@ -38,6 +38,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { useVehicles } from "@/hooks/useVehicleTracking";
 import { isGpsVehicle, KNOWN_NANJIL_DEVICE_MAP } from "@/lib/vehicle-stop-detection";
+import { toast } from "sonner";
 import {
   GpsPoint,
   RouteSegment,
@@ -496,6 +497,24 @@ export default function TripHistoryPage() {
     document.body.removeChild(link);
   }
 
+  // Reset all filters, date ranges, journey selections, and playback state to default
+  const handleResetTripHistory = useCallback(() => {
+    setIsPlaying(false);
+    setCurrentIndex(0);
+    setPlaybackSpeed(1);
+    setDateFilterMode("today");
+    setCustomStartDate(new Date(Date.now() - 24 * 3600 * 1000).toISOString().split("T")[0]);
+    setCustomEndDate(new Date().toISOString().split("T")[0]);
+    setSelectedDriverId("All");
+    setJourneyStatusFilter("All");
+    setSelectedJourneyId("all");
+    setMinDistanceKm(0);
+    if (vehicles.length > 0) {
+      setSelectedVehicleId(vehicles[0].id);
+    }
+    toast.success("Trip History filters and playback reset to defaults");
+  }, [vehicles]);
+
   // Print PDF Trip Report
   function printTripReport() {
     window.print();
@@ -509,6 +528,15 @@ export default function TripHistoryPage() {
         subtitle={`Historical Journey Investigation · Segmented GPS Routes · Authentic Backend Telemetry`}
         actions={
           <div className="flex items-center gap-2">
+            <Button
+              onClick={handleResetTripHistory}
+              variant="outline"
+              className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs"
+              title="Reset all filters, dates, and playback to default"
+            >
+              <RotateCcw className="h-3.5 w-3.5 text-slate-500" />
+              Reset
+            </Button>
             <Button
               onClick={exportTripCsv}
               disabled={activeGpsPoints.length === 0}
@@ -637,6 +665,16 @@ export default function TripHistoryPage() {
                 <option value="Stationary">Stationary</option>
               </select>
             </div>
+
+            {/* Reset Filters Button */}
+            <button
+              onClick={handleResetTripHistory}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs"
+              title="Reset all filters, dates, and playback to default"
+            >
+              <RotateCcw className="h-3.5 w-3.5 text-slate-500" />
+              <span>Reset</span>
+            </button>
           </div>
         </div>
 
@@ -986,6 +1024,18 @@ export default function TripHistoryPage() {
               {/* Action Buttons & Speed Multipliers */}
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                 <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setCurrentIndex(0);
+                    }}
+                    disabled={activeGpsPoints.length === 0}
+                    className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Reset Playback (Restart from Beginning)"
+                  >
+                    <RotateCcw className="h-4 w-4 text-slate-500" />
+                  </button>
+
                   <button
                     onClick={() => setCurrentIndex(0)}
                     disabled={activeGpsPoints.length === 0}

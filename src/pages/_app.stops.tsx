@@ -58,7 +58,7 @@ import { useVehicleStopTracking } from "@/hooks/useVehicleStopTracking";
 import { useVehicles, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
 import { StopMapModal, formatStopDuration } from "@/components/StopMapModal";
 import type { VehicleStopEvent, StopStatus } from "@/lib/vehicle-stop-detection";
-import { safeTimestampToMs, resolveVehicleMetadata } from "@/lib/vehicle-stop-detection";
+import { safeTimestampToMs, resolveVehicleMetadata, isPlaceholderVehicleNumber } from "@/lib/vehicle-stop-detection";
 
 type ActiveTab = "live" | "history" | "analytics";
 type DateFilter = "all" | "today" | "yesterday" | "week" | "month";
@@ -81,7 +81,7 @@ export default function VehicleStopHistoryPage() {
   const [isBannerDismissed, setIsBannerDismissed] = useState(false);
   const liveVehicles = useVehicles();
 
-  // Purge any ghost unassigned states from local storage on mount
+  // Purge any ghost unassigned states and events from local storage on mount
   useEffect(() => {
     if (typeof localStorage !== "undefined") {
       try {
@@ -90,13 +90,28 @@ export default function VehicleStopHistoryPage() {
           const parsed = JSON.parse(rawStates);
           let changed = false;
           for (const key of Object.keys(parsed)) {
-            if (key.startsWith("unassigned-")) {
+            const st = parsed[key];
+            if (key.startsWith("unassigned-") || (st && isPlaceholderVehicleNumber(st.vehicleNumber))) {
               delete parsed[key];
               changed = true;
             }
           }
           if (changed) {
             localStorage.setItem("nanjil_vehicle_stop_states", JSON.stringify(parsed));
+          }
+        }
+
+        const rawEvents = localStorage.getItem("nanjil_vehicle_stop_events");
+        if (rawEvents) {
+          const parsedEvents = JSON.parse(rawEvents);
+          if (Array.isArray(parsedEvents)) {
+            const cleaned = parsedEvents.filter((ev: any) => {
+              const meta = resolveVehicleMetadata(ev.vehicle_id, ev.dedup_key, ev.vehicle_number, ev.vehicle_model);
+              return meta.number && !isPlaceholderVehicleNumber(meta.number) && !String(ev.vehicle_id).startsWith("unassigned-");
+            });
+            if (cleaned.length !== parsedEvents.length) {
+              localStorage.setItem("nanjil_vehicle_stop_events", JSON.stringify(cleaned));
+            }
           }
         }
       } catch {}
@@ -107,7 +122,7 @@ export default function VehicleStopHistoryPage() {
   const validActiveStops = useMemo(() => {
     return activeStops.filter((stop) => {
       const meta = resolveVehicleMetadata(stop.vehicle_id, stop.dedup_key, stop.vehicle_number, stop.vehicle_model);
-      return meta.number && meta.number !== "Unassigned Vehicle" && meta.number !== "Fleet Asset";
+      return meta.number && !isPlaceholderVehicleNumber(meta.number);
     });
   }, [activeStops]);
 
@@ -135,13 +150,13 @@ export default function VehicleStopHistoryPage() {
   const vehicleOptions = useMemo(() => {
     const map = new Map<string, string>();
     liveVehicles.forEach((v) => {
-      if (v.number && v.number !== "Unassigned Vehicle" && v.number !== "Fleet Asset") {
+      if (v.number && !isPlaceholderVehicleNumber(v.number)) {
         map.set(v.number, v.number);
       }
     });
     stops.forEach((s) => {
       const meta = resolveVehicleMetadata(s.vehicle_id, s.dedup_key, s.vehicle_number, s.vehicle_model);
-      if (meta.number && meta.number !== "Unassigned Vehicle" && meta.number !== "Fleet Asset") {
+      if (meta.number && !isPlaceholderVehicleNumber(meta.number)) {
         map.set(meta.number, meta.number);
       }
     });
@@ -170,6 +185,9 @@ export default function VehicleStopHistoryPage() {
     return stops.filter((stop) => {
       const meta = resolveVehicleMetadata(stop.vehicle_id, stop.dedup_key, stop.vehicle_number, stop.vehicle_model);
       const vehicleNum = meta.number;
+      if (!vehicleNum || isPlaceholderVehicleNumber(vehicleNum)) {
+        return false;
+      }
       const startMs = safeTimestampToMs(stop.started_at);
 
       // Date Range Filter
