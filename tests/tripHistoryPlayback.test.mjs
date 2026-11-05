@@ -530,3 +530,4 @@ test("24. Existing Trip and Route workflows remain unaffected: Road routing and 
   // GPS vehicle checker continues to work
   assert.equal(isGpsVehicle({ number: "TN 75 F 4323", device_id: "863110086146753" }), true);
 });
+
