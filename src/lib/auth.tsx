@@ -90,7 +90,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem("nanjil_driver_session");
 
     // Supabase Auth session is the sole authority
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session }, error }) => {
+      if (error) {
+        console.warn("[Auth Init] Stale session or expired refresh token detected. Purging local auth cache:", error.message);
+        try {
+          await supabase.auth.signOut({ scope: "local" });
+        } catch {}
+        setUser(null);
+        setReady(true);
+        return;
+      }
       if (session?.user) {
         try {
           const u = await fetchProfile(session.user.id, session.user.email!, session.user.user_metadata);
