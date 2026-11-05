@@ -46,6 +46,7 @@ import { useAuth } from "@/lib/auth";
 import { DEFAULT_SPEED_LIMIT_KMH, getOverspeedStatus, globalOverspeedManager } from "@/lib/overspeed";
 import { useVehicles, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
 import { useOverspeedMonitor } from "@/hooks/useOverspeed";
+import { isGpsVehicle } from "@/lib/vehicle-stop-detection";
 
 export interface SpeedingIncident {
   id: string;
