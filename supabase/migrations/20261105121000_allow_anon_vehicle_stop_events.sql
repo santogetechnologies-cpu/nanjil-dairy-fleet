@@ -60,3 +60,4 @@ CREATE POLICY "anon_mod_checkpoints"
   TO anon
   USING (true)
   WITH CHECK (true);
+
