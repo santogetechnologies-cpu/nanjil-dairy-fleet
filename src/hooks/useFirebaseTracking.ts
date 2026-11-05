@@ -375,21 +375,23 @@ export function usePureFirebaseTracking() {
               if (elapsed >= 15000 || spdDiff >= 5 || posDiff >= 0.0005) {
                 lastIngestTimesRef.current.set(cleanDevId, { time: now, speed, lat, lng });
                 const engineOn = Boolean(data.engine_on);
-                supabase.rpc("ingest_emqx_telemetry", {
-                  p_device_id: cleanDevId,
-                  p_timestamp: new Date().toISOString(),
-                  p_lat: lat,
-                  p_lng: lng,
-                  p_speed: speed,
-                  p_fuel: data.fuel != null ? Number(data.fuel) : 75,
-                  p_temperature: data.temperature != null ? Number(data.temperature) : 25,
-                  p_humidity: data.humidity != null ? Number(data.humidity) : 60,
-                  p_engine_on: engineOn,
-                  p_ignition: Boolean(data.ignition ?? engineOn),
-                  p_odometer: data.odometer != null ? Number(data.odometer) : null,
-                  p_engine_hours: data.engine_hours != null ? Number(data.engine_hours) : null,
-                  p_location: `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
-                }).catch(() => {});
+                Promise.resolve(
+                  supabase.rpc("ingest_emqx_telemetry", {
+                    p_device_id: cleanDevId,
+                    p_timestamp: new Date().toISOString(),
+                    p_lat: lat,
+                    p_lng: lng,
+                    p_speed: speed,
+                    p_fuel: data.fuel != null ? Number(data.fuel) : 75,
+                    p_temperature: data.temperature != null ? Number(data.temperature) : 25,
+                    p_humidity: data.humidity != null ? Number(data.humidity) : 60,
+                    p_engine_on: engineOn,
+                    p_ignition: Boolean(data.ignition ?? engineOn),
+                    p_odometer: data.odometer != null ? Number(data.odometer) : null,
+                    p_engine_hours: data.engine_hours != null ? Number(data.engine_hours) : null,
+                    p_location: `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+                  })
+                ).catch(() => {});
               }
             }
           }
