@@ -42,6 +42,97 @@ export const DEFAULT_STOP_CONFIG: StopDetectionConfig = {
 // ── TYPES ────────────────────────────────────────────────────────────────────
 export type StopStatus = "ACTIVE" | "COMPLETED" | "INTERRUPTED";
 
+export const KNOWN_NANJIL_DEVICE_MAP: Record<string, { id: string; number: string; model: string }> = {
+  "863110086146753": { id: "09b85a4a-1d9f-43f0-8343-ace9d27a1670", number: "TN 75 F 4323", model: "Eicher Pro 2049" },
+  "863110086146985": { id: "1b115b9d-6357-4a9e-8e76-1d59497695af", number: "TN 75 S 9826", model: "Tata 407 Gold SFC" },
+  "863110086150292": { id: "325081e0-a535-4269-8239-582de0f2ba66", number: "TN 75 R 9952", model: "Tata 407 Gold SFC" },
+  "863110086162107": { id: "7b9543e8-bcdd-4fb6-ad83-a78d92be4176", number: "TN 75 S 1688", model: "20 KL" },
+  "863110086164111": { id: "f30c9dcd-56a2-4b6c-bb93-d1f4c458682c", number: "TN 75 BF 0320", model: "Mahindra Bolero Maxi Truck" },
+  "863110086186932": { id: "d3887a78-ac32-4b63-b3c0-61563ad9f3d7", number: "TN 75 M 0041", model: "75 kl" },
+  "863110086192104": { id: "d0fea864-64a4-4148-b3b2-600f68459583", number: "TN 75 BC 2219", model: "Unknown Model" },
+  "863110086157065": { id: "57fcf174-88c7-4e05-be26-0971f4c5c6e8", number: "TN 75 BC 3835", model: "Eicher Pro" },
+  "863110086135988": { id: "6fe7650b-a054-46ab-b549-422565f7d3b3", number: "TN 75 C 8204", model: "Tata 407" },
+  "863110086146696": { id: "11318240-9a03-4e00-843c-dc78a80771fe", number: "TN75AJ-7212", model: "Mahindra Bolero" },
+};
+
+/**
+ * Resolves vehicle metadata (number, model, real UUID) from a vehicle ID, device ID, or dedup_key.
+ */
+export function resolveVehicleMetadata(
+  vehicleId?: string | null,
+  dedupKey?: string | null,
+  currentNumber?: string | null,
+  currentModel?: string | null
+): { id?: string; number: string; model?: string } {
+  const isPlaceholderNumber =
+    !currentNumber ||
+    currentNumber === "Unassigned Vehicle" ||
+    currentNumber === "Fleet Asset" ||
+    currentNumber === "Fleet Unit" ||
+    currentNumber === "Vehicle" ||
+    currentNumber === "Unknown";
+
+  if (!isPlaceholderNumber) {
+    return { id: vehicleId || undefined, number: currentNumber!, model: currentModel || undefined };
+  }
+
+  const cleanVid = (vehicleId || "").trim();
+  const cleanKey = (dedupKey || "").trim();
+
+  // 1. Check known devices by clean device ID or real UUID
+  for (const [devId, meta] of Object.entries(KNOWN_NANJIL_DEVICE_MAP)) {
+    if (
+      cleanVid === meta.id ||
+      cleanVid === devId ||
+      cleanVid === `unassigned-${devId}` ||
+      cleanVid.includes(devId) ||
+      cleanVid.includes(meta.id) ||
+      cleanKey.includes(devId) ||
+      cleanKey.includes(meta.id)
+    ) {
+      return { id: meta.id, number: meta.number, model: meta.model || currentModel || undefined };
+    }
+  }
+
+  // 2. Check cached Supabase vehicles from localStorage
+  if (typeof localStorage !== "undefined") {
+    try {
+      const cached = localStorage.getItem("nanjil_cached_supabase_vehicles");
+      if (cached) {
+        const vehicles: any[] = JSON.parse(cached);
+        if (Array.isArray(vehicles)) {
+          const matched = vehicles.find((v) => {
+            if (!v) return false;
+            if (v.id && (cleanVid === v.id || cleanVid.includes(v.id) || cleanKey.includes(v.id))) return true;
+            if (v.device_id) {
+              const dev = String(v.device_id).trim();
+              if (
+                cleanVid === dev ||
+                cleanVid === `unassigned-${dev}` ||
+                cleanVid.includes(dev) ||
+                cleanKey.includes(dev)
+              ) {
+                return true;
+              }
+            }
+            return false;
+          });
+          if (matched && matched.number) {
+            return {
+              id: matched.id,
+              number: matched.number,
+              model: matched.model || currentModel || undefined,
+            };
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return { id: vehicleId || undefined, number: currentNumber || "Unassigned Vehicle", model: currentModel || undefined };
+}
+
+
 export interface TelemetryPoint {
   vehicleId: string;
   vehicleNumber?: string;
@@ -563,6 +654,32 @@ export class StopDetectionEngine {
 
     for (const v of vehicles) {
       if (!v || !v.id) continue;
+      // Reconcile any unassigned stop records with authentic vehicle number
+      if (v.number && v.number !== 'Unassigned Vehicle' && v.number !== 'Fleet Asset') {
+        for (const s of this.confirmedStops) {
+          if (
+            s.vehicle_id === v.id ||
+            s.vehicle_id === `unassigned-${v.deviceId}` ||
+            (v.deviceId && s.dedup_key?.includes(v.deviceId)) ||
+            (v.id && s.dedup_key?.includes(v.id))
+          ) {
+            if (!s.vehicle_number || s.vehicle_number === 'Unassigned Vehicle' || s.vehicle_number === 'Fleet Asset') {
+              s.vehicle_number = v.number;
+              if (v.model) s.vehicle_model = v.model;
+              s.vehicle_id = v.id;
+            }
+          }
+        }
+        const st = this.states.get(v.id) || (v.deviceId ? this.states.get(`unassigned-${v.deviceId}`) : undefined);
+        if (st) {
+          st.vehicleNumber = v.number;
+          if (st.activeStop) {
+            st.activeStop.vehicle_number = v.number;
+            if (v.model) st.activeStop.vehicle_model = v.model;
+            st.activeStop.vehicle_id = v.id;
+          }
+        }
+      }
       const ts = safeTimestampToMs(v.lastUpdate) || now;
       const pt: TelemetryPoint = {
         vehicleId: v.id,
@@ -633,14 +750,32 @@ export class StopDetectionEngine {
     const active: VehicleStopEvent[] = [];
     for (const state of this.states.values()) {
       if (state.activeStop) {
-        active.push({ ...state.activeStop });
+        const s = { ...state.activeStop };
+        const meta = resolveVehicleMetadata(s.vehicle_id, s.dedup_key, s.vehicle_number, s.vehicle_model);
+        if (meta.number && meta.number !== s.vehicle_number) {
+          s.vehicle_number = meta.number;
+          if (meta.model) s.vehicle_model = meta.model;
+          if (meta.id) s.vehicle_id = meta.id;
+        }
+        active.push(s);
       }
     }
     return active;
   }
 
   public getAllConfirmedStops(): VehicleStopEvent[] {
-    return [...this.confirmedStops];
+    return this.confirmedStops.map((s) => {
+      const meta = resolveVehicleMetadata(s.vehicle_id, s.dedup_key, s.vehicle_number, s.vehicle_model);
+      if (meta.number && meta.number !== s.vehicle_number) {
+        return {
+          ...s,
+          vehicle_number: meta.number,
+          vehicle_model: meta.model || s.vehicle_model,
+          vehicle_id: meta.id || s.vehicle_id,
+        };
+      }
+      return { ...s };
+    });
   }
 
   public getVehicleState(vehicleId: string): VehicleStopTrackingState | undefined {
@@ -648,6 +783,12 @@ export class StopDetectionEngine {
   }
 
   private addConfirmedStop(stop: VehicleStopEvent) {
+    const meta = resolveVehicleMetadata(stop.vehicle_id, stop.dedup_key, stop.vehicle_number, stop.vehicle_model);
+    if (meta.number && meta.number !== stop.vehicle_number) {
+      stop.vehicle_number = meta.number;
+      if (meta.model) stop.vehicle_model = meta.model;
+      if (meta.id) stop.vehicle_id = meta.id;
+    }
     // Deduplicate by ID
     const idx = this.confirmedStops.findIndex((s) => s.id === stop.id);
     if (idx >= 0) {
@@ -671,6 +812,12 @@ export class StopDetectionEngine {
   }
 
   private updateConfirmedStop(stop: VehicleStopEvent) {
+    const meta = resolveVehicleMetadata(stop.vehicle_id, stop.dedup_key, stop.vehicle_number, stop.vehicle_model);
+    if (meta.number && meta.number !== stop.vehicle_number) {
+      stop.vehicle_number = meta.number;
+      if (meta.model) stop.vehicle_model = meta.model;
+      if (meta.id) stop.vehicle_id = meta.id;
+    }
     const idx = this.confirmedStops.findIndex((s) => s.id === stop.id);
     if (idx >= 0) {
       this.confirmedStops[idx] = stop;
@@ -1116,6 +1263,15 @@ export class StopDetectionEngine {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
           this.confirmedStops = parsed;
+          // Reconcile vehicle numbers in loadFromStorage
+          for (const s of this.confirmedStops) {
+            const meta = resolveVehicleMetadata(s.vehicle_id, s.dedup_key, s.vehicle_number, s.vehicle_model);
+            if (meta.number && meta.number !== s.vehicle_number) {
+              s.vehicle_number = meta.number;
+              if (meta.model) s.vehicle_model = meta.model;
+              if (meta.id) s.vehicle_id = meta.id;
+            }
+          }
         }
       }
 
@@ -1127,6 +1283,15 @@ export class StopDetectionEngine {
             const cast = st as VehicleStopTrackingState;
             if (cast.activeStop) {
               cast.lastFreshTelemetryMs = Date.now();
+              const meta = resolveVehicleMetadata(cast.activeStop.vehicle_id, cast.activeStop.dedup_key, cast.activeStop.vehicle_number, cast.activeStop.vehicle_model);
+              if (meta.number && meta.number !== cast.activeStop.vehicle_number) {
+                cast.activeStop.vehicle_number = meta.number;
+                if (meta.model) cast.activeStop.vehicle_model = meta.model;
+                if (meta.id) cast.activeStop.vehicle_id = meta.id;
+              }
+              if (meta.number && meta.number !== cast.vehicleNumber) {
+                cast.vehicleNumber = meta.number;
+              }
             }
             this.states.set(vId, cast);
           }
@@ -1161,6 +1326,7 @@ export class StopDetectionEngine {
           }
         }
       }
+      this.saveToStorage();
     } catch {
       // Ignore storage errors
     }

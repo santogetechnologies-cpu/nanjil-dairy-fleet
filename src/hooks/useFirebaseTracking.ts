@@ -1,3 +1,4 @@
+import { KNOWN_NANJIL_DEVICE_MAP } from '@/lib/vehicle-stop-detection';
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -385,7 +386,13 @@ export function usePureFirebaseTracking() {
         const sDevId = normalizeDeviceId(sv.device_id);
         if (!cleanDevId || !sDevId) return false;
         return cleanDevId === sDevId;
-      });
+      }) || (cleanDevId && KNOWN_NANJIL_DEVICE_MAP[cleanDevId] ? {
+        id: KNOWN_NANJIL_DEVICE_MAP[cleanDevId].id,
+        number: KNOWN_NANJIL_DEVICE_MAP[cleanDevId].number,
+        model: KNOWN_NANJIL_DEVICE_MAP[cleanDevId].model,
+        type: "Vehicle",
+        device_id: cleanDevId,
+      } as any : undefined);
 
       // If cleanDevId is 15 digits but not in loaded Supabase vehicles, trigger direct lookup on base vehicles table
       if (

@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui-kit";
 import type { VehicleStopEvent } from "@/lib/vehicle-stop-detection";
+import { resolveVehicleMetadata } from "@/lib/vehicle-stop-detection";
 
 interface Props {
   stop: VehicleStopEvent | null;
@@ -54,6 +55,15 @@ export function StopMapModal({ stop, onClose }: Props) {
 
   if (!stop) return null;
 
+  const vehicleMeta = resolveVehicleMetadata(
+    stop.vehicle_id,
+    stop.dedup_key,
+    stop.vehicle_number,
+    stop.vehicle_model
+  );
+  const displayVehicleNumber = vehicleMeta.number || stop.vehicle_number || "Fleet Vehicle";
+  const displayVehicleModel = vehicleMeta.model || stop.vehicle_model || "Fleet Unit";
+
   const lat = stop.start_lat || 8.1833;
   const lng = stop.start_lng || 77.4119;
 
@@ -72,7 +82,7 @@ export function StopMapModal({ stop, onClose }: Props) {
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold text-slate-900">
-                  {stop.vehicle_number || "Fleet Vehicle"}
+                  {displayVehicleNumber}
                 </h3>
                 <Badge
                   variant="outline"
@@ -130,7 +140,7 @@ export function StopMapModal({ stop, onClose }: Props) {
               <Marker longitude={lng} latitude={lat} anchor="bottom">
                 <div className="relative flex flex-col items-center group cursor-pointer">
                   <div className="px-2 py-1 rounded-md bg-slate-900 text-white text-[11px] font-bold shadow-md whitespace-nowrap mb-1">
-                    {stop.vehicle_number || "Vehicle"} ({formatStopDuration(stop.duration_seconds)})
+                    {displayVehicleNumber} ({formatStopDuration(stop.duration_seconds)})
                   </div>
                   <div className="h-8 w-8 rounded-full bg-red-600 border-2 border-white text-white flex items-center justify-center shadow-lg animate-bounce">
                     <MapPin className="h-4 w-4" />
@@ -201,8 +211,8 @@ export function StopMapModal({ stop, onClose }: Props) {
                 <div className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-100">
                   <Truck className="h-4 w-4 text-indigo-600 shrink-0" />
                   <div>
-                    <div className="font-bold text-slate-900">{stop.vehicle_number}</div>
-                    <div className="text-[11px] text-slate-400">{stop.vehicle_model || "Fleet Unit"}</div>
+                    <div className="font-bold text-slate-900">{displayVehicleNumber}</div>
+                    <div className="text-[11px] text-slate-400">{displayVehicleModel}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-100">

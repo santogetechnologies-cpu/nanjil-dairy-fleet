@@ -7,6 +7,7 @@ import {
   safeTimestampToMs,
   isValidCoordinate,
   haversineDistanceKm,
+  resolveVehicleMetadata,
 } from "../src/lib/vehicle-stop-detection.ts";
 
 import { GpsAverageSpeedTracker } from "../src/lib/gpsAverageSpeed.ts";
@@ -1089,4 +1090,46 @@ test("37. Provisional stationary continuity: < 2 min state preserved across refr
   assert.equal(pConfirm.stopEvent?.status, "ACTIVE");
   assert.equal(safeTimestampToMs(pConfirm.stopEvent?.started_at), t0, "Must retain original t0 timestamp");
   assert.equal(pConfirm.stopEvent?.duration_seconds, 120);
+});
+
+test("38. Vehicle Registration Resolution: Deterministically resolves device IDs and unassigned stops", () => {
+  // Case 1: unassigned-863110086146753 resolves to TN 75 F 4323
+  const meta1 = resolveVehicleMetadata("unassigned-863110086146753", null, "Unassigned Vehicle");
+  assert.equal(meta1.number, "TN 75 F 4323");
+  assert.equal(meta1.model, "Eicher Pro 2049");
+
+  // Case 2: dedup_key with device ID 863110086186932 resolves to TN 75 M 0041
+  const meta2 = resolveVehicleMetadata(null, "live:863110086186932:2026-11-05T12:00:00Z", "Unassigned Vehicle");
+  assert.equal(meta2.number, "TN 75 M 0041");
+
+  // Case 3: real UUID d0fea864-64a4-4148-b3b2-600f68459583 resolves to TN 75 BC 2219
+  const meta3 = resolveVehicleMetadata("d0fea864-64a4-4148-b3b2-600f68459583", null, "Fleet Asset");
+  assert.equal(meta3.number, "TN 75 BC 2219");
+
+  // Case 4: Engine batch reconciliation updates unassigned stops in memory
+  const engine = new StopDetectionEngine();
+  const vId = "unassigned-863110086164111";
+  const t0 = 1730700000000;
+
+  // Simulate initial unassigned stationary stop
+  engine.processTelemetry({
+    vehicleId: vId,
+    vehicleNumber: "Unassigned Vehicle",
+    timestamp: t0,
+    speed: 0,
+    lat: 8.2605,
+    lng: 77.2884,
+  });
+  engine.processTelemetry({
+    vehicleId: vId,
+    vehicleNumber: "Unassigned Vehicle",
+    timestamp: t0 + 130 * 1000,
+    speed: 0,
+    lat: 8.2605,
+    lng: 77.2884,
+  });
+
+  const activeStops = engine.getActiveStops();
+  assert.equal(activeStops.length, 1);
+  assert.equal(activeStops[0].vehicle_number, "TN 75 BF 0320", "Active stop must automatically resolve to TN 75 BF 0320");
 });

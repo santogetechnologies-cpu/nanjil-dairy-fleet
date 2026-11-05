@@ -58,7 +58,7 @@ import { useVehicleStopTracking } from "@/hooks/useVehicleStopTracking";
 import { useVehicles, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
 import { StopMapModal, formatStopDuration } from "@/components/StopMapModal";
 import type { VehicleStopEvent, StopStatus } from "@/lib/vehicle-stop-detection";
-import { safeTimestampToMs } from "@/lib/vehicle-stop-detection";
+import { safeTimestampToMs, resolveVehicleMetadata } from "@/lib/vehicle-stop-detection";
 
 type ActiveTab = "live" | "history" | "analytics";
 type DateFilter = "all" | "today" | "yesterday" | "week" | "month";
@@ -105,10 +105,15 @@ export default function VehicleStopHistoryPage() {
   const vehicleOptions = useMemo(() => {
     const map = new Map<string, string>();
     liveVehicles.forEach((v) => {
-      if (v.number) map.set(v.number, v.number);
+      if (v.number && v.number !== "Unassigned Vehicle" && v.number !== "Fleet Asset") {
+        map.set(v.number, v.number);
+      }
     });
     stops.forEach((s) => {
-      if (s.vehicle_number) map.set(s.vehicle_number, s.vehicle_number);
+      const meta = resolveVehicleMetadata(s.vehicle_id, s.dedup_key, s.vehicle_number, s.vehicle_model);
+      if (meta.number && meta.number !== "Unassigned Vehicle" && meta.number !== "Fleet Asset") {
+        map.set(meta.number, meta.number);
+      }
     });
     return Array.from(map.values()).sort();
   }, [liveVehicles, stops]);
@@ -133,6 +138,8 @@ export default function VehicleStopHistoryPage() {
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
     return stops.filter((stop) => {
+      const meta = resolveVehicleMetadata(stop.vehicle_id, stop.dedup_key, stop.vehicle_number, stop.vehicle_model);
+      const vehicleNum = meta.number;
       const startMs = safeTimestampToMs(stop.started_at);
 
       // Date Range Filter
@@ -147,7 +154,7 @@ export default function VehicleStopHistoryPage() {
       }
 
       // Vehicle Filter
-      if (vehicleFilter !== "All" && stop.vehicle_number !== vehicleFilter) {
+      if (vehicleFilter !== "All" && vehicleNum !== vehicleFilter) {
         return false;
       }
 
@@ -179,7 +186,7 @@ export default function VehicleStopHistoryPage() {
       // Search Query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchesVeh = (stop.vehicle_number || "").toLowerCase().includes(q);
+        const matchesVeh = (vehicleNum || "").toLowerCase().includes(q);
         const matchesDrv = (stop.driver_name || "").toLowerCase().includes(q);
         const matchesLoc = (stop.location || "").toLowerCase().includes(q);
         if (!matchesVeh && !matchesDrv && !matchesLoc) return false;
@@ -223,7 +230,8 @@ export default function VehicleStopHistoryPage() {
 
     filteredStops.forEach((s) => {
       const dur = s.duration_seconds || 0;
-      const vNum = s.vehicle_number || "Other";
+      const meta = resolveVehicleMetadata(s.vehicle_id, s.dedup_key, s.vehicle_number, s.vehicle_model);
+      const vNum = meta.number || "Other";
       const dName = s.driver_name || "Unassigned";
 
       // By Vehicle
@@ -318,20 +326,23 @@ export default function VehicleStopHistoryPage() {
       "Data Source",
     ];
 
-    const rows = filteredStops.map((s) => [
-      `"${s.vehicle_number || "Vehicle"}"`,
-      `"${s.driver_name || "Unassigned"}"`,
-      `"${s.started_at}"`,
-      `"${s.ended_at || "In Progress"}"`,
-      s.duration_seconds || 0,
-      `"${formatStopDuration(s.duration_seconds)}"`,
-      `"${s.start_lat}, ${s.start_lng}"`,
-      `"${s.end_lat ?? s.start_lat}, ${s.end_lng ?? s.start_lng}"`,
-      `"${(s.location || "En Route").replace(/"/g, '""')}"`,
-      s.engine_on ? '"Idle (Engine ON)"' : '"Parked (Engine OFF)"',
-      `"${s.status}"`,
-      s.source === "database_history" ? '"Historical GPS (DB)"' : '"Live GPS Telemetry"',
-    ]);
+    const rows = filteredStops.map((s) => {
+      const meta = resolveVehicleMetadata(s.vehicle_id, s.dedup_key, s.vehicle_number, s.vehicle_model);
+      return [
+        `"${meta.number || "Vehicle"}"`,
+        `"${s.driver_name || "Unassigned"}"`,
+        `"${s.started_at}"`,
+        `"${s.ended_at || "In Progress"}"`,
+        s.duration_seconds || 0,
+        `"${formatStopDuration(s.duration_seconds)}"`,
+        `"${s.start_lat}, ${s.start_lng}"`,
+        `"${s.end_lat ?? s.start_lat}, ${s.end_lng ?? s.start_lng}"`,
+        `"${(s.location || "En Route").replace(/"/g, '""')}"`,
+        s.engine_on ? '"Idle (Engine ON)"' : '"Parked (Engine OFF)"',
+        `"${s.status}"`,
+        s.source === "database_history" ? '"Historical GPS (DB)"' : '"Live GPS Telemetry"',
+      ];
+    });
 
     const csvContent = "\uFEFF" + [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -696,15 +707,16 @@ GRANT SELECT ON public.v_vehicle_stop_summary TO anon, authenticated;`);
                 ) : (
                   activeStops.map((stop) => {
                     const isLongStop = stop.duration_seconds >= 30 * 60; // 30 min+
+                    const meta = resolveVehicleMetadata(stop.vehicle_id, stop.dedup_key, stop.vehicle_number, stop.vehicle_model);
                     return (
                       <tr key={stop.id} className="hover:bg-slate-50/70 transition-colors">
                         <td className="py-3 px-3">
                           <div className="font-bold text-slate-900 flex items-center gap-1.5">
                             <Truck className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
-                            <span>{stop.vehicle_number}</span>
+                            <span>{meta.number}</span>
                           </div>
                           <div className="text-[10px] text-slate-400 mt-0.5 truncate max-w-[140px]">
-                            {stop.vehicle_model || "Fleet Asset"}
+                            {meta.model || stop.vehicle_model || "Fleet Asset"}
                           </div>
                         </td>
 
@@ -981,10 +993,18 @@ GRANT SELECT ON public.v_vehicle_stop_summary TO anon, authenticated;`);
                     </td>
                   </tr>
                 ) : (
-                  paginatedStops.map((stop) => (
+                  paginatedStops.map((stop) => {
+                    const meta = resolveVehicleMetadata(stop.vehicle_id, stop.dedup_key, stop.vehicle_number, stop.vehicle_model);
+                    return (
                     <tr key={stop.id} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="py-3 px-3 font-bold text-slate-900">
-                        {stop.vehicle_number}
+                      <td className="py-3 px-3">
+                        <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                          <Truck className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                          <span>{meta.number}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-0.5 truncate max-w-[140px]">
+                          {meta.model || stop.vehicle_model || "Fleet Asset"}
+                        </div>
                       </td>
 
                       <td className="py-3 px-3 text-slate-700 font-medium">
@@ -1075,7 +1095,8 @@ GRANT SELECT ON public.v_vehicle_stop_summary TO anon, authenticated;`);
                         </button>
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>
