@@ -50,6 +50,17 @@ export const KNOWN_NANJIL_DEVICE_MAP: Record<string, { id: string; number: strin
   "863110086164111": { id: "f30c9dcd-56a2-4b6c-bb93-d1f4c458682c", number: "TN 75 BF 0320", model: "Mahindra Bolero Maxi Truck" },
   "863110086186932": { id: "d3887a78-ac32-4b63-b3c0-61563ad9f3d7", number: "TN 75 M 0041", model: "75 kl" },
   "863110086192104": { id: "d0fea864-64a4-4148-b3b2-600f68459583", number: "TN 75 BC 2219", model: "Unknown Model" },
+};
+
+/** Authoritative 7 GPS hardware device IDs present in Nanjil Dairy Fleet */
+export const NANJIL_7_GPS_DEVICE_IDS = Object.keys(KNOWN_NANJIL_DEVICE_MAP);
+
+/** Set of valid Supabase vehicle UUIDs for the 7 physical GPS vehicles */
+export const NANJIL_7_GPS_VEHICLE_IDS = new Set(Object.values(KNOWN_NANJIL_DEVICE_MAP).map((v) => v.id));
+
+/** Extended map for resolving historical records from older decommissioned trackers */
+export const HISTORICAL_LEGACY_DEVICE_MAP: Record<string, { id: string; number: string; model: string }> = {
+  ...KNOWN_NANJIL_DEVICE_MAP,
   "863110086157065": { id: "57fcf174-88c7-4e05-be26-0971f4c5c6e8", number: "TN 75 BC 3835", model: "Eicher Pro" },
   "863110086135988": { id: "6fe7650b-a054-46ab-b549-422565f7d3b3", number: "TN 75 C 8204", model: "Tata 407" },
   "863110086146696": { id: "11318240-9a03-4e00-843c-dc78a80771fe", number: "TN75AJ-7212", model: "Mahindra Bolero" },
@@ -80,7 +91,7 @@ export function resolveVehicleMetadata(
   const cleanKey = (dedupKey || "").trim();
 
   // 1. Check known devices by clean device ID or real UUID
-  for (const [devId, meta] of Object.entries(KNOWN_NANJIL_DEVICE_MAP)) {
+  for (const [devId, meta] of Object.entries(HISTORICAL_LEGACY_DEVICE_MAP)) {
     if (
       cleanVid === meta.id ||
       cleanVid === devId ||
@@ -133,15 +144,22 @@ export function resolveVehicleMetadata(
 }
 
 /**
- * Checks whether a vehicle record is an authentic GPS-equipped unit.
+ * Checks whether a vehicle record is strictly one of the 7 authentic GPS-equipped units.
  * Matches by hardware device_id or registered GPS fleet mappings.
  */
 export function isGpsVehicle(v: { id?: string; number?: string; device_id?: string; deviceId?: string } | null | undefined): boolean {
   if (!v) return false;
   const devId = ((v.device_id || v.deviceId || "") as string).trim();
-  if (devId && devId !== "") return true;
-  for (const [knownDevId, meta] of Object.entries(KNOWN_NANJIL_DEVICE_MAP)) {
-    if (v.id === meta.id || devId === knownDevId) return true;
+  const cleanId = ((v.id || "") as string).trim();
+  const cleanNum = ((v.number || "") as string).replace(/\s+/g, "").toUpperCase();
+
+  // Match strictly against the 7 known GPS units
+  if (devId && KNOWN_NANJIL_DEVICE_MAP[devId]) return true;
+  if (cleanId && NANJIL_7_GPS_VEHICLE_IDS.has(cleanId)) return true;
+
+  for (const meta of Object.values(KNOWN_NANJIL_DEVICE_MAP)) {
+    if (meta.number.replace(/\s+/g, "").toUpperCase() === cleanNum) return true;
+    if (cleanId && meta.id === cleanId) return true;
   }
   return false;
 }

@@ -1152,3 +1152,26 @@ test("39. isGpsVehicle: Strictly isolates GPS-equipped vehicles from manual/non-
   assert.equal(isGpsVehicle(null), false);
   assert.equal(isGpsVehicle(undefined), false);
 });
+
+
+test("40. Strictly 7 GPS vehicles: Older decommissioned vehicles and non-GPS fleet assets return false", () => {
+  // Legacy non-GPS units must return false
+  assert.equal(isGpsVehicle({ number: "TN 75 BC 3835", device_id: "863110086157065" }), false);
+  assert.equal(isGpsVehicle({ number: "TN 75 C 8204", device_id: "863110086135988" }), false);
+  assert.equal(isGpsVehicle({ number: "TN75AJ-7212", device_id: "863110086146696" }), false);
+
+  // Exactly the 7 active physical GPS vehicles must return true
+  const gps7 = [
+    { number: "TN 75 BC 2219", device_id: "863110086192104" },
+    { number: "TN 75 BF 0320", device_id: "863110086164111" },
+    { number: "TN 75 F 4323", device_id: "863110086146753" },
+    { number: "TN 75 M 0041", device_id: "863110086186932" },
+    { number: "TN 75 R 9952", device_id: "863110086150292" },
+    { number: "TN 75 S 1688", device_id: "863110086162107" },
+    { number: "TN 75 S 9826", device_id: "863110086146985" },
+  ];
+
+  for (const v of gps7) {
+    assert.equal(isGpsVehicle(v), true, `Vehicle ${v.number} must be recognized as GPS-equipped`);
+  }
+});
