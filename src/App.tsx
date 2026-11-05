@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { Routes, Route, Navigate, useLocation, Link } from "react-router-dom";
 import { Loader2 } from "lucide-react";
+import { Toaster } from "@/components/ui/sonner";
 
 const IndexRedirect = lazy(() => import("./pages/index"));
 const LoginPage = lazy(() => import("./pages/login"));
@@ -56,6 +57,7 @@ function NotFound() {
 export default function App() {
   return (
     <Suspense fallback={<PageFallback />}>
+      <Toaster position="top-right" richColors />
       <Routes>
         <Route path="/" element={<IndexRedirect />} />
         <Route path="/login" element={<LoginPage />} />

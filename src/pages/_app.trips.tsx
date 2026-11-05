@@ -98,6 +98,7 @@ export default function TripHistoryPage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<1 | 2 | 5 | 10>(1);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [reloadTrigger, setReloadTrigger] = useState(0);
   const playbackTimerRef = useRef<any>(null);
 
   // Active abort controller for cancelling stale async queries
@@ -287,7 +288,7 @@ export default function TripHistoryPage() {
     return () => {
       controller.abort();
     };
-  }, [selectedVehicleId, dateRange.startUtcIso, dateRange.endUtcIso, selectedVehicle]);
+  }, [selectedVehicleId, dateRange.startUtcIso, dateRange.endUtcIso, selectedVehicle, reloadTrigger]);
 
   // 4. Determine Active Points for Display & Playback (Selected Journey vs All Points)
   const activeGpsPoints = useMemo(() => {
@@ -398,7 +399,13 @@ export default function TripHistoryPage() {
 
   // 12. Center map on playback position or auto-fit route bounds on load
   const fitMapToBounds = useCallback(() => {
-    if (!mapRef.current || activeGpsPoints.length < 2) return;
+    if (!mapRef.current) return;
+    if (activeGpsPoints.length < 2) {
+      const targetLng = activeGpsPoints[0]?.lng ?? 77.288373;
+      const targetLat = activeGpsPoints[0]?.lat ?? 8.260765;
+      mapRef.current.flyTo({ center: [targetLng, targetLat], zoom: 12, duration: 600 });
+      return;
+    }
     let minLng = activeGpsPoints[0].lng;
     let maxLng = activeGpsPoints[0].lng;
     let minLat = activeGpsPoints[0].lat;
@@ -497,8 +504,35 @@ export default function TripHistoryPage() {
     document.body.removeChild(link);
   }
 
-  // Reset all filters, date ranges, journey selections, and playback state to default
+  // Reset playback to start, pause, reset speed to 1x and center map on start
+  const handleResetPlayback = useCallback(() => {
+    if (playbackTimerRef.current) {
+      clearInterval(playbackTimerRef.current);
+    }
+    setIsPlaying(false);
+    setCurrentIndex(0);
+    setPlaybackSpeed(1);
+
+    if (activeGpsPoints.length > 0 && mapRef.current) {
+      const p = activeGpsPoints[0];
+      mapRef.current.easeTo({
+        center: [p.lng, p.lat],
+        duration: 400,
+      });
+    } else {
+      fitMapToBounds();
+    }
+
+    try {
+      toast.info("Playback restarted from 00:00");
+    } catch {}
+  }, [activeGpsPoints, fitMapToBounds]);
+
+  // Complete Reset: resets all filters, dates, journeys, playback, map camera and re-fetches
   const handleResetTripHistory = useCallback(() => {
+    if (playbackTimerRef.current) {
+      clearInterval(playbackTimerRef.current);
+    }
     setIsPlaying(false);
     setCurrentIndex(0);
     setPlaybackSpeed(1);
@@ -509,11 +543,23 @@ export default function TripHistoryPage() {
     setJourneyStatusFilter("All");
     setSelectedJourneyId("all");
     setMinDistanceKm(0);
+
     if (vehicles.length > 0) {
       setSelectedVehicleId(vehicles[0].id);
     }
-    toast.success("Trip History filters and playback reset to defaults");
-  }, [vehicles]);
+
+    // Force immediate telemetry re-fetch from Supabase backend
+    setReloadTrigger((prev) => prev + 1);
+
+    // Re-center map to fit route or depot
+    setTimeout(() => {
+      fitMapToBounds();
+    }, 150);
+
+    try {
+      toast.success("Trip History & Playback reset to default (Today)");
+    } catch {}
+  }, [vehicles, fitMapToBounds]);
 
   // Print PDF Trip Report
   function printTripReport() {
@@ -1025,12 +1071,10 @@ export default function TripHistoryPage() {
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                 <div className="flex items-center gap-1.5">
                   <button
-                    onClick={() => {
-                      setIsPlaying(false);
-                      setCurrentIndex(0);
-                    }}
+                    type="button"
+                    onClick={handleResetPlayback}
                     disabled={activeGpsPoints.length === 0}
-                    className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
                     title="Reset Playback (Restart from Beginning)"
                   >
                     <RotateCcw className="h-4 w-4 text-slate-500" />
@@ -1136,9 +1180,20 @@ export default function TripHistoryPage() {
                   Journeys History ({filteredJourneys.length})
                 </span>
               </div>
-              <Badge variant="outline" className="text-[10px]">
-                {dateRange.displayLabel}
-              </Badge>
+              <div className="flex items-center gap-1.5">
+                {selectedJourneyId !== "all" && (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectJourney("all")}
+                    className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg border border-indigo-200 transition-colors cursor-pointer"
+                  >
+                    Reset to All
+                  </button>
+                )}
+                <Badge variant="outline" className="text-[10px]">
+                  {dateRange.displayLabel}
+                </Badge>
+              </div>
             </div>
 
             {/* Journeys Scroll List */}
@@ -1213,7 +1268,19 @@ export default function TripHistoryPage() {
                   Timeline Events ({timelineEvents.length})
                 </span>
               </div>
-              <span className="text-[10px] text-slate-400">Click to seek playback</span>
+              <div className="flex items-center gap-1.5">
+                {currentIndex > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleResetPlayback}
+                    className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-lg border border-indigo-200 transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <RotateCcw className="h-2.5 w-2.5" />
+                    Reset
+                  </button>
+                )}
+                <span className="text-[10px] text-slate-400">Click to seek playback</span>
+              </div>
             </div>
 
             {/* Event List */}
