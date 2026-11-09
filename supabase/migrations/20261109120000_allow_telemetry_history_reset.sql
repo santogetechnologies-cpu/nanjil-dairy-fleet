@@ -52,3 +52,4 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.reset_trip_history(UUID) TO anon, authenticated;
+
