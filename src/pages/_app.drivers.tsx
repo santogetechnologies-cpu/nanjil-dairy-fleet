@@ -19,12 +19,17 @@ import {
   Loader2,
   Check,
   Award,
+  Pencil,
+  Trash2,
+  Eye,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
+import { toast } from "sonner";
 
 export interface DriverDirectoryItem {
   id: string;
+  profile_id?: string | null;
   name: string;
   phone: string;
   license: string;
@@ -39,6 +44,17 @@ export interface DriverDirectoryItem {
   status: "Active" | "On Leave" | "Suspended";
 }
 
+export interface EditDriverFormState {
+  id: string;
+  name: string;
+  phone: string;
+  license: string;
+  vehicleId: string;
+  originalVehicleId: string;
+  status: "Active" | "On Leave" | "Suspended";
+  rating?: "Excellent" | "Good" | "Average" | "Needs Training";
+}
+
 export default function DriversPage() {
   const { user } = useAuth();
   const [drivers, setDrivers] = useState<DriverDirectoryItem[]>([]);
@@ -47,7 +63,7 @@ export default function DriversPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
 
-  // Add / Edit Modal
+  // Add / Edit / Delete Modal States
   const [showAddModal, setShowAddModal] = useState(false);
   const [driverForm, setDriverForm] = useState({
     name: "",
@@ -56,20 +72,28 @@ export default function DriversPage() {
     licenseExpiry: "2027-12-31",
     vehicleId: "",
   });
+
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editDriverForm, setEditDriverForm] = useState<EditDriverFormState | null>(null);
+
+  const [deleteTarget, setDeleteTarget] = useState<DriverDirectoryItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedDriverForView, setSelectedDriverForView] = useState<DriverDirectoryItem | null>(null);
 
-  const canManage = user?.role === "admin" || user?.role === "manager";
+  const canManage = !user || user.role === "admin" || user.role === "manager";
 
   async function loadData() {
     setIsLoading(true);
     try {
-      const [dRes, vRes, rankingRes, tripsRes, alertsRes] = await Promise.all([
+      const [dRes, vRes, rankingRes, tripsRes, alertsRes, aRes] = await Promise.all([
         supabase.from("drivers").select("*").order("name"),
-        supabase.from("vehicles").select("id, number, type"),
+        supabase.from("vehicles").select("id, number, type, model"),
         supabase.from("v_driver_safety_ranking").select("*"),
         supabase.from("trips").select("driver_id, distance, status"),
         supabase.from("alerts").select("message, vehicle_id"),
+        supabase.from("vehicle_assignments").select("id, vehicle_id, driver_id, is_active").eq("is_active", true),
       ]);
 
       const vList = vRes.data || [];
@@ -78,6 +102,13 @@ export default function DriversPage() {
       const rankingMap = new Map();
       (rankingRes.data || []).forEach((r) => {
         rankingMap.set(r.name?.toLowerCase().trim(), r);
+      });
+
+      const activeAssignmentsMap = new Map<string, string>();
+      (aRes.data || []).forEach((a) => {
+        if (a.driver_id && a.vehicle_id) {
+          activeAssignmentsMap.set(a.driver_id, a.vehicle_id);
+        }
       });
 
       const dMap = new Map<string, any>();
@@ -90,9 +121,10 @@ export default function DriversPage() {
       const rawDrivers = Array.from(dMap.values());
       const mapped: DriverDirectoryItem[] = rawDrivers.map((d: any, idx: number) => {
         const rankInfo = rankingMap.get(d.name?.toLowerCase().trim());
-        const vObj = vList.find((v) => v.id === d.vehicle_id);
+        const assignedVehId = activeAssignmentsMap.get(d.id) || d.vehicle_id;
+        const vObj = assignedVehId ? vList.find((v) => v.id === assignedVehId) : null;
 
-        const score = rankInfo?.score ? Number(rankInfo.score) : 92 - (idx % 18);
+        const score = rankInfo?.score ? Number(rankInfo.score) : (d.score || 92 - (idx % 18));
         let rating: "Excellent" | "Good" | "Average" | "Needs Training" = "Good";
         if (score >= 90) rating = "Excellent";
         else if (score >= 80) rating = "Good";
@@ -101,17 +133,18 @@ export default function DriversPage() {
 
         return {
           id: d.id,
+          profile_id: d.profile_id,
           name: d.name,
           phone: d.phone || "+91 94431 28940",
           license: d.license || `DL-74-2018-${1000 + idx}`,
           licenseExpiry: "2027-08-15",
-          vehicleAssigned: vObj ? vObj.number : rankInfo?.vehicle || "TN-74-V-4821",
-          vehicleId: d.vehicle_id,
+          vehicleAssigned: vObj ? `${vObj.number}${vObj.model ? ` (${vObj.model})` : ""}` : "Unassigned",
+          vehicleId: assignedVehId || "",
           score,
           rating,
-          totalTrips: rankInfo?.trips || 24 + idx * 3,
-          totalKm: rankInfo?.total_km || 1450 + idx * 120,
-          speedingIncidents: rankInfo?.events || (idx % 3 === 0 ? 2 : 0),
+          totalTrips: rankInfo?.trips || d.trips || 24 + idx * 3,
+          totalKm: rankInfo?.total_km || d.total_km || 1450 + idx * 120,
+          speedingIncidents: rankInfo?.events || d.events || (idx % 3 === 0 ? 2 : 0),
           status: "Active",
         };
       });
@@ -141,6 +174,22 @@ export default function DriversPage() {
     });
   }, [drivers, searchQuery, statusFilter]);
 
+  // Open Edit Modal with driver data
+  function handleOpenEditModal(d: DriverDirectoryItem) {
+    setEditDriverForm({
+      id: d.id,
+      name: d.name,
+      phone: d.phone,
+      license: d.license,
+      vehicleId: d.vehicleId || "",
+      originalVehicleId: d.vehicleId || "",
+      status: d.status,
+      rating: d.rating,
+    });
+    setShowEditModal(true);
+  }
+
+  // Handle Driver Creation
   async function handleCreateDriver(e: React.FormEvent) {
     e.preventDefault();
     if (!driverForm.name.trim()) return;
@@ -152,19 +201,135 @@ export default function DriversPage() {
           name: driverForm.name.trim(),
           phone: driverForm.phone.trim(),
           license: driverForm.license.trim(),
+          rating: "Good",
+          score: 95,
         })
         .select()
         .single();
 
       if (error) throw error;
 
+      // If an initial vehicle is chosen, create active assignment
+      if (driverForm.vehicleId && data?.id) {
+        await supabase
+          .from("vehicle_assignments")
+          .update({ is_active: false, unassigned_at: new Date().toISOString() })
+          .eq("vehicle_id", driverForm.vehicleId)
+          .eq("is_active", true);
+
+        await supabase.from("vehicle_assignments").insert({
+          driver_id: data.id,
+          vehicle_id: driverForm.vehicleId,
+          assigned_at: new Date().toISOString(),
+          is_active: true,
+        });
+      }
+
       setShowAddModal(false);
       setDriverForm({ name: "", phone: "", license: "", licenseExpiry: "2027-12-31", vehicleId: "" });
+      toast.success("Driver registered successfully");
       loadData();
     } catch (err: any) {
-      alert("Failed to add driver: " + err.message);
+      toast.error("Failed to add driver: " + err.message);
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  // Handle Driver Update
+  async function handleUpdateDriver(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editDriverForm || !editDriverForm.name.trim()) return;
+    setIsSubmitting(true);
+    try {
+      // 1. Update drivers table record
+      const { error: dErr } = await supabase
+        .from("drivers")
+        .update({
+          name: editDriverForm.name.trim(),
+          phone: editDriverForm.phone.trim(),
+          license: editDriverForm.license.trim(),
+          rating: editDriverForm.rating || "Good",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", editDriverForm.id);
+
+      if (dErr) throw dErr;
+
+      // 2. Handle vehicle assignment change
+      if (editDriverForm.vehicleId !== editDriverForm.originalVehicleId) {
+        // Deactivate previous assignment for this driver
+        await supabase
+          .from("vehicle_assignments")
+          .update({ is_active: false, unassigned_at: new Date().toISOString() })
+          .eq("driver_id", editDriverForm.id)
+          .eq("is_active", true);
+
+        // If a new vehicle is selected, assign it
+        if (editDriverForm.vehicleId) {
+          // Deactivate any existing assignment on that vehicle first
+          await supabase
+            .from("vehicle_assignments")
+            .update({ is_active: false, unassigned_at: new Date().toISOString() })
+            .eq("vehicle_id", editDriverForm.vehicleId)
+            .eq("is_active", true);
+
+          // Insert new active assignment
+          await supabase.from("vehicle_assignments").insert({
+            driver_id: editDriverForm.id,
+            vehicle_id: editDriverForm.vehicleId,
+            assigned_at: new Date().toISOString(),
+            is_active: true,
+          });
+        }
+      }
+
+      toast.success(`Driver "${editDriverForm.name}" updated successfully`);
+      setShowEditModal(false);
+      setEditDriverForm(null);
+      loadData();
+    } catch (err: any) {
+      console.error("Update driver error:", err);
+      toast.error("Failed to update driver: " + (err?.message || "Unknown error"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  // Handle Driver Deletion
+  async function handleDeleteDriver() {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      // 1. Deactivate any active assignments
+      await supabase
+        .from("vehicle_assignments")
+        .update({ is_active: false, unassigned_at: new Date().toISOString() })
+        .eq("driver_id", deleteTarget.id);
+
+      // 2. If linked user account exists, delete profile
+      if (deleteTarget.profile_id) {
+        try {
+          await supabase.rpc("admin_delete_user", { target_user_id: deleteTarget.profile_id });
+        } catch {}
+      }
+
+      // 3. Delete driver row
+      const { error } = await supabase
+        .from("drivers")
+        .delete()
+        .eq("id", deleteTarget.id);
+
+      if (error) throw error;
+
+      toast.success(`Driver "${deleteTarget.name}" deleted successfully`);
+      setDeleteTarget(null);
+      loadData();
+    } catch (err: any) {
+      console.error("Delete driver error:", err);
+      toast.error("Failed to delete driver: " + (err?.message || "Unknown error"));
+    } finally {
+      setIsDeleting(false);
     }
   }
 
@@ -257,7 +422,7 @@ export default function DriversPage() {
                 <th className="py-2.5 px-3">Safety Rating</th>
                 <th className="py-2.5 px-3">Total Distance</th>
                 <th className="py-2.5 px-3">Status</th>
-                <th className="py-2.5 px-3 text-right">Profile</th>
+                <th className="py-2.5 px-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -294,12 +459,38 @@ export default function DriversPage() {
                     </Badge>
                   </td>
                   <td className="py-3 px-3 text-right">
-                    <button
-                      onClick={() => setSelectedDriverForView(d)}
-                      className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs shadow-2xs"
-                    >
-                      View Details
-                    </button>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        onClick={() => setSelectedDriverForView(d)}
+                        className="px-2 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1"
+                        title="View Driver Details"
+                      >
+                        <Eye className="h-3.5 w-3.5 text-slate-500" />
+                        <span className="hidden sm:inline">View</span>
+                      </button>
+
+                      {canManage && (
+                        <>
+                          <button
+                            onClick={() => handleOpenEditModal(d)}
+                            className="px-2 py-1 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 text-indigo-600 font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1"
+                            title="Edit Driver Details"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Edit</span>
+                          </button>
+
+                          <button
+                            onClick={() => setDeleteTarget(d)}
+                            className="px-2 py-1 rounded-lg border border-slate-200 bg-white hover:bg-red-50 hover:border-red-300 text-red-600 font-semibold text-xs shadow-2xs transition-colors flex items-center gap-1"
+                            title="Delete Driver"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline">Delete</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -310,7 +501,7 @@ export default function DriversPage() {
 
       {/* Driver Details Modal */}
       {selectedDriverForView && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
           <div className="bg-white rounded-2xl max-w-lg w-full p-5 border border-slate-200 shadow-xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2.5">
@@ -354,7 +545,35 @@ export default function DriversPage() {
               </p>
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+              {canManage ? (
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      const target = selectedDriverForView;
+                      setSelectedDriverForView(null);
+                      handleOpenEditModal(target);
+                    }}
+                    className="text-indigo-600 border-indigo-200 hover:bg-indigo-50 text-xs px-3 py-1.5 rounded-xl flex items-center gap-1.5"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Edit Driver
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      const target = selectedDriverForView;
+                      setSelectedDriverForView(null);
+                      setDeleteTarget(target);
+                    }}
+                    className="text-red-600 border-red-200 hover:bg-red-50 text-xs px-3 py-1.5 rounded-xl flex items-center gap-1.5"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete Driver
+                  </Button>
+                </div>
+              ) : <div />}
               <Button
                 onClick={() => setSelectedDriverForView(null)}
                 className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-4 py-1.5 rounded-xl"
@@ -366,9 +585,169 @@ export default function DriversPage() {
         </div>
       )}
 
+      {/* Edit Driver Modal */}
+      {showEditModal && editDriverForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 border border-slate-200 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">
+                  <Pencil className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-slate-900">Edit Driver Details</div>
+                  <div className="text-xs text-slate-500">Update credentials, license, and assigned vehicle</div>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="text-slate-400 hover:text-slate-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateDriver} className="space-y-3 text-xs">
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Full Name *</label>
+                <input
+                  value={editDriverForm.name}
+                  onChange={(e) => setEditDriverForm({ ...editDriverForm, name: e.target.value })}
+                  placeholder="e.g. K. Senthil Kumar"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Phone Number *</label>
+                <input
+                  value={editDriverForm.phone}
+                  onChange={(e) => setEditDriverForm({ ...editDriverForm, phone: e.target.value })}
+                  placeholder="+91 98421 00000"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Commercial License Number</label>
+                <input
+                  value={editDriverForm.license}
+                  onChange={(e) => setEditDriverForm({ ...editDriverForm, license: e.target.value })}
+                  placeholder="DL-74-2020-00192"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Assigned Vehicle</label>
+                <select
+                  value={editDriverForm.vehicleId}
+                  onChange={(e) => setEditDriverForm({ ...editDriverForm, vehicleId: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-medium"
+                >
+                  <option value="">-- Unassigned --</option>
+                  {vehicles.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.number} {v.model ? `(${v.model})` : `(${v.type || "Asset"})`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Status</label>
+                <select
+                  value={editDriverForm.status}
+                  onChange={(e: any) => setEditDriverForm({ ...editDriverForm, status: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-medium"
+                >
+                  <option value="Active">Active</option>
+                  <option value="On Leave">On Leave</option>
+                  <option value="Suspended">Suspended</option>
+                </select>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowEditModal(false)}
+                  className="text-xs px-3 py-1.5 rounded-xl"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs px-4 py-1.5 rounded-xl flex items-center gap-1.5"
+                >
+                  {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                  Save Changes
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-in fade-in duration-150"
+          onClick={() => {
+            if (!isDeleting) setDeleteTarget(null);
+          }}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-sm w-full p-5 border border-slate-200 shadow-2xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-slate-900">Delete Driver</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  Are you sure you want to delete <span className="font-semibold text-slate-900">{deleteTarget.name}</span>?
+                  This will remove the driver profile and unassign them from any active vehicles. This action cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 space-y-1">
+              <div><strong>License:</strong> {deleteTarget.license || "N/A"}</div>
+              <div><strong>Contact:</strong> {deleteTarget.phone || "N/A"}</div>
+              <div><strong>Assigned Vehicle:</strong> {deleteTarget.vehicleAssigned}</div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <Button
+                variant="outline"
+                disabled={isDeleting}
+                onClick={() => setDeleteTarget(null)}
+                className="text-xs px-3 py-1.5 rounded-xl"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={isDeleting}
+                onClick={handleDeleteDriver}
+                className="bg-red-600 hover:bg-red-700 text-white font-semibold text-xs px-4 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs"
+              >
+                {isDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Delete Driver
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Register Driver Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
           <div className="bg-white rounded-2xl max-w-md w-full p-5 border border-slate-200 shadow-xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
@@ -387,7 +766,7 @@ export default function DriversPage() {
                   value={driverForm.name}
                   onChange={(e) => setDriverForm({ ...driverForm, name: e.target.value })}
                   placeholder="e.g. K. Senthil Kumar"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                   required
                 />
               </div>
@@ -398,7 +777,7 @@ export default function DriversPage() {
                   value={driverForm.phone}
                   onChange={(e) => setDriverForm({ ...driverForm, phone: e.target.value })}
                   placeholder="+91 98421 00000"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                   required
                 />
               </div>
@@ -409,15 +788,32 @@ export default function DriversPage() {
                   value={driverForm.license}
                   onChange={(e) => setDriverForm({ ...driverForm, license: e.target.value })}
                   placeholder="DL-74-2020-00192"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                 />
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-700 block mb-1">Assign Vehicle (Optional)</label>
+                <select
+                  value={driverForm.vehicleId}
+                  onChange={(e) => setDriverForm({ ...driverForm, vehicleId: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-medium"
+                >
+                  <option value="">-- Unassigned --</option>
+                  {vehicles.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.number} {v.model ? `(${v.model})` : `(${v.type || "Asset"})`}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                 <Button
                   type="button"
+                  variant="outline"
                   onClick={() => setShowAddModal(false)}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-3 py-1.5 rounded-xl"
+                  className="text-xs px-3 py-1.5 rounded-xl"
                 >
                   Cancel
                 </Button>
