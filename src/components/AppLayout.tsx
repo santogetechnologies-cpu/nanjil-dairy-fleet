@@ -753,7 +753,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 setNotificationsOpen(!notificationsOpen);
                 setProfileOpen(false);
                 setQuickActionOpen(false);
-                setModuleSwitcherOpen(false);
               }}
               className="relative p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
               aria-label="Operational Notifications"
@@ -866,7 +865,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 setProfileOpen(!profileOpen);
                 setNotificationsOpen(false);
                 setQuickActionOpen(false);
-                setModuleSwitcherOpen(false);
               }}
               className="flex items-center gap-2 p-1 pl-2.5 rounded-2xl hover:bg-slate-100/90 transition-colors border border-slate-200/70"
             >

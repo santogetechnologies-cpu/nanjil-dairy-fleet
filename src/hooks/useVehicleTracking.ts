@@ -55,12 +55,10 @@ export const TELEMETRY_LABEL =
  * Drop-in replacement for usePureFirebaseTracking().
  */
 export function useVehicles(): Vehicle[] {
-  // Rules of Hooks: both hooks are always called. Only the result of the
-  // active source is returned. This satisfies the "same hooks in same order"
-  // requirement even when the source env var is toggled between builds.
+  const isSupabase = TELEMETRY_SOURCE === "supabase";
   const firebase = usePureFirebaseTracking();
-  const supabase = useRealtimeAllVehicles();
-  return TELEMETRY_SOURCE === "supabase" ? supabase : firebase;
+  const supabase = useRealtimeAllVehicles(isSupabase);
+  return isSupabase ? supabase : firebase;
 }
 
 // ── Hook: single vehicle (live stream) ──────────────────────────────────────
@@ -73,9 +71,10 @@ export function useVehicles(): Vehicle[] {
  * Drop-in replacement for useSingleVehicleFirebaseTracking(initialVehicle).
  */
 export function useSingleVehicle(initialVehicle: Vehicle | null): Vehicle | null {
+  const isSupabase = TELEMETRY_SOURCE === "supabase";
   const firebase = useSingleVehicleFirebaseTracking(initialVehicle);
-  const supabase = useRealtimeSingleVehicle(initialVehicle);
-  return TELEMETRY_SOURCE === "supabase" ? supabase : firebase;
+  const supabase = useRealtimeSingleVehicle(initialVehicle, isSupabase);
+  return isSupabase ? supabase : firebase;
 }
 
 // ── Hook: enrich a pre-loaded vehicle list (live stream) ─────────────────────
@@ -88,7 +87,8 @@ export function useSingleVehicle(initialVehicle: Vehicle | null): Vehicle | null
  * Drop-in replacement for useFirebaseTracking(initialVehicles).
  */
 export function useVehicleList(initialVehicles: Vehicle[]): Vehicle[] {
+  const isSupabase = TELEMETRY_SOURCE === "supabase";
   const firebase = useFirebaseTracking(initialVehicles);
-  const supabase = useRealtimeVehicleList(initialVehicles);
-  return TELEMETRY_SOURCE === "supabase" ? supabase : firebase;
+  const supabase = useRealtimeVehicleList(initialVehicles, isSupabase);
+  return isSupabase ? supabase : firebase;
 }

@@ -830,9 +830,13 @@ export default function TripHistoryPage() {
               <MapGL
                 ref={mapRef}
                 initialViewState={{
-                  longitude: currentPoint?.lng || vehicleCurrentPosition?.lng || 77.2884,
-                  latitude: currentPoint?.lat || vehicleCurrentPosition?.lat || 8.2605,
+                  longitude: Number(currentPoint?.lng ?? vehicleCurrentPosition?.lng ?? 77.2884),
+                  latitude: Number(currentPoint?.lat ?? vehicleCurrentPosition?.lat ?? 8.2605),
                   zoom: 12,
+                }}
+                onError={(e) => {
+                  // Suppress harmless tile-level style expression assertions from OpenFreeMap vector tiles
+                  if (e?.error?.message?.includes("Expected value to be of type")) return;
                 }}
                 mapStyle={MAP_STYLE}
                 style={{ width: "100%", height: "100%" }}
@@ -864,7 +868,7 @@ export default function TripHistoryPage() {
                 )}
 
                 {/* Start Marker A (Emerald) */}
-                {activeGpsPoints.length > 0 && (
+                {activeGpsPoints.length > 0 && typeof activeGpsPoints[0]?.lng === "number" && typeof activeGpsPoints[0]?.lat === "number" && !isNaN(activeGpsPoints[0].lng) && !isNaN(activeGpsPoints[0].lat) && (
                   <Marker longitude={activeGpsPoints[0].lng} latitude={activeGpsPoints[0].lat} anchor="center">
                     <div
                       className="h-6 w-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-[10px] shadow-lg border-2 border-white cursor-pointer"
@@ -876,7 +880,7 @@ export default function TripHistoryPage() {
                 )}
 
                 {/* End Marker B (Slate) */}
-                {activeGpsPoints.length > 1 && (
+                {activeGpsPoints.length > 1 && typeof activeGpsPoints[activeGpsPoints.length - 1]?.lng === "number" && typeof activeGpsPoints[activeGpsPoints.length - 1]?.lat === "number" && !isNaN(activeGpsPoints[activeGpsPoints.length - 1].lng) && !isNaN(activeGpsPoints[activeGpsPoints.length - 1].lat) && (
                   <Marker
                     longitude={activeGpsPoints[activeGpsPoints.length - 1].lng}
                     latitude={activeGpsPoints[activeGpsPoints.length - 1].lat}
@@ -893,7 +897,7 @@ export default function TripHistoryPage() {
 
                 {/* Stop Markers (P, Amber) */}
                 {timelineEvents
-                  .filter((e) => e.type === "stop")
+                  .filter((e) => e.type === "stop" && typeof e.lng === "number" && typeof e.lat === "number" && !isNaN(e.lng) && !isNaN(e.lat))
                   .map((e) => (
                     <Marker key={e.id} longitude={e.lng} latitude={e.lat} anchor="center">
                       <div
@@ -908,7 +912,7 @@ export default function TripHistoryPage() {
 
                 {/* Signal Gap Markers (!, Red) */}
                 {timelineEvents
-                  .filter((e) => e.type === "gap")
+                  .filter((e) => e.type === "gap" && typeof e.lng === "number" && typeof e.lat === "number" && !isNaN(e.lng) && !isNaN(e.lat))
                   .map((e) => (
                     <Marker key={e.id} longitude={e.lng} latitude={e.lat} anchor="center">
                       <div
@@ -922,7 +926,7 @@ export default function TripHistoryPage() {
                   ))}
 
                 {/* Vehicle Current Position Marker (when no playback or stationary) */}
-                {activeGpsPoints.length === 0 && vehicleCurrentPosition && (
+                {activeGpsPoints.length === 0 && vehicleCurrentPosition && typeof vehicleCurrentPosition.lng === "number" && typeof vehicleCurrentPosition.lat === "number" && !isNaN(vehicleCurrentPosition.lng) && !isNaN(vehicleCurrentPosition.lat) && (
                   <Marker
                     longitude={vehicleCurrentPosition.lng}
                     latitude={vehicleCurrentPosition.lat}
@@ -940,7 +944,7 @@ export default function TripHistoryPage() {
                 )}
 
                 {/* ACTIVE PLAYBACK VEHICLE MARKER */}
-                {currentPoint && (
+                {currentPoint && typeof currentPoint.lng === "number" && typeof currentPoint.lat === "number" && !isNaN(currentPoint.lng) && !isNaN(currentPoint.lat) && (
                   <Marker longitude={currentPoint.lng} latitude={currentPoint.lat} anchor="center">
                     <div className="relative flex items-center justify-center">
                       <div className="h-9 w-9 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-2xl border-2 border-white ring-4 ring-indigo-300 animate-pulse">

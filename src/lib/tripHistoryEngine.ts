@@ -375,8 +375,19 @@ export function splitPointsIntoSegments(
 
 export function buildSegmentedGeoJson(segments: RouteSegment[]): any {
   const lineStrings = segments
-    .filter((s) => s.points.length >= 2)
-    .map((s) => s.points.map((p) => [p.lng, p.lat]));
+    .map((s) =>
+      s.points
+        .filter(
+          (p) =>
+            p &&
+            typeof p.lng === "number" &&
+            typeof p.lat === "number" &&
+            !isNaN(p.lng) &&
+            !isNaN(p.lat)
+        )
+        .map((p) => [p.lng, p.lat])
+    )
+    .filter((coords) => coords.length >= 2);
 
   if (lineStrings.length === 0) return null;
 

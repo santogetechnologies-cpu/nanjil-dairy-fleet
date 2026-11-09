@@ -143,7 +143,7 @@ function mapRowToVehicle(row: Record<string, unknown>): Vehicle {
  * Usage:
  *   const vehicles = useRealtimeAllVehicles();
  */
-export function useRealtimeAllVehicles(): Vehicle[] {
+export function useRealtimeAllVehicles(enabled: boolean = true): Vehicle[] {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const isMountedRef = useRef(true);
 
@@ -207,7 +207,7 @@ export function useRealtimeAllVehicles(): Vehicle[] {
         if (status === "SUBSCRIBED") {
           console.log("[EMQX/Supabase] Realtime channel subscribed — live tracking active");
         } else if (status === "CHANNEL_ERROR" || (status === "CLOSED" && isMountedRef.current)) {
-          console.warn("[EMQX/Supabase] Realtime channel status:", status);
+          console.debug("[EMQX/Supabase] Realtime channel status:", status);
         }
       });
 
@@ -215,7 +215,7 @@ export function useRealtimeAllVehicles(): Vehicle[] {
       isMountedRef.current = false;
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [enabled]);
 
   return vehicles;
 }
@@ -228,7 +228,7 @@ export function useRealtimeAllVehicles(): Vehicle[] {
  * Usage:
  *   const vehicle = useRealtimeSingleVehicle(initialVehicle);
  */
-export function useRealtimeSingleVehicle(initialVehicle: Vehicle | null): Vehicle | null {
+export function useRealtimeSingleVehicle(initialVehicle: Vehicle | null, enabled: boolean = true): Vehicle | null {
   const [vehicle, setVehicle] = useState<Vehicle | null>(initialVehicle);
   const isMountedRef = useRef(true);
 
@@ -313,7 +313,7 @@ export function useRealtimeSingleVehicle(initialVehicle: Vehicle | null): Vehicl
  * Equivalent to useFirebaseTracking(initialVehicles) but sourced from Supabase.
  * Used as a drop-in replacement for the vehicles list page.
  */
-export function useRealtimeVehicleList(initialVehicles: Vehicle[]): Vehicle[] {
+export function useRealtimeVehicleList(initialVehicles: Vehicle[], enabled: boolean = true): Vehicle[] {
   const [vehicles, setVehicles] = useState<Vehicle[]>(initialVehicles);
   const isMountedRef = useRef(true);
 
