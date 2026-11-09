@@ -311,7 +311,7 @@ export default function DriversPage() {
       if (deleteTarget.profile_id) {
         try {
           await supabase.rpc("admin_delete_user", { target_user_id: deleteTarget.profile_id });
-        } catch {}
+        } catch { }
       }
 
       // 3. Delete driver row
@@ -445,8 +445,8 @@ export default function DriversPage() {
                         d.rating === "Excellent"
                           ? "bg-emerald-50 text-emerald-700 border-emerald-300 font-semibold"
                           : d.rating === "Good"
-                          ? "bg-indigo-50 text-indigo-700 border-indigo-300"
-                          : "bg-amber-50 text-amber-700 border-amber-300"
+                            ? "bg-indigo-50 text-indigo-700 border-indigo-300"
+                            : "bg-amber-50 text-amber-700 border-amber-300"
                       }
                     >
                       {d.rating}
@@ -613,7 +613,7 @@ export default function DriversPage() {
                 <input
                   value={editDriverForm.name}
                   onChange={(e) => setEditDriverForm({ ...editDriverForm, name: e.target.value })}
-                  placeholder="e.g. K. Senthil Kumar"
+                  placeholder="Name"
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                   required
                 />
@@ -765,7 +765,7 @@ export default function DriversPage() {
                 <input
                   value={driverForm.name}
                   onChange={(e) => setDriverForm({ ...driverForm, name: e.target.value })}
-                  placeholder="e.g. K. Senthil Kumar"
+                  placeholder="Name"
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                   required
                 />
