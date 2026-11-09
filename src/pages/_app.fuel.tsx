@@ -176,52 +176,8 @@ export default function FuelManagementPage() {
           };
         });
 
-        // Add default baseline records if database is empty
-        if (records.length === 0) {
-          const defaults: FuelPurchaseRecord[] = [
-            {
-              id: "fuel-01",
-              vehicleId: vList[0]?.id || "v1",
-              vehicleNumber: vList[0]?.number || "TN-74-V-4821",
-              driverName: "S. Arumugam",
-              loggedAt: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
-              station: "Indian Oil Depot, Nagercoil",
-              fuelType: "Diesel",
-              liters: 85,
-              pricePerLiter: 94.5,
-              totalCost: 8032.5,
-              odometer: 14850,
-              isFullTank: true,
-              paymentMethod: "Fleet Card",
-              receiptRef: "INV-IOCL-8921",
-              approvalStatus: "Approved",
-              notes: "Full tank top-up before southern route",
-              recordedBy: "S. Arumugam",
-            },
-            {
-              id: "fuel-02",
-              vehicleId: vList[1]?.id || "v2",
-              vehicleNumber: vList[1]?.number || "TN-74-V-3912",
-              driverName: "M. Kumar",
-              loggedAt: new Date(Date.now() - 48 * 3600 * 1000).toISOString(),
-              station: "Bharat Petroleum, Thuckalay",
-              fuelType: "Diesel",
-              liters: 72,
-              pricePerLiter: 94.6,
-              totalCost: 6811.2,
-              odometer: 28400,
-              isFullTank: true,
-              paymentMethod: "Fleet Card",
-              receiptRef: "BP-THU-4102",
-              approvalStatus: "Approved",
-              notes: "Full refill post collection loop",
-              recordedBy: "M. Kumar",
-            },
-          ];
-          setFuelRecords(defaults);
-        } else {
-          setFuelRecords(records);
-        }
+        // Authentic database fuel records
+        setFuelRecords(records);
       } catch (err) {
         console.warn("Fuel load error:", err);
       } finally {

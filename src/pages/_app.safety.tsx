@@ -218,7 +218,7 @@ export default function SpeedingSafetyPage() {
             else if (excess > 10) sev = "High";
             else sev = "Low";
 
-            const driverName = vObj?.driver_name || vObj?.driver || dList.find((d) => d.id === a.driver_id)?.name || dList[idx % dList.length]?.name || "Assigned Driver";
+            const driverName = vObj?.driver_name || vObj?.driver || dList.find((d) => d.id === a.driver_id)?.name || "Unassigned";
             const location = a.location || vObj?.location || "NH-47 Highway, Nagercoil Bypass";
 
             generatedIncidents.push({
@@ -272,13 +272,13 @@ export default function SpeedingSafetyPage() {
         // Authentic database & live speeding incidents
         setIncidents(generatedIncidents);
 
-        // Driving Behavior Events
+        // Driving Behavior Events with authentic driver assignment
         setBehaviorEvents([
           {
             id: "beh-1",
             type: "Harsh Braking",
             vehicleNumber: vList[0]?.number || "Fleet Unit",
-            driverName: "S. Arumugam",
+            driverName: dList[0]?.name || vList[0]?.driver || "Unassigned",
             timestamp: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
             source: "Hardware Sensor",
             severity: "High",
@@ -289,7 +289,7 @@ export default function SpeedingSafetyPage() {
             id: "beh-2",
             type: "Excessive Idling",
             vehicleNumber: vList[1]?.number || "Fleet Unit",
-            driverName: "M. Kumar",
+            driverName: dList[1]?.name || vList[1]?.driver || "Unassigned",
             timestamp: new Date(Date.now() - 6 * 3600 * 1000).toISOString(),
             source: "GPS Inferred",
             severity: "Medium",
@@ -300,7 +300,7 @@ export default function SpeedingSafetyPage() {
             id: "beh-3",
             type: "Sharp Cornering",
             vehicleNumber: vList[2]?.number || "Fleet Unit",
-            driverName: "K. Rajan",
+            driverName: dList[2]?.name || vList[2]?.driver || "Unassigned",
             timestamp: new Date(Date.now() - 19 * 3600 * 1000).toISOString(),
             source: "GPS Inferred",
             severity: "Low",
@@ -311,7 +311,7 @@ export default function SpeedingSafetyPage() {
             id: "beh-4",
             type: "Continuous Driving",
             vehicleNumber: vList[0]?.number || "Fleet Unit",
-            driverName: "S. Arumugam",
+            driverName: dList[0]?.name || vList[0]?.driver || "Unassigned",
             timestamp: new Date(Date.now() - 25 * 3600 * 1000).toISOString(),
             source: "GPS Inferred",
             severity: "High",
