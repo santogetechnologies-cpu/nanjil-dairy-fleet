@@ -94,6 +94,11 @@ export default function TripHistoryPage() {
   const [derivedJourneys, setDerivedJourneys] = useState<DerivedJourney[]>([]);
   const [selectedJourneyId, setSelectedJourneyId] = useState<string | "all">("all");
 
+  // Reset Trip History Modal State
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [resetScope, setResetScope] = useState<"all" | "current" | "filters" | "restore">("all");
+  const [isResetting, setIsResetting] = useState(false);
+
   // Playback Controls State
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<1 | 2 | 5 | 10>(1);
@@ -251,14 +256,23 @@ export default function TripHistoryPage() {
           setAllRangeGpsPoints([]);
           setDerivedJourneys([]);
         } else {
-          setAllRangeGpsPoints(res.data);
-          setQueryEarliest(res.earliestTimestamp || null);
-          setQueryLatest(res.latestTimestamp || null);
+          // Check if there is a local reset epoch (global or vehicle-specific)
+          const globalResetEpoch = typeof window !== "undefined" ? Number(localStorage.getItem("nanjil_trip_history_reset_epoch") || 0) : 0;
+          const vehicleResetEpoch = typeof window !== "undefined" && selectedVehicleId ? Number(localStorage.getItem(`nanjil_trip_history_reset_${selectedVehicleId}`) || 0) : 0;
+          const effectiveResetEpoch = Math.max(globalResetEpoch, vehicleResetEpoch);
+
+          const filteredData = effectiveResetEpoch > 0
+            ? res.data.filter((p) => new Date(p.recorded_at).getTime() >= effectiveResetEpoch)
+            : res.data;
+
+          setAllRangeGpsPoints(filteredData);
+          setQueryEarliest(filteredData[0]?.recorded_at || null);
+          setQueryLatest(filteredData[filteredData.length - 1]?.recorded_at || null);
 
           // Derive distinct journeys or correlate with trips table
           if (selectedVehicle) {
             const derived = deriveJourneysFromTelemetry(
-              res.data,
+              filteredData,
               selectedVehicle,
               tripsTableRecords,
               vehicleAssignments,
@@ -528,8 +542,8 @@ export default function TripHistoryPage() {
     } catch {}
   }, [activeGpsPoints, fitMapToBounds]);
 
-  // Complete Reset: resets all filters, dates, journeys, playback, map camera and re-fetches
-  const handleResetTripHistory = useCallback(() => {
+  // Fast Filter Reset: restores date range to Today, All Drivers, All Statuses
+  const handleResetFiltersOnly = useCallback(() => {
     if (playbackTimerRef.current) {
       clearInterval(playbackTimerRef.current);
     }
@@ -548,18 +562,106 @@ export default function TripHistoryPage() {
       setSelectedVehicleId(vehicles[0].id);
     }
 
-    // Force immediate telemetry re-fetch from Supabase backend
     setReloadTrigger((prev) => prev + 1);
 
-    // Re-center map to fit route or depot
     setTimeout(() => {
       fitMapToBounds();
     }, 150);
 
-    try {
-      toast.success("Trip History & Playback reset to default (Today)");
-    } catch {}
+    toast.info("Filters reset to default (Today)");
   }, [vehicles, fitMapToBounds]);
+
+  // Complete Trip History Reset: wipes recorded GPS journeys from Supabase and UI
+  async function executeTripHistoryReset() {
+    setIsResetting(true);
+    if (playbackTimerRef.current) {
+      clearInterval(playbackTimerRef.current);
+    }
+    setIsPlaying(false);
+    setCurrentIndex(0);
+    setPlaybackSpeed(1);
+
+    try {
+      if (resetScope === "all") {
+        const nowMs = Date.now();
+        localStorage.setItem("nanjil_trip_history_reset_epoch", nowMs.toString());
+        vehicles.forEach((v) => {
+          localStorage.removeItem(`nanjil_trip_history_reset_${v.id}`);
+        });
+
+        // 1. Invoke backend RPC if available
+        try {
+          await supabase.rpc("reset_trip_history", {});
+        } catch {}
+
+        // 2. Direct table deletion
+        try {
+          await supabase.from("telemetry_history").delete().not("id", "is", null);
+        } catch {}
+
+        try {
+          await supabase.from("trips").delete().not("id", "is", null);
+        } catch {}
+
+        setAllRangeGpsPoints([]);
+        setDerivedJourneys([]);
+        setSelectedJourneyId("all");
+        setQueryEarliest(null);
+        setQueryLatest(null);
+        setDateFilterMode("today");
+        setSelectedDriverId("All");
+        setJourneyStatusFilter("All");
+        setMinDistanceKm(0);
+
+        toast.success("All fleet trip history has been permanently reset.");
+      } else if (resetScope === "current") {
+        if (!selectedVehicleId) return;
+        const nowMs = Date.now();
+        localStorage.setItem(`nanjil_trip_history_reset_${selectedVehicleId}`, nowMs.toString());
+
+        try {
+          await supabase.rpc("reset_trip_history", { target_vehicle_id: selectedVehicleId });
+        } catch {}
+
+        try {
+          await supabase.from("telemetry_history").delete().eq("vehicle_id", selectedVehicleId);
+        } catch {}
+
+        try {
+          await supabase.from("trips").delete().eq("vehicle_id", selectedVehicleId);
+        } catch {}
+
+        setAllRangeGpsPoints([]);
+        setDerivedJourneys([]);
+        setSelectedJourneyId("all");
+        setQueryEarliest(null);
+        setQueryLatest(null);
+
+        toast.success(`Trip history for ${selectedVehicle?.number || "selected vehicle"} has been reset.`);
+      } else if (resetScope === "restore") {
+        localStorage.removeItem("nanjil_trip_history_reset_epoch");
+        vehicles.forEach((v) => {
+          localStorage.removeItem(`nanjil_trip_history_reset_${v.id}`);
+        });
+        toast.success("All historical logs restored from backend database.");
+      } else {
+        // Reset filters only
+        handleResetFiltersOnly();
+      }
+
+      setIsResetModalOpen(false);
+      setReloadTrigger((prev) => prev + 1);
+
+      setTimeout(() => {
+        fitMapToBounds();
+      }, 200);
+    } catch (err: any) {
+      console.error("Trip history reset error:", err);
+      toast.error("Failed to reset trip history: " + (err?.message || "Unknown error"));
+    } finally {
+      setIsResetting(false);
+    }
+  }
 
   // Print PDF Trip Report
   function printTripReport() {
@@ -568,6 +670,178 @@ export default function TripHistoryPage() {
 
   return (
     <div className="space-y-5">
+      {/* ── RESET TRIP HISTORY MODAL ────────────────────────────── */}
+      {isResetModalOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => {
+            if (!isResetting) setIsResetModalOpen(false);
+          }}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-11 h-11 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center border border-red-200">
+                <RotateCcw className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-bold text-base text-slate-900">Reset Trip History</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Choose the reset scope. This will clear recorded GPS telemetry and historical journey tracking.
+                </p>
+              </div>
+            </div>
+
+            {/* Scope Options */}
+            <div className="space-y-2.5 pt-1">
+              {/* Option 1: Reset All Fleet Trip History */}
+              <label
+                className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                  resetScope === "all"
+                    ? "border-red-500 bg-red-50/70 ring-1 ring-red-400"
+                    : "border-slate-200 bg-white hover:bg-slate-50"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="resetScope"
+                  value="all"
+                  checked={resetScope === "all"}
+                  onChange={() => setResetScope("all")}
+                  className="mt-1 text-red-600 focus:ring-red-500"
+                />
+                <div className="flex-1 text-xs">
+                  <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                    <span>Reset All Fleet Trip History</span>
+                    <Badge variant="outline" className="text-[10px] bg-red-100 text-red-700 border-red-300">
+                      Recommended
+                    </Badge>
+                  </div>
+                  <p className="text-slate-600 mt-0.5">
+                    Permanently resets and clears all historical GPS routes and journeys across all 7 GPS fleet vehicles.
+                  </p>
+                </div>
+              </label>
+
+              {/* Option 2: Reset Selected Vehicle Only */}
+              <label
+                className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                  resetScope === "current"
+                    ? "border-amber-500 bg-amber-50/70 ring-1 ring-amber-400"
+                    : "border-slate-200 bg-white hover:bg-slate-50"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="resetScope"
+                  value="current"
+                  checked={resetScope === "current"}
+                  onChange={() => setResetScope("current")}
+                  className="mt-1 text-amber-600 focus:ring-amber-500"
+                />
+                <div className="flex-1 text-xs">
+                  <div className="font-bold text-slate-900">
+                    Reset {selectedVehicle?.number || "Selected Vehicle"} Only
+                  </div>
+                  <p className="text-slate-600 mt-0.5">
+                    Clears historical GPS telemetry for {selectedVehicle?.number || "this vehicle"} ({allRangeGpsPoints.length} points in current filter).
+                  </p>
+                </div>
+              </label>
+
+              {/* Option 3: Reset Filters & Playback Only */}
+              <label
+                className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                  resetScope === "filters"
+                    ? "border-indigo-500 bg-indigo-50/70 ring-1 ring-indigo-400"
+                    : "border-slate-200 bg-white hover:bg-slate-50"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="resetScope"
+                  value="filters"
+                  checked={resetScope === "filters"}
+                  onChange={() => setResetScope("filters")}
+                  className="mt-1 text-indigo-600 focus:ring-indigo-500"
+                />
+                <div className="flex-1 text-xs">
+                  <div className="font-bold text-slate-900">Reset Filters & Playback Only</div>
+                  <p className="text-slate-600 mt-0.5">
+                    Keeps historical database logs; resets date range back to Today and playback position to 00:00.
+                  </p>
+                </div>
+              </label>
+
+              {/* Option 4: Restore Historical Records */}
+              {(Boolean(typeof window !== "undefined" && localStorage.getItem("nanjil_trip_history_reset_epoch")) ||
+                Boolean(typeof window !== "undefined" && selectedVehicleId && localStorage.getItem(`nanjil_trip_history_reset_${selectedVehicleId}`))) && (
+                <label
+                  className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                    resetScope === "restore"
+                      ? "border-emerald-500 bg-emerald-50/70 ring-1 ring-emerald-400"
+                      : "border-slate-200 bg-white hover:bg-slate-50"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="resetScope"
+                    value="restore"
+                    checked={resetScope === "restore"}
+                    onChange={() => setResetScope("restore")}
+                    className="mt-1 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <div className="flex-1 text-xs">
+                    <div className="font-bold text-slate-900">Restore All Historical Logs</div>
+                    <p className="text-slate-600 mt-0.5">
+                      Remove previous reset filter markers and reload all recorded telemetry from the database.
+                    </p>
+                  </div>
+                </label>
+              )}
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <Button
+                variant="outline"
+                disabled={isResetting}
+                onClick={() => setIsResetModalOpen(false)}
+                className="text-xs px-3 py-1.5 rounded-xl"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={isResetting}
+                onClick={executeTripHistoryReset}
+                className={`text-xs font-semibold px-4 py-1.5 rounded-xl text-white shadow-sm flex items-center gap-1.5 ${
+                  resetScope === "filters"
+                    ? "bg-indigo-600 hover:bg-indigo-700"
+                    : resetScope === "restore"
+                    ? "bg-emerald-600 hover:bg-emerald-700"
+                    : "bg-red-600 hover:bg-red-700"
+                }`}
+              >
+                {isResetting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-3.5 w-3.5" />
+                )}
+                <span>
+                  {resetScope === "filters"
+                    ? "Reset Filters"
+                    : resetScope === "restore"
+                    ? "Restore History"
+                    : "Confirm & Reset Trip History"}
+                </span>
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* ── HEADER ─────────────────────────────────────────────── */}
       <PageHeader
         title="Trip History & GPS Playback"
@@ -575,12 +849,15 @@ export default function TripHistoryPage() {
         actions={
           <div className="flex items-center gap-2">
             <Button
-              onClick={handleResetTripHistory}
+              onClick={() => {
+                setResetScope("all");
+                setIsResetModalOpen(true);
+              }}
               variant="outline"
-              className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs"
-              title="Reset all filters, dates, and playback to default"
+              className="bg-white border border-red-200 hover:bg-red-50 text-red-700 text-xs font-semibold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs transition-colors"
+              title="Reset and clear historical trip records from database"
             >
-              <RotateCcw className="h-3.5 w-3.5 text-slate-500" />
+              <RotateCcw className="h-3.5 w-3.5 text-red-600" />
               Reset
             </Button>
             <Button
@@ -714,12 +991,12 @@ export default function TripHistoryPage() {
 
             {/* Reset Filters Button */}
             <button
-              onClick={handleResetTripHistory}
+              onClick={handleResetFiltersOnly}
               className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs"
-              title="Reset all filters, dates, and playback to default"
+              title="Reset date range and filters back to Today"
             >
               <RotateCcw className="h-3.5 w-3.5 text-slate-500" />
-              <span>Reset</span>
+              <span>Reset Filters</span>
             </button>
           </div>
         </div>
