@@ -51,7 +51,7 @@ import {
   type RouteTemplate,
 } from "@/lib/routeTemplates";
 
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
+import { MAP_STYLE } from "@/lib/mapStyle";
 
 export const PLANNER_WORKSPACE_KEY = "nanjil_planner_active_workspace";
 

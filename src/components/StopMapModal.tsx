@@ -30,7 +30,7 @@ interface Props {
   onClose: () => void;
 }
 
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
+import { MAP_STYLE } from "@/lib/mapStyle";
 
 export function formatStopDuration(seconds: number): string {
   if (!seconds || seconds <= 0) return "0s";

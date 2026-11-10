@@ -58,7 +58,7 @@ import {
   generateJourneyTimelineEvents,
 } from "@/lib/tripHistoryEngine";
 
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
+import { MAP_STYLE } from "@/lib/mapStyle";
 
 export default function TripHistoryPage() {
   const { user } = useAuth();

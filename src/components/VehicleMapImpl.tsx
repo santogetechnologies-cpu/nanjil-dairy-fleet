@@ -23,7 +23,7 @@ interface Props {
   routeHistory?: Array<{ lat: number; lng: number }>;
 }
 
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
+import { MAP_STYLE } from "@/lib/mapStyle";
 
 /**
  * Safely resolves the display registration number for a vehicle.
