@@ -589,12 +589,7 @@ export default function TripHistoryPage() {
           localStorage.removeItem(`nanjil_trip_history_reset_${v.id}`);
         });
 
-        // 1. Invoke backend RPC if available
-        try {
-          await supabase.rpc("reset_trip_history", {});
-        } catch {}
-
-        // 2. Direct table deletion
+        // 1. Direct table deletion on telemetry_history and trips
         try {
           await supabase.from("telemetry_history").delete().not("id", "is", null);
         } catch {}
@@ -618,10 +613,6 @@ export default function TripHistoryPage() {
         if (!selectedVehicleId) return;
         const nowMs = Date.now();
         localStorage.setItem(`nanjil_trip_history_reset_${selectedVehicleId}`, nowMs.toString());
-
-        try {
-          await supabase.rpc("reset_trip_history", { target_vehicle_id: selectedVehicleId });
-        } catch {}
 
         try {
           await supabase.from("telemetry_history").delete().eq("vehicle_id", selectedVehicleId);
