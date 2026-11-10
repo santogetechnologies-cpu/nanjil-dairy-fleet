@@ -32,13 +32,12 @@ import {
   ShieldCheck,
   Map as MapIcon,
 } from "lucide-react";
-import MapGL, { Marker, Source, Layer, NavigationControl, MapRef } from "react-map-gl/maplibre";
-import "maplibre-gl/dist/maplibre-gl.css";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { useVehicles } from "@/hooks/useVehicleTracking";
 import { isGpsVehicle, KNOWN_NANJIL_DEVICE_MAP } from "@/lib/vehicle-stop-detection";
 import { toast } from "sonner";
+import { GoogleTripHistoryMap } from "@/components/maps";
 import {
   GpsPoint,
   RouteSegment,
@@ -58,11 +57,9 @@ import {
   generateJourneyTimelineEvents,
 } from "@/lib/tripHistoryEngine";
 
-import { MAP_STYLE } from "@/lib/mapStyle";
-
 export default function TripHistoryPage() {
   const { user } = useAuth();
-  const mapRef = useRef<MapRef>(null);
+  const fitMapToBoundsRef = useRef<() => void>(() => {});
   const liveVehicles = useVehicles();
 
   // Filters
@@ -163,7 +160,7 @@ export default function TripHistoryPage() {
               lng: lv.lng,
               speed: lv.speed,
               status: lv.status,
-              last_update: lv.last_update,
+              lastUpdate: lv.lastUpdate || (lv as any).last_update,
             });
           }
         }
@@ -413,49 +410,14 @@ export default function TripHistoryPage() {
 
   // 12. Center map on playback position or auto-fit route bounds on load
   const fitMapToBounds = useCallback(() => {
-    if (!mapRef.current) return;
-    if (activeGpsPoints.length < 2) {
-      const targetLng = activeGpsPoints[0]?.lng ?? 77.288373;
-      const targetLat = activeGpsPoints[0]?.lat ?? 8.260765;
-      mapRef.current.flyTo({ center: [targetLng, targetLat], zoom: 12, duration: 600 });
-      return;
-    }
-    let minLng = activeGpsPoints[0].lng;
-    let maxLng = activeGpsPoints[0].lng;
-    let minLat = activeGpsPoints[0].lat;
-    let maxLat = activeGpsPoints[0].lat;
-
-    for (const p of activeGpsPoints) {
-      if (p.lng < minLng) minLng = p.lng;
-      if (p.lng > maxLng) maxLng = p.lng;
-      if (p.lat < minLat) minLat = p.lat;
-      if (p.lat > maxLat) maxLat = p.lat;
-    }
-
-    mapRef.current.fitBounds(
-      [
-        [minLng, minLat],
-        [maxLng, maxLat],
-      ],
-      { padding: 60, duration: 800 }
-    );
-  }, [activeGpsPoints]);
+    fitMapToBoundsRef.current();
+  }, []);
 
   useEffect(() => {
     if (activeGpsPoints.length >= 2) {
       fitMapToBounds();
     }
-  }, [activeGpsPoints.length, selectedJourneyId]);
-
-  // Center map smoothly on active playback marker
-  useEffect(() => {
-    if (mapRef.current && isPlaying && currentPoint) {
-      mapRef.current.easeTo({
-        center: [currentPoint.lng, currentPoint.lat],
-        duration: 350,
-      });
-    }
-  }, [currentIndex, isPlaying, currentPoint]);
+  }, [activeGpsPoints.length, selectedJourneyId, fitMapToBounds]);
 
   // Jump to specific point index
   function jumpToPointIndex(index: number) {
@@ -526,21 +488,12 @@ export default function TripHistoryPage() {
     setIsPlaying(false);
     setCurrentIndex(0);
     setPlaybackSpeed(1);
-
-    if (activeGpsPoints.length > 0 && mapRef.current) {
-      const p = activeGpsPoints[0];
-      mapRef.current.easeTo({
-        center: [p.lng, p.lat],
-        duration: 400,
-      });
-    } else {
-      fitMapToBounds();
-    }
+    fitMapToBounds();
 
     try {
       toast.info("Playback restarted from 00:00");
     } catch {}
-  }, [activeGpsPoints, fitMapToBounds]);
+  }, [fitMapToBounds]);
 
   // Fast Filter Reset: restores date range to Today, All Drivers, All Statuses
   const handleResetFiltersOnly = useCallback(() => {
@@ -1095,133 +1048,20 @@ export default function TripHistoryPage() {
           <Card className="border border-slate-200/80 overflow-hidden shadow-xs flex-1 flex flex-col">
             {/* Map Canvas */}
             <div className="relative h-[500px] w-full bg-slate-100">
-              <MapGL
-                ref={mapRef}
-                initialViewState={{
-                  longitude: Number(currentPoint?.lng ?? vehicleCurrentPosition?.lng ?? 77.2884),
-                  latitude: Number(currentPoint?.lat ?? vehicleCurrentPosition?.lat ?? 8.2605),
-                  zoom: 12,
+              <GoogleTripHistoryMap
+                currentPoint={currentPoint}
+                vehicleCurrentPosition={vehicleCurrentPosition}
+                selectedVehicle={selectedVehicle}
+                activeGpsPoints={activeGpsPoints}
+                activeSegments={activeSegments}
+                timelineEvents={timelineEvents}
+                jumpToPointIndex={jumpToPointIndex}
+                formatIstTime={formatIstTime}
+                isPlaying={isPlaying}
+                onRegisterFitBounds={(fn) => {
+                  fitMapToBoundsRef.current = fn;
                 }}
-                onError={(e) => {
-                  // Suppress harmless tile-level style expression assertions from OpenFreeMap vector tiles
-                  if (e?.error?.message?.includes("Expected value to be of type")) return;
-                }}
-                mapStyle={MAP_STYLE}
-                style={{ width: "100%", height: "100%" }}
-              >
-                <NavigationControl position="top-right" />
-
-                {/* Segmented Historical GPS Trail (MultiLineString - Breaks at Gaps!) */}
-                {segmentedGeoJson && (
-                  <Source id="historical-trail" type="geojson" data={segmentedGeoJson}>
-                    <Layer
-                      id="trail-casing"
-                      type="line"
-                      paint={{
-                        "line-color": "#1E293B",
-                        "line-width": 5.5,
-                        "line-opacity": 0.35,
-                      }}
-                    />
-                    <Layer
-                      id="trail-line"
-                      type="line"
-                      paint={{
-                        "line-color": "#2563EB",
-                        "line-width": 3.8,
-                        "line-opacity": 0.95,
-                      }}
-                    />
-                  </Source>
-                )}
-
-                {/* Start Marker A (Emerald) */}
-                {activeGpsPoints.length > 0 && typeof activeGpsPoints[0]?.lng === "number" && typeof activeGpsPoints[0]?.lat === "number" && !isNaN(activeGpsPoints[0].lng) && !isNaN(activeGpsPoints[0].lat) && (
-                  <Marker longitude={activeGpsPoints[0].lng} latitude={activeGpsPoints[0].lat} anchor="center">
-                    <div
-                      className="h-6 w-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-[10px] shadow-lg border-2 border-white cursor-pointer"
-                      title={`Journey Departure: ${formatIstTime(activeGpsPoints[0].recorded_at)}`}
-                    >
-                      A
-                    </div>
-                  </Marker>
-                )}
-
-                {/* End Marker B (Slate) */}
-                {activeGpsPoints.length > 1 && typeof activeGpsPoints[activeGpsPoints.length - 1]?.lng === "number" && typeof activeGpsPoints[activeGpsPoints.length - 1]?.lat === "number" && !isNaN(activeGpsPoints[activeGpsPoints.length - 1].lng) && !isNaN(activeGpsPoints[activeGpsPoints.length - 1].lat) && (
-                  <Marker
-                    longitude={activeGpsPoints[activeGpsPoints.length - 1].lng}
-                    latitude={activeGpsPoints[activeGpsPoints.length - 1].lat}
-                    anchor="center"
-                  >
-                    <div
-                      className="h-6 w-6 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-[10px] shadow-lg border-2 border-white cursor-pointer"
-                      title={`Journey End: ${formatIstTime(activeGpsPoints[activeGpsPoints.length - 1].recorded_at)}`}
-                    >
-                      B
-                    </div>
-                  </Marker>
-                )}
-
-                {/* Stop Markers (P, Amber) */}
-                {timelineEvents
-                  .filter((e) => e.type === "stop" && typeof e.lng === "number" && typeof e.lat === "number" && !isNaN(e.lng) && !isNaN(e.lat))
-                  .map((e) => (
-                    <Marker key={e.id} longitude={e.lng} latitude={e.lat} anchor="center">
-                      <div
-                        onClick={() => jumpToPointIndex(e.pointIndex)}
-                        className="h-5 w-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-[9px] font-bold shadow-md border border-white cursor-pointer hover:scale-125 transition-transform"
-                        title={e.title}
-                      >
-                        P
-                      </div>
-                    </Marker>
-                  ))}
-
-                {/* Signal Gap Markers (!, Red) */}
-                {timelineEvents
-                  .filter((e) => e.type === "gap" && typeof e.lng === "number" && typeof e.lat === "number" && !isNaN(e.lng) && !isNaN(e.lat))
-                  .map((e) => (
-                    <Marker key={e.id} longitude={e.lng} latitude={e.lat} anchor="center">
-                      <div
-                        onClick={() => jumpToPointIndex(e.pointIndex)}
-                        className="h-5 w-5 rounded-full bg-red-600 text-white flex items-center justify-center text-[9px] font-bold shadow-md border border-white cursor-pointer hover:scale-125 transition-transform"
-                        title={e.title}
-                      >
-                        !
-                      </div>
-                    </Marker>
-                  ))}
-
-                {/* Vehicle Current Position Marker (when no playback or stationary) */}
-                {activeGpsPoints.length === 0 && vehicleCurrentPosition && typeof vehicleCurrentPosition.lng === "number" && typeof vehicleCurrentPosition.lat === "number" && !isNaN(vehicleCurrentPosition.lng) && !isNaN(vehicleCurrentPosition.lat) && (
-                  <Marker
-                    longitude={vehicleCurrentPosition.lng}
-                    latitude={vehicleCurrentPosition.lat}
-                    anchor="center"
-                  >
-                    <div className="relative flex items-center justify-center group cursor-pointer">
-                      <div className="h-9 w-9 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-2xl border-2 border-white ring-4 ring-indigo-200">
-                        <Truck className="h-4 w-4" />
-                      </div>
-                      <div className="absolute -top-7 bg-slate-900 text-white text-[10px] font-semibold px-2 py-0.5 rounded shadow whitespace-nowrap pointer-events-none">
-                        {selectedVehicle?.number || "Vehicle"} ({vehicleCurrentPosition.status})
-                      </div>
-                    </div>
-                  </Marker>
-                )}
-
-                {/* ACTIVE PLAYBACK VEHICLE MARKER */}
-                {currentPoint && typeof currentPoint.lng === "number" && typeof currentPoint.lat === "number" && !isNaN(currentPoint.lng) && !isNaN(currentPoint.lat) && (
-                  <Marker longitude={currentPoint.lng} latitude={currentPoint.lat} anchor="center">
-                    <div className="relative flex items-center justify-center">
-                      <div className="h-9 w-9 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-2xl border-2 border-white ring-4 ring-indigo-300 animate-pulse">
-                        <Navigation className="h-5 w-5" />
-                      </div>
-                    </div>
-                  </Marker>
-                )}
-              </MapGL>
+              />
 
               {/* HUD OVERLAY (Top-Left on Map) */}
               <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl p-3 shadow-lg text-xs space-y-1.5 min-w-[220px] z-10">

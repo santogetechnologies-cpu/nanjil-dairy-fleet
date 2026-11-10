@@ -44,8 +44,8 @@ export default defineConfig({
             if (id.includes("recharts")) {
               return "vendor-recharts";
             }
-            if (id.includes("maplibre-gl") || id.includes("react-map-gl")) {
-              return "vendor-maplibre";
+            if (id.includes("@vis.gl") || id.includes("@googlemaps")) {
+              return "vendor-google-maps";
             }
           }
         },

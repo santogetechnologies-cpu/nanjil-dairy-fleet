@@ -1,13 +1,9 @@
 /**
  * StopMapModal.tsx — Interactive GPS Map Modal for Vehicle Stops
- *
- * Displays exact stop location, coordinates, duration, vehicle, and driver
- * information using MapLibre GL.
+ * Powered by Google Maps Platform (@vis.gl/react-google-maps)
  */
 
-import { useRef, useEffect } from "react";
-import Map, { Marker, NavigationControl, ScaleControl, MapRef } from "react-map-gl/maplibre";
-import "maplibre-gl/dist/maplibre-gl.css";
+import { useEffect } from "react";
 import {
   X,
   MapPin,
@@ -24,13 +20,12 @@ import {
 import { Badge } from "@/components/ui-kit";
 import type { VehicleStopEvent } from "@/lib/vehicle-stop-detection";
 import { resolveVehicleMetadata } from "@/lib/vehicle-stop-detection";
+import { GoogleStopMap } from "@/components/maps";
 
 interface Props {
   stop: VehicleStopEvent | null;
   onClose: () => void;
 }
-
-import { MAP_STYLE } from "@/lib/mapStyle";
 
 export function formatStopDuration(seconds: number): string {
   if (!seconds || seconds <= 0) return "0s";
@@ -43,8 +38,6 @@ export function formatStopDuration(seconds: number): string {
 }
 
 export function StopMapModal({ stop, onClose }: Props) {
-  const mapRef = useRef<MapRef>(null);
-
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -124,35 +117,14 @@ export function StopMapModal({ stop, onClose }: Props) {
         <div className="flex-1 flex flex-col md:flex-row min-h-0">
           {/* Map Area */}
           <div className="flex-1 h-[360px] md:h-[480px] relative bg-slate-100">
-            <Map
-              ref={mapRef}
-              initialViewState={{
-                longitude: lng,
-                latitude: lat,
-                zoom: 14,
-              }}
-              mapStyle={MAP_STYLE}
-              style={{ width: "100%", height: "100%" }}
-            >
-              <NavigationControl position="top-right" />
-              <ScaleControl position="bottom-left" />
-
-              <Marker longitude={lng} latitude={lat} anchor="bottom">
-                <div className="relative flex flex-col items-center group cursor-pointer">
-                  <div className="px-2 py-1 rounded-md bg-slate-900 text-white text-[11px] font-bold shadow-md whitespace-nowrap mb-1">
-                    {displayVehicleNumber} ({formatStopDuration(stop.duration_seconds)})
-                  </div>
-                  <div className="h-8 w-8 rounded-full bg-red-600 border-2 border-white text-white flex items-center justify-center shadow-lg animate-bounce">
-                    <MapPin className="h-4 w-4" />
-                  </div>
-                </div>
-              </Marker>
-            </Map>
-
-            {/* Coordinates Pill */}
-            <div className="absolute bottom-3 right-3 bg-white/90 backdrop-blur-xs px-3 py-1.5 rounded-xl border border-slate-200 text-[11px] font-mono text-slate-600 shadow-sm">
-              {lat.toFixed(6)}° N, {lng.toFixed(6)}° E
-            </div>
+            <GoogleStopMap
+              lat={lat}
+              lng={lng}
+              vehicleNumber={displayVehicleNumber}
+              status={stop.status}
+              engineOn={stop.engine_on}
+              location={stop.location}
+            />
           </div>
 
           {/* Details Sidebar */}

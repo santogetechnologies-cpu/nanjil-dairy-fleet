@@ -1,0 +1,520 @@
+import { useState, useMemo, useEffect } from "react";
+import {
+  Map,
+  AdvancedMarker,
+  InfoWindow,
+  Polyline,
+  useMap,
+} from "@vis.gl/react-google-maps";
+import type { Vehicle } from "@/lib/types";
+import { Truck, Navigation, MapPin, AlertTriangle } from "lucide-react";
+import { Badge } from "@/components/ui-kit";
+import { Link } from "react-router-dom";
+import { getOverspeedStatus } from "@/lib/overspeed";
+import {
+  NANJIL_DAIRY_DEPOT,
+  DEFAULT_MAP_CENTER,
+  DEFAULT_MAP_ZOOM,
+  GOOGLE_MAPS_MAP_ID,
+  GOOGLE_MAPS_API_KEY,
+  getVehicleStatusColor,
+  getVehicleRegistrationNumber,
+} from "./mapConstants";
+
+export interface GoogleVehicleMapProps {
+  vehicles: Vehicle[];
+  height?: number;
+  selectedId?: string;
+  onSelectVehicle?: (vehicle: Vehicle) => void;
+  routeHistory?: Array<{ lat: number; lng: number }>;
+}
+
+export function GoogleVehicleMap({
+  vehicles,
+  height = 520,
+  selectedId,
+  onSelectVehicle,
+  routeHistory,
+}: GoogleVehicleMapProps) {
+  const map = useMap();
+
+  const [active, setActive] = useState<Vehicle | null>(
+    selectedId ? (vehicles.find((v) => v.id === selectedId) ?? null) : null,
+  );
+
+  if (!GOOGLE_MAPS_API_KEY) {
+    return (
+      <div
+        className="flex flex-col items-center justify-center w-full p-6 text-center bg-slate-50 border border-slate-200 rounded-xl"
+        style={{ height }}
+      >
+        <div className="h-10 w-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center mb-2">
+          <MapPin className="h-5 w-5" />
+        </div>
+        <h4 className="text-xs font-bold text-slate-800">Google Maps API Key Required</h4>
+        <p className="text-[11px] text-slate-500 max-w-sm mt-1">
+          Configure <code className="bg-slate-200 px-1 py-0.5 rounded text-[10px] font-mono">VITE_GOOGLE_MAPS_API_KEY</code> in <code className="bg-slate-200 px-1 py-0.5 rounded text-[10px] font-mono">.env</code>.
+        </p>
+      </div>
+    );
+  }
+
+  // Only show vehicles that have actual valid numeric GPS coordinates within geographic bounds
+  const mappedVehicles = useMemo(() => {
+    return vehicles.filter(
+      (v) =>
+        v.lat != null &&
+        typeof v.lat === "number" &&
+        !isNaN(v.lat) &&
+        v.lat >= -90 &&
+        v.lat <= 90 &&
+        v.lng != null &&
+        typeof v.lng === "number" &&
+        !isNaN(v.lng) &&
+        v.lng >= -180 &&
+        v.lng <= 180 &&
+        (v.lat !== 0 || v.lng !== 0),
+    );
+  }, [vehicles]);
+
+  const initialCenter = useMemo(() => {
+    if (selectedId) {
+      const v = mappedVehicles.find((x) => x.id === selectedId);
+      if (v) return { lat: v.lat, lng: v.lng };
+    }
+    if (mappedVehicles.length) {
+      const lat = mappedVehicles.reduce((s, v) => s + v.lat, 0) / mappedVehicles.length;
+      const lng = mappedVehicles.reduce((s, v) => s + v.lng, 0) / mappedVehicles.length;
+      return { lat, lng };
+    }
+    return DEFAULT_MAP_CENTER;
+  }, [mappedVehicles, selectedId]);
+
+  // Handle selectedId camera pan
+  useEffect(() => {
+    if (selectedId && map) {
+      const match = mappedVehicles.find((v) => v.id === selectedId);
+      if (match) {
+        setActive(match);
+        map.panTo({ lat: match.lat, lng: match.lng });
+        map.setZoom(14);
+      }
+    }
+  }, [selectedId, mappedVehicles, map]);
+
+  const [realRoadCoords, setRealRoadCoords] = useState<Array<{ lat: number; lng: number }> | null>(null);
+
+  const targetVehicle =
+    active || (selectedId ? mappedVehicles.find((v) => v.id === selectedId) : null);
+
+  // Real OSRM Road routing for active/selected vehicle trajectory
+  useEffect(() => {
+    if (
+      !targetVehicle ||
+      typeof targetVehicle.lat !== "number" ||
+      typeof targetVehicle.lng !== "number" ||
+      isNaN(targetVehicle.lat) ||
+      isNaN(targetVehicle.lng)
+    ) {
+      setRealRoadCoords(null);
+      return;
+    }
+
+    let isSubscribed = true;
+
+    if (!routeHistory || routeHistory.length === 0) {
+      setRealRoadCoords(null);
+      return;
+    }
+
+    const firstPt = routeHistory[0];
+    if (
+      !firstPt ||
+      typeof firstPt.lng !== "number" ||
+      typeof firstPt.lat !== "number" ||
+      isNaN(firstPt.lng) ||
+      isNaN(firstPt.lat)
+    ) {
+      setRealRoadCoords(null);
+      return;
+    }
+
+    const startLng = firstPt.lng;
+    const startLat = firstPt.lat;
+    const endLng = targetVehicle.lng;
+    const endLat = targetVehicle.lat;
+
+    if (Math.abs(startLng - endLng) < 0.0001 && Math.abs(startLat - endLat) < 0.0001) {
+      setRealRoadCoords(null);
+      return;
+    }
+
+    async function fetchRealRoadRoute() {
+      try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const json = await res.json();
+        if (json.routes && json.routes.length > 0 && json.routes[0].geometry?.coordinates) {
+          if (isSubscribed) {
+            const path = json.routes[0].geometry.coordinates.map((c: [number, number]) => ({
+              lat: c[1],
+              lng: c[0],
+            }));
+            setRealRoadCoords(path);
+          }
+        }
+      } catch (e) {
+        // Fallback gracefully to direct coordinates
+      }
+    }
+
+    fetchRealRoadRoute();
+
+    return () => {
+      isSubscribed = false;
+    };
+  }, [targetVehicle, routeHistory]);
+
+  const polylinePath = useMemo(() => {
+    if (
+      !targetVehicle ||
+      typeof targetVehicle.lat !== "number" ||
+      typeof targetVehicle.lng !== "number" ||
+      isNaN(targetVehicle.lat) ||
+      isNaN(targetVehicle.lng)
+    ) {
+      return [];
+    }
+
+    if (realRoadCoords && realRoadCoords.length >= 2) {
+      return realRoadCoords;
+    }
+
+    if (routeHistory && routeHistory.length > 0) {
+      const validPoints = routeHistory
+        .filter(
+          (pt) =>
+            pt &&
+            typeof pt.lat === "number" &&
+            !isNaN(pt.lat) &&
+            typeof pt.lng === "number" &&
+            !isNaN(pt.lng),
+        )
+        .map((pt) => ({ lat: pt.lat, lng: pt.lng }));
+
+      if (validPoints.length > 0) {
+        return [...validPoints, { lat: targetVehicle.lat, lng: targetVehicle.lng }];
+      }
+    }
+
+    return [];
+  }, [targetVehicle, realRoadCoords, routeHistory]);
+
+  const startPoint = useMemo(() => {
+    if (!polylinePath || polylinePath.length === 0) return null;
+    return polylinePath[0];
+  }, [polylinePath]);
+
+  return (
+    <div className="relative rounded-lg overflow-hidden border border-border" style={{ height }}>
+      <Map
+        defaultCenter={initialCenter}
+        defaultZoom={DEFAULT_MAP_ZOOM}
+        mapId={GOOGLE_MAPS_MAP_ID}
+        gestureHandling="greedy"
+        disableDefaultUI={false}
+        mapTypeControl={true}
+        streetViewControl={false}
+        fullscreenControl={true}
+        zoomControl={true}
+        style={{ width: "100%", height: "100%" }}
+      >
+        {/* Route Trajectory Polyline */}
+        {polylinePath.length >= 2 && (
+          <>
+            <Polyline
+              path={polylinePath}
+              strokeColor="#3B82F6"
+              strokeOpacity={0.4}
+              strokeWeight={7}
+            />
+            <Polyline
+              path={polylinePath}
+              strokeColor="#2563EB"
+              strokeOpacity={0.95}
+              strokeWeight={3.5}
+            />
+          </>
+        )}
+
+        {/* Nanjil Dairy Plant Base Point Pin Marker */}
+        <AdvancedMarker position={NANJIL_DAIRY_DEPOT}>
+          <div className="flex items-center gap-1.5 bg-amber-600 text-white px-2 py-1 rounded-md text-[11px] font-bold shadow-lg border-2 border-white ring-2 ring-amber-600/30">
+            <Truck className="h-3.5 w-3.5" />
+            <span>Nanjil Dairy Plant (Base Point)</span>
+          </div>
+        </AdvancedMarker>
+
+        {/* Route Start Point Pin Marker */}
+        {startPoint && active && (
+          <AdvancedMarker position={startPoint}>
+            <div className="flex items-center gap-1 bg-primary/90 text-primary-foreground px-2 py-0.5 rounded text-[10px] font-semibold shadow-md border border-white">
+              <MapPin className="h-3 w-3" />
+              <span>Route Origin</span>
+            </div>
+          </AdvancedMarker>
+        )}
+
+        {/* Live Vehicle Markers */}
+        {mappedVehicles.map((v) => {
+          const isSelected = active?.id === v.id || selectedId === v.id;
+          const overspeed = getOverspeedStatus(v.speed);
+          const statusBg = getVehicleStatusColor(v.status);
+
+          return (
+            <AdvancedMarker
+              key={v.id}
+              position={{ lat: v.lat, lng: v.lng }}
+              onClick={() => {
+                setActive(v);
+                if (onSelectVehicle) onSelectVehicle(v);
+                if (map) {
+                  map.panTo({ lat: v.lat, lng: v.lng });
+                  map.setZoom(14);
+                }
+              }}
+            >
+              <div className="group relative cursor-pointer focus:outline-none flex flex-col items-center">
+                {v.status === "Moving" && (
+                  <span
+                    className="absolute -inset-1.5 rounded-full animate-ping pointer-events-none"
+                    style={{ background: statusBg, opacity: 0.4 }}
+                  />
+                )}
+
+                {/* Overspeed Pulsing Halo Ring */}
+                {overspeed.level === "critical" && (
+                  <span
+                    className="absolute -inset-2.5 rounded-full animate-ping border-2 border-red-500 pointer-events-none"
+                    style={{ background: "rgba(239, 68, 68, 0.35)" }}
+                  />
+                )}
+                {overspeed.level === "warning" && (
+                  <span
+                    className="absolute -inset-2 rounded-full animate-pulse border-2 border-orange-500 pointer-events-none"
+                    style={{ background: "rgba(249, 115, 22, 0.3)" }}
+                  />
+                )}
+
+                <span
+                  className={`relative flex items-center justify-center rounded-full text-white shadow-lg transition-transform ${
+                    isSelected
+                      ? "h-9 w-9 ring-4 ring-primary scale-110"
+                      : overspeed.level === "critical"
+                        ? "h-8 w-8 ring-4 ring-red-500 ring-offset-1 scale-105"
+                        : overspeed.level === "warning"
+                          ? "h-7.5 w-7.5 ring-3 ring-orange-500 ring-offset-1"
+                          : "h-7 w-7 ring-2 ring-white"
+                  }`}
+                  style={{ background: statusBg }}
+                >
+                  <Truck className={isSelected ? "h-4 w-4" : "h-3.5 w-3.5"} />
+
+                  {/* Warning Dot Badge on Pin */}
+                  {overspeed.level === "critical" && (
+                    <span className="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full bg-red-600 text-white flex items-center justify-center text-[9px] font-black shadow-sm ring-1 ring-white">
+                      !
+                    </span>
+                  )}
+                  {overspeed.level === "warning" && (
+                    <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-orange-500 text-white flex items-center justify-center text-[8px] font-bold shadow-sm ring-1 ring-white">
+                      !
+                    </span>
+                  )}
+                </span>
+
+                {/* Vehicle Registration Number Tag on Pin */}
+                <span
+                  className={`mt-1 whitespace-nowrap px-1.5 py-0.5 rounded text-[10px] font-bold font-mono tracking-tight shadow-md border transition-all flex items-center gap-1 ${
+                    isSelected
+                      ? "bg-amber-400 text-black border-black ring-2 ring-amber-400/50 z-20 scale-105"
+                      : overspeed.level === "critical"
+                        ? "bg-red-50 text-red-700 border-red-500 ring-1 ring-red-500/50 z-20 dark:bg-red-950 dark:text-red-200"
+                        : overspeed.level === "warning"
+                          ? "bg-orange-50 text-orange-800 border-orange-500 ring-1 ring-orange-500/40 z-20 dark:bg-orange-950 dark:text-orange-200"
+                          : "bg-background/95 text-foreground border-border/80 group-hover:bg-amber-400 group-hover:text-black group-hover:border-black z-10"
+                  }`}
+                >
+                  <span
+                    className={`text-[8px] px-0.5 rounded-xs font-sans ${
+                      overspeed.level === "critical"
+                        ? "bg-red-600 text-white font-bold"
+                        : "bg-black text-amber-400"
+                    }`}
+                  >
+                    IND
+                  </span>
+                  <span>{getVehicleRegistrationNumber(v)}</span>
+                  {overspeed.level === "critical" && (
+                    <span className="text-[9px] text-red-600 font-bold font-sans">⚡{Math.round(v.speed)}</span>
+                  )}
+                  {overspeed.level === "warning" && (
+                    <span className="text-[9px] text-orange-600 font-semibold font-sans">⚠{Math.round(v.speed)}</span>
+                  )}
+                </span>
+              </div>
+            </AdvancedMarker>
+          );
+        })}
+
+        {/* Active Vehicle InfoWindow */}
+        {active &&
+          typeof active.lat === "number" &&
+          typeof active.lng === "number" &&
+          (() => {
+            const activeOverspeed = getOverspeedStatus(active.speed);
+            return (
+              <InfoWindow
+                position={{ lat: active.lat, lng: active.lng }}
+                onCloseClick={() => setActive(null)}
+                pixelOffset={[0, -28]}
+              >
+                <div className="w-68 p-1 text-slate-900 space-y-2">
+                  {/* Vehicle Registration Number Header */}
+                  <div className="flex items-start justify-between gap-2 border-b border-slate-200 pb-2">
+                    <div>
+                      <div className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1">
+                        <Truck className="h-3 w-3 text-indigo-600" />
+                        <span>Vehicle Registration No.</span>
+                      </div>
+                      <div className="mt-1 inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-400 text-black border border-black/80 font-mono font-black text-xs tracking-wider shadow-xs">
+                        <span className="text-[8px] font-sans font-bold bg-black text-amber-400 px-1 py-0.5 rounded-xs leading-none">
+                          IND
+                        </span>
+                        <span>{getVehicleRegistrationNumber(active)}</span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-1">
+                        {active.type} · {active.model}
+                      </div>
+                    </div>
+                    <Badge status={active.status}>{active.status}</Badge>
+                  </div>
+
+                  {/* Overspeed Warning Alert Banner */}
+                  {activeOverspeed.level === "warning" && (
+                    <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-orange-50 border border-orange-200 text-orange-700 text-xs font-semibold">
+                      <AlertTriangle className="h-3.5 w-3.5 text-orange-600 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="leading-tight text-[11px]">⚠ Overspeed Warning</div>
+                        <div className="text-[10px] font-normal text-orange-600/90">
+                          {active.speed} km/h (Limit: 60 km/h)
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeOverspeed.level === "critical" && (
+                    <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-red-50 border border-red-200 text-red-700 text-xs font-semibold">
+                      <AlertTriangle className="h-3.5 w-3.5 text-red-600 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="leading-tight text-[11px]">⚠ Critical Overspeed</div>
+                        <div className="text-[10px] font-normal text-red-600/90">
+                          {active.speed} km/h (Limit: 100 km/h)
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Telemetry Metrics */}
+                  <div className="grid grid-cols-2 gap-1.5 text-xs bg-slate-50 p-2 rounded border border-slate-200">
+                    <div>
+                      <div className="text-[10px] text-slate-500">Driver</div>
+                      <div className="font-semibold text-slate-800 truncate">
+                        {active.driver || "Unassigned"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-500">Speed</div>
+                      <div
+                        className={`font-semibold ${
+                          activeOverspeed.level === "critical"
+                            ? "text-red-600 font-bold"
+                            : activeOverspeed.level === "warning"
+                              ? "text-orange-600 font-semibold"
+                              : "text-slate-800"
+                        }`}
+                      >
+                        {active.speed} km/h
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-500">Avg Speed</div>
+                      <div className="font-semibold text-slate-800">
+                        {active.averageSpeed != null && active.averageSpeed > 0 ? `${active.averageSpeed.toFixed(1)} km/h` : "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-500">Fuel Level</div>
+                      <div className="font-semibold text-slate-800">{active.fuel}%</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-500">Odometer</div>
+                      <div className="font-semibold text-slate-800">
+                        {active.odometer ? `${active.odometer.toLocaleString()} km` : "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-500">Sector</div>
+                      <div className="font-medium text-slate-800 truncate" title={active.location || "Live Location"}>
+                        {active.location || "Live Location"}
+                      </div>
+                    </div>
+                    <div className="col-span-2 text-[10px] text-slate-500 font-mono truncate border-t border-slate-200 pt-1 flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
+                      <span>Device ID: {active.deviceId || "—"}</span>
+                    </div>
+                  </div>
+
+                  {/* Action Link */}
+                  <div className="pt-1">
+                    {active.id && !active.id.startsWith("unassigned-") ? (
+                      <Link
+                        to={`/vehicles/${active.id}`}
+                        className="block text-center text-xs font-semibold bg-indigo-600 text-white rounded py-1 hover:bg-indigo-700 transition-colors shadow-xs"
+                      >
+                        Inspect Telemetry →
+                      </Link>
+                    ) : (
+                      <div className="text-center text-xs text-slate-400 bg-slate-100 rounded py-1">
+                        Unassigned Device
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </InfoWindow>
+            );
+          })()}
+      </Map>
+
+      {/* Legend & Tracking Notice */}
+      <div className="absolute bottom-3 left-3 z-10 bg-card/95 backdrop-blur border border-border rounded-md px-3 py-2 text-xs flex items-center gap-3 shadow">
+        {(["Moving", "Idle", "Parked", "Offline"] as const).map((s) => (
+          <div key={s} className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full" style={{ background: getVehicleStatusColor(s) }} />
+            <span className="font-medium text-foreground">{s}</span>
+          </div>
+        ))}
+        {active && (
+          <div className="pl-2 border-l border-border text-primary font-semibold flex items-center gap-1">
+            <Navigation className="h-3 w-3 animate-pulse" />
+            <span>
+              Tracking: <strong className="font-mono">{getVehicleRegistrationNumber(active)}</strong>
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+

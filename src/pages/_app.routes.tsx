@@ -32,11 +32,10 @@ import {
   Truck,
   UserCheck,
 } from "lucide-react";
-import MapGL, { Marker, Source, Layer, NavigationControl, MapRef } from "react-map-gl/maplibre";
-import "maplibre-gl/dist/maplibre-gl.css";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { useVehicles } from "@/hooks/useVehicleTracking";
+import { GoogleRoutePlannerMap } from "@/components/maps";
 import {
   calculateRoadRoute,
   calculateRouteDeviationMeters,
@@ -50,8 +49,6 @@ import {
   DEFAULT_ROUTE_TEMPLATES,
   type RouteTemplate,
 } from "@/lib/routeTemplates";
-
-import { MAP_STYLE } from "@/lib/mapStyle";
 
 export const PLANNER_WORKSPACE_KEY = "nanjil_planner_active_workspace";
 
@@ -128,7 +125,6 @@ export function getInitialPlannerWorkspace(): StoredPlannerWorkspace | null {
 export default function RoutesPlannerPage() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
-  const mapRef = useRef<MapRef>(null);
   const liveVehicles = useVehicles();
 
   const initialWorkspace = useMemo(() => getInitialPlannerWorkspace(), []);
@@ -1373,134 +1369,19 @@ export default function RoutesPlannerPage() {
 
               {/* Map Container */}
               <div className="relative h-[560px] w-full bg-slate-100">
-                <MapGL
-                  ref={mapRef}
-                  initialViewState={{
-                    longitude: NANJIL_DAIRY_DEPOT.lng,
-                    latitude: NANJIL_DAIRY_DEPOT.lat,
-                    zoom: 11,
-                  }}
-                  mapStyle={MAP_STYLE}
-                  onClick={handleMapClick}
-                  style={{ width: "100%", height: "100%" }}
-                >
-                  <NavigationControl position="top-right" />
-
-                  {/* Outbound Road Layer (Cobalt / Indigo) */}
-                  {outboundGeoJson && (
-                    <Source id="outbound-road" type="geojson" data={outboundGeoJson}>
-                      <Layer
-                        id="outbound-line-casing"
-                        type="line"
-                        paint={{
-                          "line-color": "#1E1B4B",
-                          "line-width": 6,
-                          "line-opacity": 0.4,
-                        }}
-                      />
-                      <Layer
-                        id="outbound-line"
-                        type="line"
-                        paint={{
-                          "line-color": "#3B82F6",
-                          "line-width": 4,
-                          "line-opacity": 0.95,
-                        }}
-                      />
-                    </Source>
-                  )}
-
-                  {/* Return Road Layer (Emerald Green / Purple) */}
-                  {returnGeoJson && (
-                    <Source id="return-road" type="geojson" data={returnGeoJson}>
-                      <Layer
-                        id="return-line-casing"
-                        type="line"
-                        paint={{
-                          "line-color": "#064E3B",
-                          "line-width": 5,
-                          "line-opacity": 0.35,
-                        }}
-                      />
-                      <Layer
-                        id="return-line"
-                        type="line"
-                        paint={{
-                          "line-color": "#10B981",
-                          "line-width": 3.5,
-                          "line-dasharray": [2, 1],
-                          "line-opacity": 0.95,
-                        }}
-                      />
-                    </Source>
-                  )}
-
-                  {/* Start Marker (Depot) */}
-                  <Marker longitude={startPoint.lng} latitude={startPoint.lat} anchor="bottom">
-                    <div className="flex flex-col items-center group cursor-pointer">
-                      <div className="bg-slate-900 text-white text-[10px] font-bold px-2 py-0.5 rounded-md shadow-md border border-slate-700 whitespace-nowrap">
-                        DEPOT (ORIGIN)
-                      </div>
-                      <div className="h-6 w-6 rounded-full bg-slate-900 text-white flex items-center justify-center shadow-lg border-2 border-white">
-                        <MapPin className="h-3.5 w-3.5" />
-                      </div>
-                    </div>
-                  </Marker>
-
-                  {/* Destination Marker */}
-                  <Marker longitude={destinationPoint.lng} latitude={destinationPoint.lat} anchor="bottom">
-                    <div className="flex flex-col items-center group cursor-pointer">
-                      <div className="bg-amber-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-md shadow-md border border-amber-700 whitespace-nowrap">
-                        DESTINATION
-                      </div>
-                      <div className="h-6 w-6 rounded-full bg-amber-600 text-white flex items-center justify-center shadow-lg border-2 border-white">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                      </div>
-                    </div>
-                  </Marker>
-
-                  {/* Outbound Stop Markers */}
-                  {outboundStops.map((stop, idx) => {
-                    const isSelected = activeStopId === stop.id;
-                    return (
-                      <Marker key={stop.id} longitude={stop.lng} latitude={stop.lat} anchor="center">
-                        <div
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveStopId(stop.id);
-                          }}
-                          className={`h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-bold shadow-md cursor-pointer transition-transform hover:scale-125 border-2 ${
-                            isSelected
-                              ? "bg-indigo-700 text-white border-white ring-2 ring-indigo-400 scale-125"
-                              : stop.isMandatory
-                              ? "bg-indigo-600 text-white border-white"
-                              : "bg-amber-100 text-amber-800 border-amber-500"
-                          }`}
-                          title={`${idx + 1}. ${stop.name} (${stop.isMandatory ? "Mandatory" : "Optional"})`}
-                        >
-                          {idx + 1}
-                        </div>
-                      </Marker>
-                    );
-                  })}
-
-                  {/* Return Specific Stop Markers (For Different Path) */}
-                  {roundTripType === "different_path" &&
-                    returnStops.map((stop, idx) => (
-                      <Marker key={stop.id} longitude={stop.lng} latitude={stop.lat} anchor="center">
-                        <div
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveStopId(stop.id);
-                          }}
-                          className="h-6 w-6 rounded-full bg-emerald-600 text-white border-2 border-white flex items-center justify-center text-[10px] font-bold shadow-md cursor-pointer transition-transform hover:scale-125"
-                          title={`Return #${idx + 1}: ${stop.name}`}
-                        >
-                          R{idx + 1}
-                        </div>
-                      </Marker>
-                    ))}
-                </MapGL>
+                <GoogleRoutePlannerMap
+                  outboundCoordinates={outboundRoadResult?.coordinates}
+                  returnCoordinates={returnRoadResult?.coordinates}
+                  startPoint={startPoint}
+                  destinationPoint={destinationPoint}
+                  outboundStops={outboundStops}
+                  returnStops={returnStops}
+                  roundTripType={roundTripType}
+                  activeStopId={activeStopId}
+                  onSelectStop={setActiveStopId}
+                  onMapClick={handleMapClick}
+                  height="100%"
+                />
               </div>
 
               {/* Map Footer Toolbar */}
@@ -1943,50 +1824,13 @@ export default function RoutesPlannerPage() {
 
               {/* Map Preview */}
               <div className="h-[480px] w-full rounded-xl overflow-hidden border border-slate-200">
-                <MapGL
-                  initialViewState={{
-                    longitude: NANJIL_DAIRY_DEPOT.lng,
-                    latitude: NANJIL_DAIRY_DEPOT.lat,
-                    zoom: 11,
-                  }}
-                  mapStyle={MAP_STYLE}
-                  style={{ width: "100%", height: "100%" }}
-                >
-                  <NavigationControl position="top-right" />
-
-                  {/* Planned Outbound Road */}
-                  {outboundGeoJson && (
-                    <Source id="exec-outbound" type="geojson" data={outboundGeoJson}>
-                      <Layer
-                        id="exec-outbound-line"
-                        type="line"
-                        paint={{
-                          "line-color": "#4F46E5",
-                          "line-width": 4,
-                          "line-opacity": 0.8,
-                        }}
-                      />
-                    </Source>
-                  )}
-
-                  {/* Stops */}
-                  {outboundStops.map((s, idx) => (
-                    <Marker key={s.id} longitude={s.lng} latitude={s.lat} anchor="center">
-                      <div className="h-5 w-5 rounded-full bg-slate-900 text-white flex items-center justify-center text-[9px] font-bold shadow-sm">
-                        {idx + 1}
-                      </div>
-                    </Marker>
-                  ))}
-
-                  {/* Active Vehicle Marker */}
-                  {activeVehicle && typeof activeVehicle.lat === "number" && (
-                    <Marker longitude={activeVehicle.lng} latitude={activeVehicle.lat} anchor="center">
-                      <div className="h-8 w-8 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-lg ring-4 ring-emerald-300 animate-pulse">
-                        <Navigation className="h-4 w-4" />
-                      </div>
-                    </Marker>
-                  )}
-                </MapGL>
+                <GoogleRoutePlannerMap
+                  outboundCoordinates={outboundRoadResult?.coordinates}
+                  outboundStops={outboundStops}
+                  interactive={false}
+                  activeVehicle={activeVehicle}
+                  height="100%"
+                />
               </div>
 
               {/* Deviation & Completion Metrics */}
