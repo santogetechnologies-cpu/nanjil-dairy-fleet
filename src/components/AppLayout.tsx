@@ -125,12 +125,21 @@ export function AppLayout({ children }: { children: ReactNode }) {
           .from("alerts")
           .select("id, type, severity, message, time, vehicle_id, vehicles(number)")
           .eq("resolved", false)
+          .neq("type", "Temperature")
           .order("time", { ascending: false })
-          .limit(6);
+          .limit(10);
 
         if (cancelled) return;
         if (!error && data) {
-          const mapped = data.map((item: any) => ({
+          const nonTemp = data
+            .filter((item: any) => {
+              const msg = (item.message || "").toLowerCase();
+              const type = (item.type || "").toLowerCase();
+              return !type.includes("temp") && !msg.includes("temperature") && !msg.includes("cold chain");
+            })
+            .slice(0, 6);
+
+          const mapped = nonTemp.map((item: any) => ({
             ...item,
             vehicle: item.vehicles?.number || null,
           }));

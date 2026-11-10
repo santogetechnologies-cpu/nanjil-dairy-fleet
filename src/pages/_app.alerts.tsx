@@ -70,7 +70,11 @@ export default function AlertsPage() {
     setIsLoading(true);
     try {
       const [aRes, vRes, dRes, vaRes, tRes] = await Promise.all([
-        supabase.from("alerts").select("*").order("time", { ascending: false }),
+        supabase
+          .from("alerts")
+          .select("*")
+          .neq("type", "Temperature")
+          .order("time", { ascending: false }),
         supabase.from("vehicles").select("id, number, type, model"),
         supabase.from("drivers").select("id, name, phone"),
         supabase.from("vehicle_assignments").select("id, vehicle_id, driver_id, assigned_at, unassigned_at, is_active, drivers(name)"),
@@ -98,24 +102,52 @@ export default function AlertsPage() {
         }
       });
 
-      const rawAlerts = aRes.data || [];
+      // Filter out any temperature-related alerts from the operational stream
+      const rawAlerts = (aRes.data || []).filter((a: any) => {
+        const msg = (a.message || "").toLowerCase();
+        const type = (a.type || "").toLowerCase();
+        if (
+          type.includes("temp") ||
+          msg.includes("temperature") ||
+          msg.includes("cold chain")
+        ) {
+          return false;
+        }
+        return true;
+      });
+
       const mapped: OperationalAlert[] = rawAlerts.map((a: any, idx: number) => {
         const vObj = vList.find((x) => x.id === a.vehicle_id);
         const vNum = vObj ? vObj.number : a.vehicle || "Fleet Unit";
 
         // Map generic alert message to clean operational types
         const msg = (a.message || "").toLowerCase();
+        const rawType = (a.type || "").toLowerCase();
+
         let alertType: OperationalAlert["type"] = "Overspeeding";
-        if (msg.includes("deviation") || msg.includes("route")) alertType = "Route Deviation";
-        else if (msg.includes("idle")) alertType = "Excessive Idling";
-        else if (msg.includes("stop")) alertType = "Unexpected Stop";
-        else if (msg.includes("fuel")) alertType = "Fuel Anomaly";
-        else if (msg.includes("maintenance") || msg.includes("service")) alertType = "Maintenance Due";
-        else if (msg.includes("expiry") || msg.includes("permit") || msg.includes("insurance"))
+        if (rawType === "safety" || msg.includes("speed") || msg.includes("overspeed") || msg.includes("km/h")) {
+          alertType = "Overspeeding";
+        } else if (msg.includes("deviation") || msg.includes("route")) {
+          alertType = "Route Deviation";
+        } else if (msg.includes("idle")) {
+          alertType = "Excessive Idling";
+        } else if (msg.includes("stop")) {
+          alertType = "Unexpected Stop";
+        } else if (msg.includes("fuel")) {
+          alertType = "Fuel Anomaly";
+        } else if (msg.includes("maintenance") || msg.includes("service")) {
+          alertType = "Maintenance Due";
+        } else if (msg.includes("expiry") || msg.includes("permit") || msg.includes("insurance")) {
           alertType = "Document Expiry";
-        else if (msg.includes("offline") || msg.includes("disconnect")) alertType = "GPS Offline";
-        else if (msg.includes("delay")) alertType = "Delayed Arrival";
-        else if (msg.includes("missed")) alertType = "Missed Mandatory Stop";
+        } else if (msg.includes("offline") || msg.includes("disconnect")) {
+          alertType = "GPS Offline";
+        } else if (msg.includes("delay")) {
+          alertType = "Delayed Arrival";
+        } else if (msg.includes("missed")) {
+          alertType = "Missed Mandatory Stop";
+        } else if (msg.includes("breakdown")) {
+          alertType = "Vehicle Breakdown";
+        }
 
         let sev: OperationalAlert["severity"] = a.severity || "Medium";
         if (a.severity === "High" && (msg.includes("critical") || msg.includes("breakdown"))) {

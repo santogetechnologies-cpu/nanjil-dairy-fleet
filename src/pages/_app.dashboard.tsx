@@ -54,7 +54,12 @@ export default function DashboardPage() {
       try {
         const [vRes, aRes, mRes, tRes, fRes, rRes] = await Promise.all([
           supabase.from("vehicles").select("*"),
-          supabase.from("alerts").select("*").order("time", { ascending: false }).limit(6),
+          supabase
+            .from("alerts")
+            .select("*")
+            .neq("type", "Temperature")
+            .order("time", { ascending: false })
+            .limit(10),
           supabase.from("maintenance_records").select("*"),
           supabase.from("trips").select("*, vehicles(number), drivers(name)").order("date", { ascending: false }).limit(6),
           supabase.from("fuel_purchase_logs").select("*").order("logged_at", { ascending: true }),
@@ -63,8 +68,16 @@ export default function DashboardPage() {
 
         if (cancelled) return;
 
+        const cleanAlerts = (aRes.data || [])
+          .filter((a: any) => {
+            const msg = (a.message || "").toLowerCase();
+            const type = (a.type || "").toLowerCase();
+            return !type.includes("temp") && !msg.includes("temperature") && !msg.includes("cold chain");
+          })
+          .slice(0, 6);
+
         setVehicles(vRes.data || []);
-        setAlerts(aRes.data || []);
+        setAlerts(cleanAlerts);
         setMaintenance(mRes.data || []);
         setRecentTrips(tRes.data || []);
         setFuelLogs(fRes.data || []);
