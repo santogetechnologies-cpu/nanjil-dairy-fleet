@@ -175,7 +175,7 @@ export default function VehicleDetailsPage() {
         supabase.from("fuel_purchase_logs").select("*").eq("vehicle_id", vData.id).order("logged_at", { ascending: true }),
         supabase.from("trips").select("*, drivers(name, phone)").eq("vehicle_id", vData.id).order("date", { ascending: false }),
         supabase.from("alerts").select("*").eq("vehicle_id", vData.id).order("time", { ascending: false }),
-        supabase.from("telemetry_history").select("*").eq("vehicle_id", vData.id).order("recorded_at", { ascending: false }).limit(60),
+        supabase.from("telemetry_history").select("*").eq("vehicle_id", vData.id).order("recorded_at", { ascending: false }).limit(500),
         vData.driver_id ? supabase.from("drivers").select("*").eq("id", vData.driver_id).maybeSingle() : Promise.resolve({ data: null }),
       ]);
 
@@ -602,6 +602,31 @@ export default function VehicleDetailsPage() {
     // Fallback to authoritative live GPS tracker average speed if historical telemetry has insufficient points
     if (avgSpeed == null && v?.averageSpeed != null && v.averageSpeed > 0) {
       avgSpeed = v.averageSpeed;
+    }
+
+    // Fallback to completed trips average speed if telemetry has insufficient points
+    if (avgSpeed == null && filteredTrips.length > 0) {
+      let totalTripDist = 0;
+      let totalTripHours = 0;
+      filteredTrips.forEach((t: any) => {
+        const d = Number(t.distance || 0);
+        if (d > 0) {
+          totalTripDist += d;
+          let hours = 0;
+          if (typeof t.duration === "number") {
+            hours = t.duration / 60;
+          } else if (typeof t.duration === "string") {
+            const hMatch = t.duration.match(/(\d+(?:\.\d+)?)\s*h/i);
+            const mMatch = t.duration.match(/(\d+(?:\.\d+)?)\s*m/i);
+            if (hMatch) hours += parseFloat(hMatch[1]);
+            if (mMatch) hours += parseFloat(mMatch[1]) / 60;
+          }
+          if (hours > 0) totalTripHours += hours;
+        }
+      });
+      if (totalTripHours > 0 && totalTripDist > 0) {
+        avgSpeed = Math.round((totalTripDist / totalTripHours) * 10) / 10;
+      }
     }
 
     // 3. Trips metrics

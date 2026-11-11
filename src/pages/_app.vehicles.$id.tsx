@@ -547,7 +547,7 @@ function VehicleDetailPage() {
       ? v.averageSpeed
       : activeSpeedPoints.length > 0
       ? activeSpeedPoints.reduce((acc, h) => acc + h.speed, 0) / activeSpeedPoints.length
-      : 0;
+      : null;
 
   return (
     <div>
@@ -947,7 +947,7 @@ function VehicleDetailPage() {
                 Peak: <span className="text-red-600 font-bold">{maxSpeedInHistory} km/h</span>
               </span>
               <span className="px-2.5 py-1 rounded-md bg-muted/60 text-foreground text-xs font-semibold border border-border">
-                Avg: <span className="text-primary font-bold">{Math.round(avgSpeedInHistory)} km/h</span>
+                Avg: <span className="text-primary font-bold">{avgSpeedInHistory != null && avgSpeedInHistory > 0 ? `${Math.round(avgSpeedInHistory)} km/h` : "—"}</span>
               </span>
               <span className="px-2.5 py-1 rounded-md bg-amber-50 text-amber-700 text-xs font-semibold border border-amber-200">
                 Limit: 60 km/h

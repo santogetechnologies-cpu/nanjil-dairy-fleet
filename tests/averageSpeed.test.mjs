@@ -362,3 +362,42 @@ test("16. Supabase recorded_at timestamp preservation", () => {
   };
   assert.equal(extractTelemetryTimestamp(rowOnlyLastUpdate), Date.parse("2026-10-08T10:35:00.000Z"));
 });
+
+test("17. Implied Speed Movement: Accrues driving distance & time when speed sensor reports 0", () => {
+  const tracker = new GpsAverageSpeedTracker();
+  const devId = "TEST_DEV_17";
+  const lat1 = 8.260427;
+  const lng1 = 77.288300;
+  const t0 = 1710000000000;
+
+  // Point A: speed sensor reports 0
+  tracker.updateGpsPoint(devId, lat1, lng1, 0, t0);
+
+  // Point B: 60 seconds later, moved ~0.5 km north (0.0045 deg lat), speed sensor reports 0
+  // Implied speed = 0.5 km / (60/3600 hr) = 30 km/h
+  const lat2 = lat1 + 0.0045;
+  const t1 = t0 + 60000;
+  tracker.updateGpsPoint(devId, lat2, lng1, 0, t1);
+
+  const stats = tracker.getTrackingStats(devId);
+  assert.ok(stats !== null);
+  assert.ok(stats.distanceKm > 0.49 && stats.distanceKm < 0.51);
+  assert.equal(stats.drivingTimeSec, 60);
+  assert.ok(stats.avgSpeed >= 29 && stats.avgSpeed <= 31);
+});
+
+test("18. loadPoints Batch Hydration: Correctly sorts points and calculates mathematical average speed", () => {
+  const tracker = new GpsAverageSpeedTracker();
+  const devId = "TEST_DEV_18";
+
+  // Feed points in reverse order (e.g. from DESC query)
+  const unsorted = [
+    { lat: 8.2690, lng: 77.2880, speed: 30, recorded_at: "2026-11-11T05:02:00Z" },
+    { lat: 8.2600, lng: 77.2880, speed: 30, recorded_at: "2026-11-11T05:00:00Z" },
+  ];
+
+  tracker.loadPoints(devId, unsorted);
+  const avg = tracker.getAverageSpeed(devId);
+  assert.ok(avg !== null);
+  assert.ok(avg >= 29 && avg <= 31);
+});

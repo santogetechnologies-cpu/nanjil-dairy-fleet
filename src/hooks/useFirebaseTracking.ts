@@ -4,7 +4,8 @@ import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { supabase } from "@/lib/supabase";
 import { type Vehicle, type VehicleStatus } from "@/lib/types";
-import { useAverageSpeed, extractTelemetryTimestamp } from "@/hooks/useAverageSpeed";
+import { useAverageSpeed, extractTelemetryTimestamp, globalGpsSpeedTracker } from "@/hooks/useAverageSpeed";
+import { getIstDateRange } from "@/lib/tripHistoryEngine";
 
 export interface FirestoreVehicleDoc {
   device_id?: string | number;
@@ -270,6 +271,41 @@ export function usePureFirebaseTracking() {
         }
 
         if (!cancelled) {
+          // Register aliases for all vehicles between UUID and device ID
+          combined.forEach((v) => {
+            const cleanDev = normalizeDeviceId(v.device_id);
+            if (v.id && cleanDev) {
+              registerAlias(v.id, cleanDev);
+            }
+          });
+
+          // Hydrate today's telemetry history for mathematical Average Speed calculation
+          try {
+            const { startUtcIso } = getIstDateRange("today");
+            const { data: histPoints } = await supabase
+              .from("telemetry_history")
+              .select("vehicle_id, lat, lng, speed, recorded_at")
+              .gte("recorded_at", startUtcIso)
+              .order("recorded_at", { ascending: true })
+              .limit(2000);
+
+            if (histPoints && histPoints.length > 0 && !cancelled) {
+              const byVehicle = new Map<string, any[]>();
+              histPoints.forEach((row) => {
+                if (!row.vehicle_id) return;
+                const pts = byVehicle.get(row.vehicle_id) || [];
+                pts.push(row);
+                byVehicle.set(row.vehicle_id, pts);
+              });
+
+              byVehicle.forEach((pts, vId) => {
+                globalGpsSpeedTracker.loadPoints(vId, pts);
+              });
+            }
+          } catch (speedErr) {
+            console.warn("[AverageSpeed] Could not hydrate today's telemetry for speed:", speedErr);
+          }
+
           setSupabaseVehicles(combined);
           if (typeof localStorage !== "undefined" && combined.length > 0) {
             try {

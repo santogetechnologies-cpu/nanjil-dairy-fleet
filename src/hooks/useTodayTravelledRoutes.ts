@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "../lib/supabase.ts";
 import type { Vehicle } from "../lib/types.ts";
+import { globalGpsSpeedTracker } from "../lib/gpsAverageSpeed.ts";
 import {
   getIstDateRange,
   isValidGpsCoord,
@@ -163,6 +164,9 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
 
           // Only append if vehicle moved at least 5 meters
           if (distKm >= 0.005) {
+            const impliedSpeed = timeDiffSec > 0 ? (distKm / (timeDiffSec / 3600)) : 0;
+            globalGpsSpeedTracker.updateGpsPoint(targetKey, lat, lng, impliedSpeed, currTime);
+
             if (diffMins > 15) {
               // Signal gap: start a new segment
               updatedSegments.push([{ lat, lng, recorded_at: timestamp }]);
@@ -252,6 +256,14 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
         fetchResults.forEach(({ uuid, points }) => {
           const segments = processRawGpsPoints(points, 15);
           const devId = uuidToDeviceMapRef.current.get(uuid);
+
+          // Hydrate the authoritative GPS speed tracker with today's telemetry points
+          if (points && points.length >= 2) {
+            globalGpsSpeedTracker.loadPoints(uuid, points as any);
+            if (devId) {
+              globalGpsSpeedTracker.registerAlias(uuid, devId);
+            }
+          }
 
           // Find current live vehicle data if available to extend route to live location
           const liveMatch = vehicles.find(
