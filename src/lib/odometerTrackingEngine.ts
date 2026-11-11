@@ -68,6 +68,8 @@ export interface VehicleOdometerState {
   lastTelemetryId?: string;
   lastTelemetryTime?: string;
   baselineOdometerKm: number;
+  stationaryStartTime?: string;
+  tripStartTime?: string;
 }
 
 export interface RawTelemetryInput {
@@ -186,9 +188,11 @@ export function initVehicleOdometerState(
   },
   initialTodayDistance = 0,
   initialTodayDate?: string,
+  initialTripDistance = 0,
 ): VehicleOdometerState {
   const baseline = Math.max(0, Number(vehicle.odometer || 0));
   const todayDist = Math.max(0, initialTodayDistance);
+  const tripDist = Math.max(0, initialTripDistance);
   const total = baseline + todayDist;
   const todayDate = initialTodayDate || getTodayIstDateString();
 
@@ -198,7 +202,7 @@ export function initVehicleOdometerState(
     deviceId: vehicle.deviceId || vehicle.device_id,
     totalOdometerKm: Math.round(total * 100) / 100,
     todayDistanceKm: Math.round(todayDist * 100) / 100,
-    currentTripDistanceKm: Math.round(todayDist * 100) / 100,
+    currentTripDistanceKm: Math.round(tripDist * 100) / 100,
     currentSpeedKmh: 0,
     readingSource: "gps_estimated",
     isMoving: false,
@@ -213,6 +217,8 @@ export function initVehicleOdometerState(
     lastTelemetryId: undefined,
     lastTelemetryTime: undefined,
     baselineOdometerKm: baseline,
+    stationaryStartTime: undefined,
+    tripStartTime: undefined,
   };
 }
 
@@ -320,14 +326,29 @@ export function processOdometerTelemetry(
   if (isMoving && input.lat != null && input.lng != null) {
     if (isFleetOperatingCoordinate(input.lat, input.lng)) {
       if (prevLat != null && prevLng != null) {
-        // Check if vehicle was stopped for > 15 minutes before this movement (new trip started)
+        // 1. Check if vehicle was stationary prior to this movement (trip completed, new trip begins)
+        if (next.stationaryStartTime && input.recordedAt) {
+          const stopMs = new Date(next.stationaryStartTime).getTime();
+          const currMs = new Date(input.recordedAt).getTime();
+          const stopMins = (currMs - stopMs) / 60000;
+          if (stopMins >= 5) {
+            // Vehicle was stopped for >= 5 minutes: completed previous trip, new trip begins!
+            next.currentTripDistanceKm = 0;
+            next.tripStartTime = input.recordedAt;
+          }
+          next.stationaryStartTime = undefined;
+        }
+
+        // 2. Check if signal gap was > 15 minutes before this movement
         if (prevTime && input.recordedAt) {
           const prevMs = new Date(prevTime).getTime();
           const currMs = new Date(input.recordedAt).getTime();
           const gapMins = (currMs - prevMs) / 60000;
-          if (gapMins > 15 && !state.isMoving) {
-            // New trip begins
+          if (gapMins > 15) {
+            // Signal gap > 15 minutes: new trip begins
             next.currentTripDistanceKm = 0;
+            next.tripStartTime = input.recordedAt;
+            next.stationaryStartTime = undefined;
           }
         }
 
@@ -352,14 +373,19 @@ export function processOdometerTelemetry(
         }
       }
 
+      // Movement confirms active trip; clear any stationary marker
+      next.stationaryStartTime = undefined;
+
       next.previousLatitude = Number(input.lat);
       next.previousLongitude = Number(input.lng);
       next.lastValidLat = Number(input.lat);
       next.lastValidLng = Number(input.lng);
     }
   } else if (!isMoving) {
-    // When vehicle is stopped/idle: freeze odometer reading, do not accrue drift
-    // Current trip distance freezes at its completed value
+    // When vehicle is stopped/idle: mark stationary start time, freeze odometer & trip distance
+    if (!next.stationaryStartTime) {
+      next.stationaryStartTime = input.recordedAt || new Date().toISOString();
+    }
     if (input.lat != null && input.lng != null && isFleetOperatingCoordinate(input.lat, input.lng)) {
       next.previousLatitude = Number(input.lat);
       next.previousLongitude = Number(input.lng);
@@ -435,41 +461,126 @@ export async function persistVehicleOdometer(
 }
 
 /**
- * Computes today's GPS distance from time-series points.
+ * Computes both Today's cumulative distance and Current Trip distance from historical time-series points.
+ * A new trip is identified when the vehicle resumes movement after being stopped/stationary for >= stopThresholdMinutes (default: 5m)
+ * or across signal gaps > 15 minutes.
  */
-export function calculateTodayGpsDistance(
+export function calculateTodayAndTripDistances(
   points: Array<{ lat: number; lng: number; speed?: number; recorded_at?: string }>,
-): number {
-  if (!points || points.length < 2) return 0;
+  stopThresholdMinutes = 5,
+): {
+  todayDistanceKm: number;
+  currentTripDistanceKm: number;
+  tripsCount: number;
+  currentTripStart?: string;
+  isCurrentTripActive: boolean;
+} {
+  if (!points || points.length < 2) {
+    return {
+      todayDistanceKm: 0,
+      currentTripDistanceKm: 0,
+      tripsCount: points && points.length === 1 ? 1 : 0,
+      isCurrentTripActive: false,
+    };
+  }
 
-  let totalDistKm = 0;
-  let prevPt: { lat: number; lng: number; speed?: number; recorded_at?: string } | null = null;
+  // Filter valid fleet operating coordinates
+  const validPoints = points.filter(
+    (pt) => pt && pt.lat != null && pt.lng != null && isFleetOperatingCoordinate(pt.lat, pt.lng),
+  );
+  if (validPoints.length < 2) {
+    return {
+      todayDistanceKm: 0,
+      currentTripDistanceKm: 0,
+      tripsCount: validPoints.length,
+      isCurrentTripActive: false,
+    };
+  }
 
-  for (const pt of points) {
-    if (
-      pt.lat == null ||
-      pt.lng == null ||
-      !isFleetOperatingCoordinate(pt.lat, pt.lng)
-    ) {
+  // Sort chronologically ascending by recorded_at
+  const sorted = [...validPoints].sort((a, b) => {
+    const tA = a.recorded_at ? new Date(a.recorded_at).getTime() : 0;
+    const tB = b.recorded_at ? new Date(b.recorded_at).getTime() : 0;
+    return tA - tB;
+  });
+
+  let todayDistanceKm = 0;
+  let currentTripDistanceKm = 0;
+  let tripsCount = 1;
+  let currentTripStart = sorted[0].recorded_at;
+
+  let stationaryStartMs: number | null = null;
+  let prevPt: (typeof sorted)[0] | null = null;
+  let isCurrentlyMoving = false;
+
+  for (let i = 0; i < sorted.length; i++) {
+    const pt = sorted[i];
+
+    if (!prevPt) {
+      prevPt = pt;
+      if ((pt.speed ?? 0) <= 3) {
+        stationaryStartMs = pt.recorded_at ? new Date(pt.recorded_at).getTime() : null;
+      }
       continue;
     }
 
-    if (prevPt) {
-      const d = calculateMovementDistanceKm(
-        prevPt.lat,
-        prevPt.lng,
-        prevPt.recorded_at,
-        pt.lat,
-        pt.lng,
-        pt.recorded_at,
-        pt.speed ?? 10, // assume moving if consecutive trajectory point
-      );
-      totalDistKm += d;
+    const prevMs = prevPt.recorded_at ? new Date(prevPt.recorded_at).getTime() : 0;
+    const currMs = pt.recorded_at ? new Date(pt.recorded_at).getTime() : 0;
+    const dtSec = Math.max(0, (currMs - prevMs) / 1000);
+    const d = calculateMovementDistanceKm(
+      prevPt.lat,
+      prevPt.lng,
+      prevPt.recorded_at,
+      pt.lat,
+      pt.lng,
+      pt.recorded_at,
+      pt.speed ?? 10,
+    );
+
+    const isMoving = (pt.speed ?? 0) > 3 || (dtSec > 0 && (d / (dtSec / 3600)) > 3);
+    isCurrentlyMoving = isMoving;
+
+    if (isMoving) {
+      // Check if vehicle was stationary for >= stopThresholdMinutes before this movement
+      if (stationaryStartMs !== null) {
+        const stopDurationMin = (currMs - stationaryStartMs) / 60000;
+        if (stopDurationMin >= stopThresholdMinutes || dtSec > 15 * 60) {
+          tripsCount++;
+          currentTripDistanceKm = 0; // New trip begins
+          currentTripStart = pt.recorded_at;
+        }
+        stationaryStartMs = null;
+      }
+
+      if (d > 0) {
+        todayDistanceKm += d;
+        currentTripDistanceKm += d;
+      }
+    } else {
+      // Stationary (speed <= 3)
+      if (stationaryStartMs === null) {
+        stationaryStartMs = prevMs > 0 ? prevMs : currMs;
+      }
     }
 
     prevPt = pt;
   }
 
-  return Math.round(totalDistKm * 100) / 100;
+  return {
+    todayDistanceKm: Math.round(todayDistanceKm * 100) / 100,
+    currentTripDistanceKm: Math.round(currentTripDistanceKm * 100) / 100,
+    tripsCount,
+    currentTripStart,
+    isCurrentTripActive: isCurrentlyMoving,
+  };
+}
+
+/**
+ * Computes today's GPS distance from time-series points.
+ */
+export function calculateTodayGpsDistance(
+  points: Array<{ lat: number; lng: number; speed?: number; recorded_at?: string }>,
+): number {
+  return calculateTodayAndTripDistances(points).todayDistanceKm;
 }
 
