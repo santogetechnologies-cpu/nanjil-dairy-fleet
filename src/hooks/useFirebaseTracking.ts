@@ -119,6 +119,7 @@ export function getGenuineFirebaseVehicleNumber(
 export function parseFirestoreTelemetry(
   data: FirestoreVehicleDoc,
   existing?: Vehicle,
+  docSnap?: any,
 ): Partial<Vehicle> {
   const rawLat = data.lat;
   const rawLng = data.lng;
@@ -164,6 +165,25 @@ export function parseFirestoreTelemetry(
     status = "Parked";
   }
 
+  // Preserve authentic telemetry timestamp for accurate odometer & trip calculation
+  const epochMs = extractTelemetryTimestamp(data, docSnap);
+  let validIso: string;
+  if (epochMs && !isNaN(epochMs) && epochMs > 0) {
+    validIso = new Date(epochMs).toISOString();
+  } else if (data.last_update && typeof data.last_update.toDate === "function") {
+    validIso = data.last_update.toDate().toISOString();
+  } else if (typeof data.last_update === "string" && !isNaN(Date.parse(data.last_update))) {
+    validIso = new Date(data.last_update).toISOString();
+  } else if (data.timestamp && typeof data.timestamp.toDate === "function") {
+    validIso = data.timestamp.toDate().toISOString();
+  } else if (typeof data.timestamp === "string" && !isNaN(Date.parse(data.timestamp))) {
+    validIso = new Date(data.timestamp).toISOString();
+  } else if (existing?.lastUpdate && !isNaN(Date.parse(existing.lastUpdate))) {
+    validIso = existing.lastUpdate;
+  } else {
+    validIso = new Date().toISOString();
+  }
+
   return {
     lat: isNaN(lat) ? existing?.lat || 0 : lat,
     lng: isNaN(lng) ? existing?.lng || 0 : lng,
@@ -175,7 +195,7 @@ export function parseFirestoreTelemetry(
     ignition,
     status,
     location: data.location || existing?.location || "",
-    lastUpdate: "Just now (Firebase)",
+    lastUpdate: validIso,
   };
 }
 
@@ -353,7 +373,14 @@ export function usePureFirebaseTracking() {
         snapshot.forEach((docSnap) => {
           const data = docSnap.data() as FirestoreVehicleDoc;
           const docId = docSnap.id.trim();
-          docs.push({ id: docId, data });
+          const timestamp = extractTelemetryTimestamp(data, docSnap);
+          const validTimestampIso = timestamp ? new Date(timestamp).toISOString() : new Date().toISOString();
+          const enrichedData: FirestoreVehicleDoc = {
+            ...data,
+            last_update: data.last_update || validTimestampIso,
+            timestamp: data.timestamp || validTimestampIso,
+          };
+          docs.push({ id: docId, data: enrichedData });
 
           // Feed each GPS point with its authentic telemetry timestamp
           const { cleanDevId } = extractTelemetryDeviceId(data, docId);
@@ -361,7 +388,6 @@ export function usePureFirebaseTracking() {
             const lat = typeof data.lat === "number" ? data.lat : parseFloat(String(data.lat ?? 0));
             const lng = typeof data.lng === "number" ? data.lng : parseFloat(String(data.lng ?? 0));
             const speed = typeof data.speed === "number" ? data.speed : parseFloat(String(data.speed || 0));
-            const timestamp = extractTelemetryTimestamp(data, docSnap);
             updateGpsPoint(cleanDevId, lat, lng, speed, timestamp);
 
             // Continuously persist live telemetry into Supabase telemetry_history (throttled)
@@ -510,7 +536,7 @@ export function usePureFirebaseTracking() {
         nextServiceKm: matchedSupabase?.next_service_km || 0,
         odometer: matchedSupabase?.odometer || 0,
         engineHours: matchedSupabase?.engine_hours ? Number(matchedSupabase.engine_hours) : 0,
-        lastUpdate: "Just now (Firebase)",
+        lastUpdate: parsed.lastUpdate || new Date().toISOString(),
         deviceId: cleanDevId || rawDevId,
         averageSpeed: getAverageSpeed(cleanDevId || rawDevId) ?? (matchedSupabase ? getAverageSpeed(matchedSupabase.id) : null),
       } as Vehicle;

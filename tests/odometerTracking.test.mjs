@@ -376,3 +376,201 @@ test("12. Test 12: Midnight Daily-Distance Reset — Asia/Kolkata date transitio
   assert.equal(state.todayDistanceKm, 0.0, "Today's distance must reset to 0 at local midnight");
   assert.equal(state.totalOdometerKm, 20126.4, "Total odometer must NEVER reset on day transition");
 });
+
+test("13. Regression Fix: Firebase Stream with Monotonic Timestamps Continuously Advances Odometer", () => {
+  const vehicle = { id: "v13", number: "TN 75 F 4323", odometer: 48250.0 };
+  let state = initVehicleOdometerState(vehicle);
+
+  // Snapshot 1 at T0
+  const t0 = new Date("2026-11-11T06:00:00Z");
+  state = processOdometerTelemetry(state, {
+    vehicleId: vehicle.id,
+    lat: 8.2600,
+    lng: 77.2880,
+    speed: 30,
+    recordedAt: t0.toISOString(),
+  }).updatedState;
+
+  // Snapshot 2 at T0 + 30s (~0.3 km north)
+  const t1 = new Date(t0.getTime() + 30000);
+  const step2 = processOdometerTelemetry(state, {
+    vehicleId: vehicle.id,
+    lat: 8.2627,
+    lng: 77.2880,
+    speed: 36,
+    recordedAt: t1.toISOString(),
+  });
+  state = step2.updatedState;
+  assert.equal(step2.isDuplicate, false);
+  assert.ok(step2.distanceAddedKm > 0.28 && step2.distanceAddedKm < 0.32);
+  assert.equal(Math.round(state.totalOdometerKm * 10) / 10, 48250.3);
+
+  // Snapshot 3 at T0 + 60s (~0.35 km further)
+  const t2 = new Date(t0.getTime() + 60000);
+  const step3 = processOdometerTelemetry(state, {
+    vehicleId: vehicle.id,
+    lat: 8.2658,
+    lng: 77.2880,
+    speed: 40,
+    recordedAt: t2.toISOString(),
+  });
+  state = step3.updatedState;
+  assert.equal(step3.isDuplicate, false);
+  assert.ok(step3.distanceAddedKm > 0.32 && step3.distanceAddedKm < 0.36);
+  assert.equal(Math.round(state.totalOdometerKm * 10) / 10, 48250.6);
+
+  // Duplicate snapshot with identical timestamp MUST be rejected without adding distance
+  const dupStep = processOdometerTelemetry(state, {
+    vehicleId: vehicle.id,
+    lat: 8.2658,
+    lng: 77.2880,
+    speed: 40,
+    recordedAt: t2.toISOString(),
+  });
+  assert.equal(dupStep.isDuplicate, true);
+  assert.equal(dupStep.distanceAddedKm, 0);
+  assert.equal(Math.round(dupStep.updatedState.totalOdometerKm * 10) / 10, 48250.6);
+});
+
+test("14. Movement Detection: GPS Distance with Realistic Implied Speed when Speed Sensor Reports 0", () => {
+  const vehicle = { id: "v14", number: "TN 75 S 1688", odometer: 10000.0 };
+  let state = initVehicleOdometerState(vehicle);
+
+  // Point 1
+  state = processOdometerTelemetry(state, {
+    id: "p1",
+    vehicleId: vehicle.id,
+    lat: 8.2600,
+    lng: 77.2880,
+    speed: 0,
+    recordedAt: "2026-11-11T06:00:00Z",
+  }).updatedState;
+
+  // Point 2: 1 minute later, moved ~0.5 km (0.0045 deg lat), speed field = 0
+  // Implied speed = 0.5 km / (1/60 hr) = 30 km/h
+  const step2 = processOdometerTelemetry(state, {
+    id: "p2",
+    vehicleId: vehicle.id,
+    lat: 8.2645,
+    lng: 77.2880,
+    speed: 0,
+    recordedAt: "2026-11-11T06:01:00Z",
+  });
+
+  assert.equal(step2.isDuplicate, false);
+  assert.equal(step2.updatedState.isMoving, true, "Should detect physical movement via implied speed");
+  assert.ok(step2.distanceAddedKm >= 0.49 && step2.distanceAddedKm <= 0.51);
+  assert.equal(Math.round(step2.updatedState.totalOdometerKm * 10) / 10, 10000.5);
+});
+
+test("15. Exact Cumulative Odometer Progression: 48,250.0 -> 48,250.5 -> 48,251.0 -> 48,253.5 -> 48,258.5 km", () => {
+  const vehicle = { id: "v15", number: "TN 75 F 4323", odometer: 48250.0 };
+  let state = initVehicleOdometerState(vehicle);
+  assert.equal(state.totalOdometerKm, 48250.0);
+
+  let currentLat = 8.2600;
+  const currentLng = 77.2880;
+  let currentTime = new Date("2026-11-11T07:00:00Z").getTime();
+
+  // Baseline point
+  state = processOdometerTelemetry(state, {
+    vehicleId: vehicle.id,
+    lat: currentLat,
+    lng: currentLng,
+    speed: 30,
+    recordedAt: new Date(currentTime).toISOString(),
+  }).updatedState;
+
+  // Step A: +0.5 km (0.0045 deg lat in 1 min)
+  currentLat += 0.0045;
+  currentTime += 60000;
+  state = processOdometerTelemetry(state, {
+    vehicleId: vehicle.id,
+    lat: currentLat,
+    lng: currentLng,
+    speed: 30,
+    recordedAt: new Date(currentTime).toISOString(),
+  }).updatedState;
+  assert.equal(Math.round(state.totalOdometerKm * 10) / 10, 48250.5);
+
+  // Step B: +0.5 km (0.0045 deg lat in 1 min) -> 48,251.0
+  currentLat += 0.0045;
+  currentTime += 60000;
+  state = processOdometerTelemetry(state, {
+    vehicleId: vehicle.id,
+    lat: currentLat,
+    lng: currentLng,
+    speed: 30,
+    recordedAt: new Date(currentTime).toISOString(),
+  }).updatedState;
+  assert.equal(Math.round(state.totalOdometerKm * 10) / 10, 48251.0);
+
+  // Step C: +2.5 km (0.0225 deg lat in 4 min) -> 48,253.5
+  currentLat += 0.0225;
+  currentTime += 240000;
+  state = processOdometerTelemetry(state, {
+    vehicleId: vehicle.id,
+    lat: currentLat,
+    lng: currentLng,
+    speed: 40,
+    recordedAt: new Date(currentTime).toISOString(),
+  }).updatedState;
+  assert.equal(Math.round(state.totalOdometerKm * 10) / 10, 48253.5);
+
+  // Step D: +5.0 km (0.0450 deg lat in 8 min) -> 48,258.5
+  currentLat += 0.0450;
+  currentTime += 480000;
+  state = processOdometerTelemetry(state, {
+    vehicleId: vehicle.id,
+    lat: currentLat,
+    lng: currentLng,
+    speed: 40,
+    recordedAt: new Date(currentTime).toISOString(),
+  }).updatedState;
+  assert.equal(Math.round(state.totalOdometerKm * 10) / 10, 48258.5);
+  assert.equal(Math.round(state.todayDistanceKm * 10) / 10, 8.5);
+  assert.equal(Math.round(state.currentTripDistanceKm * 10) / 10, 8.5);
+});
+
+test("16. Multi-Source Deduplication: Identical Event from vehicle_telemetry & telemetry_history", () => {
+  const vehicle = { id: "v16", number: "TN 75 AA 1111", odometer: 50000.0 };
+  let state = initVehicleOdometerState(vehicle);
+
+  // Baseline
+  state = processOdometerTelemetry(state, {
+    id: "event-1",
+    vehicleId: vehicle.id,
+    lat: 8.2600,
+    lng: 77.2880,
+    speed: 35,
+    recordedAt: "2026-11-11T08:00:00Z",
+  }).updatedState;
+
+  // Event 2 arrives via vehicle_telemetry UPDATE
+  const event2Time = "2026-11-11T08:02:00Z";
+  const stepLive = processOdometerTelemetry(state, {
+    id: "tele-row-100",
+    vehicleId: vehicle.id,
+    lat: 8.2690,
+    lng: 77.2880,
+    speed: 35,
+    recordedAt: event2Time,
+  });
+  state = stepLive.updatedState;
+  assert.equal(stepLive.isDuplicate, false);
+  assert.ok(stepLive.distanceAddedKm >= 0.99 && stepLive.distanceAddedKm <= 1.01);
+  assert.equal(Math.round(state.totalOdometerKm * 10) / 10, 50001.0);
+
+  // The exact same event also arrives via telemetry_history INSERT
+  const stepHist = processOdometerTelemetry(state, {
+    id: "tele-row-100",
+    vehicleId: vehicle.id,
+    lat: 8.2690,
+    lng: 77.2880,
+    speed: 35,
+    recordedAt: event2Time,
+  });
+  assert.equal(stepHist.isDuplicate, true, "Must recognize and deduplicate by telemetry ID");
+  assert.equal(stepHist.distanceAddedKm, 0);
+  assert.equal(Math.round(stepHist.updatedState.totalOdometerKm * 10) / 10, 50001.0);
+});

@@ -60,7 +60,10 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
       setIsLoading(true);
       const localMap = loadLocalOdometerStates();
       const currentIstDate = getTodayIstDateString();
-      const nextMap: Record<string, VehicleOdometerState> = { ...localMap };
+      const nextMap: Record<string, VehicleOdometerState> = {
+        ...statesRef.current,
+        ...localMap,
+      };
 
       // Initialize any missing vehicles
       vehicles.forEach((v) => {
@@ -83,8 +86,7 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
         }
       });
 
-      // Query today's telemetry from Supabase for all GPS vehicles to ensure
-      // today's distance reflects actual travelled kilometers from 00:00:00 IST
+      // Query persistent vehicle_odometers table and today's telemetry from Supabase
       try {
         const { startUtcIso } = getIstDateRange("today");
         const targetUuids = vehicles
@@ -92,6 +94,39 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
           .filter((id) => id && id.length > 10);
 
         if (targetUuids.length > 0) {
+          // 1. Fetch persisted vehicle_odometers table states
+          try {
+            const { data: dbOdoRows } = await supabase
+              .from("vehicle_odometers")
+              .select("*")
+              .in("vehicle_id", targetUuids);
+
+            if (dbOdoRows && dbOdoRows.length > 0 && !isCancelled) {
+              dbOdoRows.forEach((row: any) => {
+                const existing = nextMap[row.vehicle_id];
+                if (existing) {
+                  const dbTotal = Number(row.total_odometer_km || 0);
+                  if (dbTotal > existing.totalOdometerKm) {
+                    existing.totalOdometerKm = dbTotal;
+                  }
+                  if (row.today_date === currentIstDate && row.today_distance_km != null) {
+                    const dbToday = Number(row.today_distance_km);
+                    if (dbToday > existing.todayDistanceKm) {
+                      existing.todayDistanceKm = dbToday;
+                      existing.currentTripDistanceKm = dbToday;
+                    }
+                  }
+                  if (row.reading_source) {
+                    existing.readingSource = row.reading_source;
+                  }
+                }
+              });
+            }
+          } catch {
+            // vehicle_odometers table check completed
+          }
+
+          // 2. Fetch today's telemetry history to ensure exact odometer continuity from 00:00:00 IST
           await Promise.all(
             targetUuids.map(async (vId) => {
               try {
@@ -154,8 +189,11 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
       telemetryId?: string | number,
     ) => {
       const vId = deviceToIdMapRef.current.get(vehicleIdOrDeviceId) || vehicleIdOrDeviceId;
-      const current = statesRef.current[vId];
-      if (!current) return;
+      let current = statesRef.current[vId];
+      if (!current) {
+        const matched = vehicles.find((v) => v.id === vId || v.deviceId === vehicleIdOrDeviceId);
+        current = initVehicleOdometerState(matched || { id: vId });
+      }
 
       const { updatedState, distanceAddedKm, isDuplicate } = processOdometerTelemetry(
         current,
@@ -185,7 +223,7 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
         schedulePersist(updatedState);
       }
     },
-    [schedulePersist],
+    [schedulePersist, vehicles],
   );
 
   // 2. Real-Time Extension: Process incoming vehicles stream
@@ -208,17 +246,44 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
     });
   }, [vehicles, ingestTelemetryPoint]);
 
-  // 3. Real-Time Supabase INSERT Subscription on telemetry_history
+  // 3. Real-Time Telemetry Subscriptions (vehicle_telemetry upserts & telemetry_history inserts)
   useEffect(() => {
     const { startUtcIso } = getIstDateRange("today");
 
     const channel = supabase
       .channel("tracking-odometer-stream")
+      // Listen to live telemetry updates from EMQX ingestion
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "vehicle_telemetry" },
+        (payload) => {
+          const row = payload.new as any;
+          if (!row) return;
+          const targetKey = row.vehicle_id || row.device_id;
+          if (!targetKey) return;
+
+          const recAt =
+            row.recorded_at ||
+            row.last_update ||
+            (row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString());
+
+          ingestTelemetryPoint(
+            targetKey,
+            row.lat != null ? Number(row.lat) : null,
+            row.lng != null ? Number(row.lng) : null,
+            row.speed != null ? Number(row.speed) : null,
+            row.odometer != null ? Number(row.odometer) : null,
+            recAt,
+            row.id || `${targetKey}-${recAt}`,
+          );
+        },
+      )
+      // Also listen to historical inserts
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "telemetry_history" },
         (payload) => {
-          const row = payload.new;
+          const row = payload.new as any;
           if (!row || !row.vehicle_id) return;
           if (row.recorded_at && row.recorded_at < startUtcIso) return;
 
