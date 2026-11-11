@@ -4,11 +4,29 @@ import { type Vehicle, type VehicleStatus } from "@/lib/types";
 import { Card } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { VehicleMap } from "@/components/VehicleMap";
-import { Search, MapPin, Radio, AlertTriangle, AlertCircle } from "lucide-react";
+import { Search, MapPin, Radio, AlertTriangle, AlertCircle, Gauge, Clock } from "lucide-react";
 import { useVehicles, TELEMETRY_SOURCE, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
 import { getOverspeedStatus } from "@/lib/overspeed";
 import { useOverspeedMonitor } from "@/hooks/useOverspeed";
 import { useTodayTravelledRoutes } from "@/hooks/useTodayTravelledRoutes";
+import { useOdometerTracking } from "@/hooks/useOdometerTracking";
+
+function formatLastUpdated(isoString?: string): string {
+  if (!isoString) return "Just now";
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return "Just now";
+    return d.toLocaleTimeString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
+    });
+  } catch {
+    return "Just now";
+  }
+}
 
 function TrackingPage() {
   const [filter, setFilter] = useState<VehicleStatus | "All">("All");
@@ -25,6 +43,9 @@ function TrackingPage() {
 
   // Real-time overspeed detection, transition tracking, and alert persistence
   const { activeWarnings, activeCriticals } = useOverspeedMonitor(vehicles);
+
+  // Real-time cumulative odometer and daily distance tracking engine
+  const { getVehicleOdometer } = useOdometerTracking(vehicles);
 
   function handleSelectVehicle(v: Vehicle) {
     setSelectedId(v.id);
@@ -44,6 +65,7 @@ function TrackingPage() {
   });
 
   const selectedVehicle = vehicles.find((v) => v.id === selectedId);
+  const selectedOdo = selectedVehicle ? getVehicleOdometer(selectedVehicle.id) : null;
 
   // Source-aware badge colour: amber for Firebase, emerald for EMQX/Supabase
   const badgeClass =
@@ -75,10 +97,10 @@ function TrackingPage() {
       <PageHeader
         title="Live Vehicle Tracking"
         subtitle={
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span>
-              {selectedVehicle
-                ? `Tracking Route for ${selectedVehicle.number} (${selectedVehicle.driver || "Driver"})`
+              {selectedVehicle && selectedOdo
+                ? `Tracking Route for ${selectedVehicle.number} (${selectedVehicle.driver || "Driver"}) · Odometer: ${selectedOdo.totalOdometerKm.toLocaleString("en-IN", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km (Today: ${selectedOdo.todayDistanceKm.toFixed(1)} km)`
                 : `Real-time positions · ${vehicles.length} active`}
             </span>
             <span className={badgeClass}>
@@ -190,6 +212,7 @@ function TrackingPage() {
               {data.map((v) => {
                 const isSelected = v.id === selectedId;
                 const overspeed = getOverspeedStatus(v.speed);
+                const odo = getVehicleOdometer(v.id || v.deviceId);
 
                 return (
                   <div
@@ -260,6 +283,86 @@ function TrackingPage() {
                       <span className="flex items-center gap-0.5 truncate max-w-[130px]">
                         <MapPin className="h-3 w-3 shrink-0" /> {v.location || "Live Location"}
                       </span>
+                    </div>
+
+                    {/* Live Odometer Intelligence Card */}
+                    <div className="mt-2 p-2 rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800">
+                      <div className="flex items-center justify-between gap-1.5 mb-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Gauge className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                          <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">
+                            Odometer
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.2 rounded text-[9px] font-semibold border ${
+                              odo.readingSource === "hardware"
+                                ? "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20"
+                                : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                            }`}
+                          >
+                            {odo.readingSource === "hardware" ? "Hardware" : "GPS Estimated"}
+                          </span>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="font-mono font-bold text-xs text-foreground">
+                            {odo.totalOdometerKm.toLocaleString("en-IN", {
+                              minimumFractionDigits: 1,
+                              maximumFractionDigits: 1,
+                            })}{" "}
+                            <span className="text-[10px] font-normal text-muted-foreground">km</span>
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-1.5 pt-1.5 border-t border-slate-200/60 dark:border-slate-800 text-[10px]">
+                        <div>
+                          <div className="text-muted-foreground text-[9px]">Today</div>
+                          <div className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+                            {odo.todayDistanceKm.toFixed(1)} km
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground text-[9px]">Current Trip</div>
+                          <div className="font-mono font-semibold text-slate-800 dark:text-slate-200">
+                            {odo.currentTripDistanceKm.toFixed(1)} km
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground text-[9px]">Speed / Status</div>
+                          <div className="font-mono font-semibold flex items-center gap-1">
+                            <span
+                              className={
+                                odo.isMoving
+                                  ? overspeed.level === "critical"
+                                    ? "text-red-600 font-bold"
+                                    : overspeed.level === "warning"
+                                      ? "text-orange-600 font-semibold"
+                                      : "text-emerald-600 font-bold"
+                                  : "text-slate-500"
+                              }
+                            >
+                              {v.speed} km/h
+                            </span>
+                            {odo.isMoving ? (
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" title="Accruing distance" />
+                            ) : (
+                              <span className="text-[8px] text-muted-foreground font-sans">Frozen</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-1.5 flex items-center justify-between text-[9px] text-muted-foreground pt-1 border-t border-slate-200/40 dark:border-slate-800/40">
+                        <span className="flex items-center gap-1 truncate">
+                          <Clock className="h-2.5 w-2.5 shrink-0" />
+                          <span>Updated: {formatLastUpdated(v.lastUpdate || odo.lastUpdated)}</span>
+                        </span>
+                        {odo.isMoving ? (
+                          <span className="text-emerald-600 dark:text-emerald-400 font-medium shrink-0">Accruing distance</span>
+                        ) : (
+                          <span className="text-slate-400 dark:text-slate-500 shrink-0">Drift filtered (Idle)</span>
+                        )}
+                      </div>
                     </div>
 
                     {isSelected && (
