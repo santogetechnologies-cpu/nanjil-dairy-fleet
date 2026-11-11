@@ -330,8 +330,11 @@ export function calculateAverageSpeedFromPoints(
     }
 
     // Filter 4: Movement check — vehicle must be moving
+    // Supports physical movement via coordinate progression even if hardware speed sensor reports 0
     const isMoving =
-      prev.speed >= MOVING_SPEED_THRESHOLD_KMH || curr.speed >= MOVING_SPEED_THRESHOLD_KMH;
+      prev.speed >= MOVING_SPEED_THRESHOLD_KMH ||
+      curr.speed >= MOVING_SPEED_THRESHOLD_KMH ||
+      (impliedSpeedKmH >= MOVING_SPEED_THRESHOLD_KMH && impliedSpeedKmH <= MAX_REALISTIC_SPEED_KMH);
 
     if (isMoving && segmentDistKm >= MIN_SEGMENT_DISTANCE_KM) {
       totalDistanceKm += segmentDistKm;
@@ -494,9 +497,11 @@ export class GpsAverageSpeedTracker {
     }
 
     // 4. Movement filter: vehicle must be moving
+    // Supports physical movement via coordinate progression even if hardware speed sensor reports 0
     const isMoving =
       prev.speed >= MOVING_SPEED_THRESHOLD_KMH ||
-      validatedPoint.speed >= MOVING_SPEED_THRESHOLD_KMH;
+      validatedPoint.speed >= MOVING_SPEED_THRESHOLD_KMH ||
+      (impliedSpeedKmH >= MOVING_SPEED_THRESHOLD_KMH && impliedSpeedKmH <= MAX_REALISTIC_SPEED_KMH);
 
     if (isMoving && segmentDistKm >= MIN_SEGMENT_DISTANCE_KM) {
       existing.totalDistanceKm += segmentDistKm;
@@ -577,13 +582,21 @@ export class GpsAverageSpeedTracker {
 
   /**
    * Batch load historical points into a vehicle's tracker state.
+   * Automatically sorts points chronologically ascending.
    */
   public loadPoints(rawKey: string, points: GpsPointInput[]): void {
     const key = this.resolveKey(rawKey);
-    if (!key || !Array.isArray(points)) return;
+    if (!key || !Array.isArray(points) || points.length === 0) return;
+
+    // Filter valid points with timestamps and sort ascending
+    const sorted = [...points].sort((a, b) => {
+      const tA = parseTimestampToEpochMs(a.timestamp ?? a.recorded_at ?? a.last_update) || 0;
+      const tB = parseTimestampToEpochMs(b.timestamp ?? b.recorded_at ?? b.last_update) || 0;
+      return tA - tB;
+    });
 
     this.reset(key);
-    for (const pt of points) {
+    for (const pt of sorted) {
       const lat = typeof pt.lat === "number" ? pt.lat : parseFloat(String(pt.lat ?? 0));
       const lng = typeof pt.lng === "number" ? pt.lng : parseFloat(String(pt.lng ?? 0));
       const speed = typeof pt.speed === "number" ? pt.speed : parseFloat(String(pt.speed ?? 0));

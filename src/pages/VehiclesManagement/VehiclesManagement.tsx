@@ -187,7 +187,32 @@ export default function VehiclesManagementPage() {
       const sessionPeak = sessionMaxSpeedsRef.current.get(v.id) || 0;
       const peakSpeed = Math.max(sessionPeak, v.speed || 0);
       const topSpeed = peakSpeed > 0 ? peakSpeed : null;
-      const avgSpeed = v.averageSpeed != null && v.averageSpeed > 0 ? v.averageSpeed : null;
+      let avgSpeed = v.averageSpeed != null && v.averageSpeed > 0 ? v.averageSpeed : null;
+
+      // Fallback to completed trips average speed if live GPS average speed is not yet available
+      if (avgSpeed == null && vTrips.length > 0) {
+        let totalTripDist = 0;
+        let totalTripHours = 0;
+        vTrips.forEach((t: any) => {
+          const d = Number(t.distance || 0);
+          if (d > 0) {
+            totalTripDist += d;
+            let hours = 0;
+            if (typeof t.duration === "number") {
+              hours = t.duration / 60;
+            } else if (typeof t.duration === "string") {
+              const hMatch = t.duration.match(/(\d+(?:\.\d+)?)\s*h/i);
+              const mMatch = t.duration.match(/(\d+(?:\.\d+)?)\s*m/i);
+              if (hMatch) hours += parseFloat(hMatch[1]);
+              if (mMatch) hours += parseFloat(mMatch[1]) / 60;
+            }
+            if (hours > 0) totalTripHours += hours;
+          }
+        });
+        if (totalTripHours > 0 && totalTripDist > 0) {
+          avgSpeed = Math.round((totalTripDist / totalTripHours) * 10) / 10;
+        }
+      }
 
       map.set(v.id, {
         topSpeed,
