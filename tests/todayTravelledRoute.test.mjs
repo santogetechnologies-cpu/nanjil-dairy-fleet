@@ -134,3 +134,4 @@ test("8. Red Polyline Visual Attributes: #FF0000, strokeWeight 5, strokeOpacity 
   assert.equal(expectedWeight, 5);
   assert.equal(expectedOpacity, 0.9);
 });
+
