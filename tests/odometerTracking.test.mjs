@@ -6,6 +6,7 @@ import {
   processOdometerTelemetry,
   calculateMovementDistanceKm,
   calculateTodayGpsDistance,
+  calculateTodayAndTripDistances,
   getTodayIstDateString,
 } from "../src/lib/odometerTrackingEngine.ts";
 
@@ -573,4 +574,97 @@ test("16. Multi-Source Deduplication: Identical Event from vehicle_telemetry & t
   assert.equal(stepHist.isDuplicate, true, "Must recognize and deduplicate by telemetry ID");
   assert.equal(stepHist.distanceAddedKm, 0);
   assert.equal(Math.round(stepHist.updatedState.totalOdometerKm * 10) / 10, 50001.0);
+});
+
+test("17. Multi-Trip Segmentation & Reset: Vehicle completes Trip 1, stops >= 5m, starts Trip 2", () => {
+  const vehicle = { id: "v17", number: "TN 75 F 4323", odometer: 14000.0 };
+  let state = initVehicleOdometerState(vehicle);
+
+  // --- TRIP 1: Travels 5.0 km from 08:00 to 08:10 ---
+  state = processOdometerTelemetry(state, {
+    id: "t1-start",
+    vehicleId: vehicle.id,
+    lat: 8.2600,
+    lng: 77.2880,
+    speed: 30,
+    recordedAt: "2026-11-11T08:00:00Z",
+  }).updatedState;
+
+  // Move 5.0 km north (~0.0450 deg)
+  state = processOdometerTelemetry(state, {
+    id: "t1-end",
+    vehicleId: vehicle.id,
+    lat: 8.3050,
+    lng: 77.2880,
+    speed: 30,
+    recordedAt: "2026-11-11T08:10:00Z",
+  }).updatedState;
+
+  assert.equal(Math.round(state.todayDistanceKm * 10) / 10, 5.0);
+  assert.equal(Math.round(state.currentTripDistanceKm * 10) / 10, 5.0);
+  assert.equal(Math.round(state.totalOdometerKm * 10) / 10, 14005.0);
+
+  // --- STATIONARY STOP: Stopped for 15 minutes at customer location ---
+  // Ping 1 at 08:11 (speed 0)
+  state = processOdometerTelemetry(state, {
+    id: "stop-1",
+    vehicleId: vehicle.id,
+    lat: 8.3050,
+    lng: 77.2880,
+    speed: 0,
+    recordedAt: "2026-11-11T08:11:00Z",
+  }).updatedState;
+  assert.equal(state.isMoving, false);
+  assert.equal(Math.round(state.todayDistanceKm * 10) / 10, 5.0);
+  assert.equal(Math.round(state.currentTripDistanceKm * 10) / 10, 5.0);
+
+  // Ping 2 at 08:20 (speed 0, 9 minutes later)
+  state = processOdometerTelemetry(state, {
+    id: "stop-2",
+    vehicleId: vehicle.id,
+    lat: 8.3050,
+    lng: 77.2880,
+    speed: 0,
+    recordedAt: "2026-11-11T08:20:00Z",
+  }).updatedState;
+  assert.equal(state.isMoving, false);
+
+  // --- TRIP 2: Starts moving again at 08:26 (stopped for 15 minutes) ---
+  // Moving 2.0 km north (~0.0180 deg)
+  state = processOdometerTelemetry(state, {
+    id: "t2-pt1",
+    vehicleId: vehicle.id,
+    lat: 8.3230,
+    lng: 77.2880,
+    speed: 35,
+    recordedAt: "2026-11-11T08:26:00Z",
+  }).updatedState;
+
+  assert.equal(state.isMoving, true);
+  // Today distance must accumulate both trips: 5.0 + 2.0 = 7.0 km
+  assert.equal(Math.round(state.todayDistanceKm * 10) / 10, 7.0);
+  // Current Trip distance must ONLY reflect Trip 2: 2.0 km (NOT 7.0 km!)
+  assert.equal(Math.round(state.currentTripDistanceKm * 10) / 10, 2.0);
+  assert.equal(Math.round(state.totalOdometerKm * 10) / 10, 14007.0);
+});
+
+test("18. calculateTodayAndTripDistances: Segmenting batch GPS points into Today vs Current Trip", () => {
+  const points = [
+    // Trip 1: 04:00 to 04:10 (~5 km)
+    { lat: 8.2600, lng: 77.2880, speed: 30, recorded_at: "2026-11-11T04:00:00Z" },
+    { lat: 8.3050, lng: 77.2880, speed: 30, recorded_at: "2026-11-11T04:10:00Z" },
+    // Stop at 04:11 for 30 minutes
+    { lat: 8.3050, lng: 77.2880, speed: 0, recorded_at: "2026-11-11T04:11:00Z" },
+    { lat: 8.3050, lng: 77.2880, speed: 0, recorded_at: "2026-11-11T04:40:00Z" },
+    // Trip 2: 04:45 to 04:55 (~3 km)
+    { lat: 8.3320, lng: 77.2880, speed: 35, recorded_at: "2026-11-11T04:45:00Z" },
+    { lat: 8.3320, lng: 77.2880, speed: 35, recorded_at: "2026-11-11T04:55:00Z" },
+  ];
+
+  const res = calculateTodayAndTripDistances(points);
+  assert.equal(res.tripsCount, 2);
+  // Today's total distance: ~5.0 km + ~3.0 km = ~8.0 km
+  assert.ok(res.todayDistanceKm >= 7.9 && res.todayDistanceKm <= 8.1);
+  // Current trip distance: ONLY Trip 2 (~3.0 km)
+  assert.ok(res.currentTripDistanceKm >= 2.9 && res.currentTripDistanceKm <= 3.1);
 });

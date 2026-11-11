@@ -17,8 +17,9 @@ import {
   persistVehicleOdometer,
   getTodayIstDateString,
   calculateTodayGpsDistance,
+  calculateTodayAndTripDistances,
 } from "@/lib/odometerTrackingEngine";
-import { getIstDateRange } from "@/lib/tripHistoryEngine";
+import { getIstDateRange, fetchPaginatedTelemetryHistory } from "@/lib/tripHistoryEngine";
 import { KNOWN_NANJIL_DEVICE_MAP } from "@/lib/vehicle-stop-detection";
 
 export function useOdometerTracking(vehicles: Vehicle[]) {
@@ -87,9 +88,9 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
       });
 
       // Query today's telemetry from Supabase for all GPS vehicles to ensure
-      // today's distance reflects actual travelled kilometers from 00:00:00 IST
+      // today's distance and current trip distance reflect actual travelled kilometers from 00:00:00 IST
       try {
-        const { startUtcIso } = getIstDateRange("today");
+        const { startUtcIso, endUtcIso } = getIstDateRange("today");
         const targetUuids = vehicles
           .map((v) => v.id)
           .filter((id) => id && id.length > 10);
@@ -98,22 +99,27 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
           await Promise.all(
             targetUuids.map(async (vId) => {
               try {
-                const { data: rows } = await supabase
-                  .from("telemetry_history")
-                  .select("lat, lng, speed, recorded_at, odometer")
-                  .eq("vehicle_id", vId)
-                  .gte("recorded_at", startUtcIso)
-                  .order("recorded_at", { ascending: true })
-                  .limit(2000);
+                const res = await fetchPaginatedTelemetryHistory(
+                  supabase,
+                  vId,
+                  startUtcIso,
+                  endUtcIso,
+                  1000,
+                );
 
-                if (rows && rows.length > 0 && !isCancelled) {
-                  const todayDist = calculateTodayGpsDistance(rows as any);
+                const rows = res.data || [];
+                if (rows.length > 0 && !isCancelled) {
+                  const { todayDistanceKm, currentTripDistanceKm, isCurrentTripActive } =
+                    calculateTodayAndTripDistances(rows as any);
+
                   const existing = nextMap[vId];
                   if (existing) {
-                    const maxToday = Math.max(existing.todayDistanceKm, todayDist);
+                    const maxToday = Math.max(existing.todayDistanceKm, todayDistanceKm);
                     existing.todayDistanceKm = maxToday;
-                    existing.totalOdometerKm = Math.round((existing.baselineOdometerKm + maxToday) * 100) / 100;
-                    existing.currentTripDistanceKm = maxToday;
+                    existing.totalOdometerKm =
+                      Math.round((existing.baselineOdometerKm + maxToday) * 100) / 100;
+                    existing.currentTripDistanceKm = currentTripDistanceKm;
+                    existing.isMoving = isCurrentTripActive;
                   }
                 }
               } catch (err) {
