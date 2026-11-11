@@ -86,7 +86,8 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
         }
       });
 
-      // Query persistent vehicle_odometers table and today's telemetry from Supabase
+      // Query today's telemetry from Supabase for all GPS vehicles to ensure
+      // today's distance reflects actual travelled kilometers from 00:00:00 IST
       try {
         const { startUtcIso } = getIstDateRange("today");
         const targetUuids = vehicles
@@ -94,39 +95,6 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
           .filter((id) => id && id.length > 10);
 
         if (targetUuids.length > 0) {
-          // 1. Fetch persisted vehicle_odometers table states
-          try {
-            const { data: dbOdoRows } = await supabase
-              .from("vehicle_odometers")
-              .select("*")
-              .in("vehicle_id", targetUuids);
-
-            if (dbOdoRows && dbOdoRows.length > 0 && !isCancelled) {
-              dbOdoRows.forEach((row: any) => {
-                const existing = nextMap[row.vehicle_id];
-                if (existing) {
-                  const dbTotal = Number(row.total_odometer_km || 0);
-                  if (dbTotal > existing.totalOdometerKm) {
-                    existing.totalOdometerKm = dbTotal;
-                  }
-                  if (row.today_date === currentIstDate && row.today_distance_km != null) {
-                    const dbToday = Number(row.today_distance_km);
-                    if (dbToday > existing.todayDistanceKm) {
-                      existing.todayDistanceKm = dbToday;
-                      existing.currentTripDistanceKm = dbToday;
-                    }
-                  }
-                  if (row.reading_source) {
-                    existing.readingSource = row.reading_source;
-                  }
-                }
-              });
-            }
-          } catch {
-            // vehicle_odometers table check completed
-          }
-
-          // 2. Fetch today's telemetry history to ensure exact odometer continuity from 00:00:00 IST
           await Promise.all(
             targetUuids.map(async (vId) => {
               try {

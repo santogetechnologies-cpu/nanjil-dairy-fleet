@@ -409,7 +409,7 @@ export function saveLocalOdometerStates(states: Record<string, VehicleOdometerSt
 }
 
 /**
- * Persists an odometer state to Supabase (vehicle_odometers + vehicles.odometer sync).
+ * Persists an odometer state to Supabase vehicles table.
  */
 export async function persistVehicleOdometer(
   supabaseClient: any,
@@ -417,67 +417,16 @@ export async function persistVehicleOdometer(
 ): Promise<void> {
   if (!supabaseClient || !state.vehicleId) return;
 
-  const lat = state.previousLatitude ?? state.lastValidLat;
-  const lng = state.previousLongitude ?? state.lastValidLng;
-  const timestamp = state.previousGpsTimestamp ?? state.lastTelemetryTime ?? new Date().toISOString();
-  const telemetryId = state.lastProcessedTelemetryId ?? state.lastTelemetryId;
-
-  // 1. Try atomic server RPC if available
   try {
-    const { data, error } = await supabaseClient.rpc("accumulate_gps_odometer", {
-      p_vehicle_id: state.vehicleId,
-      p_device_id: state.deviceId || null,
-      p_lat: lat != null ? Number(lat) : null,
-      p_lng: lng != null ? Number(lng) : null,
-      p_speed: Number(state.currentSpeedKmh || 0),
-      p_recorded_at: timestamp,
-      p_telemetry_id: telemetryId ? String(telemetryId) : null,
-      p_hardware_odometer: state.readingSource === "hardware" ? Number(state.totalOdometerKm) : null,
-      p_ist_today_date: state.todayDate,
-    });
-    if (!error && data) return;
-  } catch {
-    // If RPC is unavailable, fallback to direct upsert
-  }
-
-  const payload = {
-    vehicle_id: state.vehicleId,
-    device_id: state.deviceId,
-    total_odometer_km: state.totalOdometerKm,
-    today_distance_km: state.todayDistanceKm,
-    current_trip_distance_km: state.currentTripDistanceKm,
-    current_speed_kmh: state.currentSpeedKmh,
-    reading_source: state.readingSource,
-    today_date: state.todayDate,
-    is_moving: state.isMoving,
-    previous_latitude: lat,
-    previous_longitude: lng,
-    previous_gps_timestamp: timestamp,
-    last_processed_telemetry_id: telemetryId,
-    last_valid_lat: lat,
-    last_valid_lng: lng,
-    last_telemetry_id: telemetryId,
-    last_telemetry_time: timestamp,
-    updated_at: new Date().toISOString(),
-    last_updated_at: new Date().toISOString(),
-  };
-
-  try {
-    // 2. Try upserting to vehicle_odometers table
-    const { error: odoError } = await supabaseClient
-      .from("vehicle_odometers")
-      .upsert(payload, { onConflict: "vehicle_id" });
-
-    if (odoError) {
-      // Table may be in-flight before migration deploy
-    }
-
-    // 3. Keep canonical vehicles.odometer in sync if higher than baseline
+    // Keep canonical vehicles.odometer in sync if higher than baseline
     const roundedOdo = Math.round(state.totalOdometerKm);
     if (roundedOdo > state.baselineOdometerKm) {
       await supabaseClient
         .from("vehicles")
-        .update({ odometer: roundedOdo })
+        .update({
+          odometer: roundedOdo,
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", state.vehicleId);
     }
   } catch (err) {
