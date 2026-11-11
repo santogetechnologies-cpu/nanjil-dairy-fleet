@@ -235,6 +235,7 @@ export default function RoutesPlannerPage() {
   const [dbVehicles, setDbVehicles] = useState<any[]>([]);
   const [dbDrivers, setDbDrivers] = useState<any[]>([]);
   const [savedRoutes, setSavedRoutes] = useState<any[]>([]);
+  const dbHasRouteConfigColRef = useRef<boolean>(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
   const [editingRouteId, setEditingRouteId] = useState<string | null>(
@@ -366,6 +367,9 @@ export default function RoutesPlannerPage() {
       }
 
       if (data) {
+        if (data.length > 0) {
+          dbHasRouteConfigColRef.current = "route_config" in data[0];
+        }
         const enriched = data.map((r: any) => ({
           ...r,
           route_config: extractRouteConfig(r),
@@ -412,6 +416,9 @@ export default function RoutesPlannerPage() {
           console.error("Failed to load collection_routes:", rRes.error);
           showToast("Could not load saved routes: " + rRes.error.message, "error");
         } else if (rRes.data) {
+          if (rRes.data.length > 0) {
+            dbHasRouteConfigColRef.current = "route_config" in rRes.data[0];
+          }
           const enriched = rRes.data.map((r: any) => ({
             ...r,
             route_config: extractRouteConfig(r),
@@ -791,10 +798,13 @@ export default function RoutesPlannerPage() {
       const isUpdate = Boolean(editingRouteId && !asNewCopy);
 
       if (isUpdate) {
-        // Attempt update with route_config column
+        const payloadToUpdate = dbHasRouteConfigColRef.current
+          ? { ...basePayload, route_config: routeConfigData }
+          : basePayload;
+
         let updateRes = await supabase
           .from("collection_routes")
-          .update({ ...basePayload, route_config: routeConfigData })
+          .update(payloadToUpdate)
           .eq("id", editingRouteId)
           .select()
           .single();
@@ -806,7 +816,7 @@ export default function RoutesPlannerPage() {
             updateRes.error.code === "PGRST204" ||
             updateRes.error.code === "42703")
         ) {
-          console.warn("route_config column not found on collection_routes, falling back to base payload update.");
+          dbHasRouteConfigColRef.current = false;
           updateRes = await supabase
             .from("collection_routes")
             .update(basePayload)
@@ -818,10 +828,13 @@ export default function RoutesPlannerPage() {
         if (updateRes.error) throw updateRes.error;
         savedRecord = updateRes.data;
       } else {
-        // Attempt insert with route_config column
+        const payloadToInsert = dbHasRouteConfigColRef.current
+          ? { ...basePayload, route_config: routeConfigData }
+          : basePayload;
+
         let insertRes = await supabase
           .from("collection_routes")
-          .insert({ ...basePayload, route_config: routeConfigData })
+          .insert(payloadToInsert)
           .select()
           .single();
 
@@ -832,7 +845,7 @@ export default function RoutesPlannerPage() {
             insertRes.error.code === "PGRST204" ||
             insertRes.error.code === "42703")
         ) {
-          console.warn("route_config column not found on collection_routes, falling back to base payload insert.");
+          dbHasRouteConfigColRef.current = false;
           insertRes = await supabase
             .from("collection_routes")
             .insert(basePayload)
