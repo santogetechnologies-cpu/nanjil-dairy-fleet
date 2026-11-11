@@ -11,6 +11,7 @@ import { Truck, Navigation, MapPin, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui-kit";
 import { Link } from "react-router-dom";
 import { getOverspeedStatus } from "@/lib/overspeed";
+import { isFleetOperatingCoordinate } from "@/lib/tripHistoryEngine";
 import {
   NANJIL_DAIRY_DEPOT,
   DEFAULT_MAP_CENTER,
@@ -61,21 +62,13 @@ export function GoogleVehicleMap({
     );
   }
 
-  // Only show vehicles that have actual valid numeric GPS coordinates within geographic bounds
+  // Only show vehicles that have actual valid numeric GPS coordinates within the fleet operating geofence
   const mappedVehicles = useMemo(() => {
     return vehicles.filter(
       (v) =>
         v.lat != null &&
-        typeof v.lat === "number" &&
-        !isNaN(v.lat) &&
-        v.lat >= -90 &&
-        v.lat <= 90 &&
         v.lng != null &&
-        typeof v.lng === "number" &&
-        !isNaN(v.lng) &&
-        v.lng >= -180 &&
-        v.lng <= 180 &&
-        (v.lat !== 0 || v.lng !== 0),
+        isFleetOperatingCoordinate(v.lat, v.lng),
     );
   }, [vehicles]);
 
@@ -129,11 +122,14 @@ export function GoogleVehicleMap({
 
         segments.forEach((seg, sIdx) => {
           if (seg && seg.length >= 2) {
-            list.push({
-              key: `today-route-${v.id}-${sIdx}`,
-              path: seg,
-              isSelected,
-            });
+            const cleanSeg = seg.filter((p) => isFleetOperatingCoordinate(p.lat, p.lng));
+            if (cleanSeg.length >= 2) {
+              list.push({
+                key: `today-route-${v.id}-${sIdx}`,
+                path: cleanSeg,
+                isSelected,
+              });
+            }
           }
         });
       });
@@ -145,22 +141,28 @@ export function GoogleVehicleMap({
           renderedKeys.add(key);
           segments.forEach((seg, sIdx) => {
             if (seg && seg.length >= 2) {
-              list.push({
-                key: `today-route-extra-${key}-${sIdx}`,
-                path: seg,
-                isSelected: false,
-              });
+              const cleanSeg = seg.filter((p) => isFleetOperatingCoordinate(p.lat, p.lng));
+              if (cleanSeg.length >= 2) {
+                list.push({
+                  key: `today-route-extra-${key}-${sIdx}`,
+                  path: cleanSeg,
+                  isSelected: false,
+                });
+              }
             }
           });
         });
       }
     } else if (routeHistory && routeHistory.length >= 2) {
       // 2. Fallback to routeHistory for single-vehicle profiles / backward compatibility
-      list.push({
-        key: "legacy-route-history",
-        path: routeHistory,
-        isSelected: Boolean(selectedId),
-      });
+      const cleanHistory = routeHistory.filter((p) => isFleetOperatingCoordinate(p.lat, p.lng));
+      if (cleanHistory.length >= 2) {
+        list.push({
+          key: "legacy-route-history",
+          path: cleanHistory,
+          isSelected: Boolean(selectedId),
+        });
+      }
     }
 
     return list;

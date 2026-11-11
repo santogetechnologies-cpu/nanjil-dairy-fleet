@@ -6,10 +6,13 @@ import {
   isValidGpsCoord,
   isValidUuid,
   haversineDistanceKm,
+  isFleetOperatingCoordinate,
   fetchPaginatedTelemetryHistory,
   type GpsPoint,
 } from "../lib/tripHistoryEngine.ts";
 import { KNOWN_NANJIL_DEVICE_MAP } from "../lib/vehicle-stop-detection.ts";
+
+export { isFleetOperatingCoordinate };
 
 export interface LatLngPoint {
   lat: number;
@@ -22,8 +25,8 @@ export type TodayRoutesMap = Record<string, VehicleRouteSegments>;
 
 /**
  * Filter and segment time-series GPS points for today:
- * 1. Chronologically sort by timestamp.
- * 2. Validate GPS coordinates.
+ * 1. Filter out coordinates outside the fleet operating geofence or with corrupted longitudes (e.g. Africa artifacts).
+ * 2. Chronologically sort by timestamp.
  * 3. Reject teleport jumps (>200 km or implied speed >160 km/h).
  * 4. Filter consecutive stationary duplicate points (<2 meters apart).
  * 5. Break the polyline across signal gaps (>15 minutes) into separate segments.
@@ -34,8 +37,15 @@ export function processRawGpsPoints(
 ): VehicleRouteSegments {
   if (!points || points.length === 0) return [];
 
+  // Filter out any points that are not valid fleet operating coordinates
+  // (eliminates hardware truncation glitches like West Africa / Gulf of Guinea)
+  const validFleetPoints = points.filter(
+    (pt) => pt && isFleetOperatingCoordinate(pt.lat, pt.lng),
+  );
+  if (validFleetPoints.length === 0) return [];
+
   // 1. Sort chronologically by actual GPS timestamp
-  const sorted = [...points].sort((a, b) => {
+  const sorted = [...validFleetPoints].sort((a, b) => {
     const tA = new Date(a.recorded_at).getTime();
     const tB = new Date(b.recorded_at).getTime();
     if (tA !== tB) return tA - tB;
@@ -49,7 +59,6 @@ export function processRawGpsPoints(
   for (const pt of sorted) {
     const lat = Number(pt.lat);
     const lng = Number(pt.lng);
-    if (!isValidGpsCoord(lat, lng)) continue;
 
     if (prevValid) {
       const distKm = haversineDistanceKm(prevValid.lat, prevValid.lng, lat, lng);
@@ -116,7 +125,9 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
   // Helper to append a new live coordinate to a vehicle's route
   const appendCoordinateToVehicle = useCallback(
     (vehicleIdentifier: string, lat: number, lng: number, recordedAt?: string) => {
-      if (!isValidGpsCoord(lat, lng)) return;
+      // Validate that coordinate belongs to valid fleet operating geofence
+      // (rejects corrupted hardware packet truncation artifacts like Africa coordinates)
+      if (!isFleetOperatingCoordinate(lat, lng)) return;
 
       const currentRoutes = routesRef.current;
       const uuid =
@@ -141,13 +152,17 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
         } else {
           const lastPt = lastSeg[lastSeg.length - 1];
           const distKm = haversineDistanceKm(lastPt.lat, lastPt.lng, lat, lng);
+          const lastTime = lastPt.recorded_at ? new Date(lastPt.recorded_at).getTime() : Date.now();
+          const currTime = new Date(timestamp).getTime();
+          const timeDiffSec = Math.max(0, (currTime - lastTime) / 1000);
+          const diffMins = timeDiffSec / 60;
+
+          // Teleport jump rejection: discard impossible single-point GPS jumps (>200 km or speed >160 km/h)
+          if (distKm > 200) return;
+          if (timeDiffSec > 0 && distKm / (timeDiffSec / 3600) > 160) return;
 
           // Only append if vehicle moved at least 5 meters
           if (distKm >= 0.005) {
-            const lastTime = lastPt.recorded_at ? new Date(lastPt.recorded_at).getTime() : Date.now();
-            const currTime = new Date(timestamp).getTime();
-            const diffMins = Math.max(0, (currTime - lastTime) / 60000);
-
             if (diffMins > 15) {
               // Signal gap: start a new segment
               updatedSegments.push([{ lat, lng, recorded_at: timestamp }]);
@@ -245,19 +260,26 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
 
           if (
             liveMatch &&
-            isValidGpsCoord(liveMatch.lat, liveMatch.lng) &&
+            isFleetOperatingCoordinate(liveMatch.lat, liveMatch.lng) &&
             segments.length > 0
           ) {
             const lastSeg = segments[segments.length - 1];
             if (lastSeg.length > 0) {
               const lastPt = lastSeg[lastSeg.length - 1];
               const distKm = haversineDistanceKm(lastPt.lat, lastPt.lng, liveMatch.lat, liveMatch.lng);
-              if (distKm >= 0.005) {
-                lastSeg.push({
-                  lat: liveMatch.lat,
-                  lng: liveMatch.lng,
-                  recorded_at: liveMatch.lastUpdate || new Date().toISOString(),
-                });
+              const lastTime = lastPt.recorded_at ? new Date(lastPt.recorded_at).getTime() : Date.now();
+              const currTime = new Date(liveMatch.lastUpdate || new Date()).getTime();
+              const timeDiffSec = Math.max(0, (currTime - lastTime) / 1000);
+
+              // Reject teleport jumps or impossible speeds
+              if (distKm <= 200 && (timeDiffSec === 0 || (distKm / (timeDiffSec / 3600)) <= 160)) {
+                if (distKm >= 0.005) {
+                  lastSeg.push({
+                    lat: liveMatch.lat,
+                    lng: liveMatch.lng,
+                    recorded_at: liveMatch.lastUpdate || new Date().toISOString(),
+                  });
+                }
               }
             }
           }
@@ -294,7 +316,7 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
     if (vehicles.length === 0) return;
 
     vehicles.forEach((v) => {
-      if (!isValidGpsCoord(v.lat, v.lng)) return;
+      if (!isFleetOperatingCoordinate(v.lat, v.lng)) return;
       const key = v.id || v.deviceId;
       if (!key) return;
 
@@ -324,7 +346,7 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
 
           const lat = Number(row.lat);
           const lng = Number(row.lng);
-          if (!isValidGpsCoord(lat, lng)) return;
+          if (!isFleetOperatingCoordinate(lat, lng)) return;
 
           appendCoordinateToVehicle(row.vehicle_id, lat, lng, row.recorded_at);
         },

@@ -1,4 +1,4 @@
-import { type RoutePoint } from "./roadRouting";
+import { type RoutePoint } from "./roadRouting.ts";
 
 export interface RouteTemplate {
   id: string;

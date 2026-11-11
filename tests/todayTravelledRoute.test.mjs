@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   getIstDateRange,
   isValidGpsCoord,
+  isFleetOperatingCoordinate,
   haversineDistanceKm,
 } from "../src/lib/tripHistoryEngine.ts";
 import { processRawGpsPoints } from "../src/hooks/useTodayTravelledRoutes.ts";
@@ -133,5 +134,74 @@ test("8. Red Polyline Visual Attributes: #FF0000, strokeWeight 5, strokeOpacity 
   assert.equal(expectedColor, "#FF0000");
   assert.equal(expectedWeight, 5);
   assert.equal(expectedOpacity, 0.9);
+});
+
+test("9. Geofence & Fleet Operating Coordinate Validation: Rejects Africa / Prime Meridian Glitches", () => {
+  // Corrupted hardware/EMQX coordinates where longitude dropped 77 degree prefix
+  assert.equal(isFleetOperatingCoordinate(8.390383, 0.2), false, "Must reject West Africa Togo/Nigeria coordinate");
+  assert.equal(isFleetOperatingCoordinate(8.329567, 0.466667), false, "Must reject West Africa coordinate");
+  assert.equal(isFleetOperatingCoordinate(8.25, 0.02), false, "Must reject West Africa coordinate");
+  assert.equal(isFleetOperatingCoordinate(0.1, 0.566667), false, "Must reject Gulf of Guinea coordinate");
+  assert.equal(isFleetOperatingCoordinate(0, 0), false, "Must reject (0, 0)");
+  assert.equal(isFleetOperatingCoordinate(null, 77.2883), false, "Must reject null lat");
+  assert.equal(isFleetOperatingCoordinate(8.2607, undefined), false, "Must reject undefined lng");
+  assert.equal(isFleetOperatingCoordinate(Infinity, 77.2883), false, "Must reject infinite lat");
+
+  // Valid fleet operating coordinates in South India
+  assert.equal(isFleetOperatingCoordinate(8.260765, 77.288373), true, "Must accept Nanjil Dairy Depot base");
+  assert.equal(isFleetOperatingCoordinate(8.1833, 77.4119), true, "Must accept Nagercoil");
+  assert.equal(isFleetOperatingCoordinate(9.9252, 78.1198), true, "Must accept Madurai");
+  assert.equal(isFleetOperatingCoordinate(13.0827, 80.2707), true, "Must accept Chennai");
+});
+
+test("10. Route Processing Strips Africa Glitches: Discards West Africa coordinates mixed into telemetry", () => {
+  const points = [
+    // Genuine Nanjil vehicle start in Kanyakumari
+    { id: "1", lat: 8.2415, lng: 77.4326, speed: 30, ignition: true, recorded_at: "2026-11-11T05:00:00Z" },
+    // Corrupted EMQX telemetry point in West Africa (lng: 0.2)
+    { id: "2", lat: 8.390383, lng: 0.2, speed: 35, ignition: true, recorded_at: "2026-11-11T05:01:00Z" },
+    // Genuine Nanjil vehicle next point in Kanyakumari
+    { id: "3", lat: 8.2450, lng: 77.4350, speed: 28, ignition: true, recorded_at: "2026-11-11T05:02:00Z" },
+    // Second corrupted point in West Africa
+    { id: "4", lat: 8.25, lng: 0.02, speed: 0, ignition: true, recorded_at: "2026-11-11T05:03:00Z" },
+    // Genuine Nanjil vehicle continuation
+    { id: "5", lat: 8.2490, lng: 77.4400, speed: 32, ignition: true, recorded_at: "2026-11-11T05:04:00Z" },
+  ];
+
+  const segments = processRawGpsPoints(points, 15);
+  assert.equal(segments.length, 1);
+  const route = segments[0];
+  assert.equal(route.length, 3, "Route must contain only the 3 valid Indian coordinates");
+  assert.equal(route[0].lat, 8.2415);
+  assert.equal(route[0].lng, 77.4326);
+  assert.equal(route[1].lat, 8.2450);
+  assert.equal(route[1].lng, 77.4350);
+  assert.equal(route[2].lat, 8.2490);
+  assert.equal(route[2].lng, 77.4400);
+
+  // Verify none of the coordinates in the polyline have longitude < 50
+  for (const pt of route) {
+    assert.ok(pt.lng >= 50, "No coordinate in route polyline can have longitude in Africa");
+  }
+});
+
+test("11. Outlier at beginning or end of route: Does not draw misleading lines", () => {
+  const points = [
+    // Telemetry begins with an Africa corrupted packet
+    { id: "1", lat: 8.390383, lng: 0.2, speed: 0, ignition: false, recorded_at: "2026-11-11T04:59:00Z" },
+    // Normal trip starts
+    { id: "2", lat: 8.2607, lng: 77.2883, speed: 10, ignition: true, recorded_at: "2026-11-11T05:00:00Z" },
+    { id: "3", lat: 8.2650, lng: 77.2920, speed: 25, ignition: true, recorded_at: "2026-11-11T05:02:00Z" },
+    // Telemetry ends with an Africa corrupted packet
+    { id: "4", lat: 8.329567, lng: 0.466667, speed: 0, ignition: false, recorded_at: "2026-11-11T05:05:00Z" },
+  ];
+
+  const segments = processRawGpsPoints(points, 15);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].length, 2);
+  assert.equal(segments[0][0].lat, 8.2607);
+  assert.equal(segments[0][0].lng, 77.2883);
+  assert.equal(segments[0][1].lat, 8.2650);
+  assert.equal(segments[0][1].lng, 77.2920);
 });
 

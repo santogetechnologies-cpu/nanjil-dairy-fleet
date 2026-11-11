@@ -15,6 +15,7 @@
 
 export { haversineDistanceKm } from "./roadRouting.ts";
 import { haversineDistanceKm } from "./roadRouting.ts";
+import { NANJIL_DAIRY_DEPOT } from "./routeTemplates.ts";
 
 // ── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -214,10 +215,40 @@ export function isValidGpsCoord(lat: unknown, lng: unknown): boolean {
   if (lat == null || lng == null || lat === "" || lng === "") return false;
   const nLat = Number(lat);
   const nLng = Number(lng);
-  if (isNaN(nLat) || isNaN(nLng)) return false;
+  if (isNaN(nLat) || isNaN(nLng) || !isFinite(nLat) || !isFinite(nLng)) return false;
   if (nLat < -90 || nLat > 90 || nLng < -180 || nLng > 180) return false;
   // Ignore (0, 0) default coordinates
   if (Math.abs(nLat) < 0.0001 && Math.abs(nLng) < 0.0001) return false;
+  return true;
+}
+
+/**
+ * Validate that a GPS coordinate is mathematically valid, finite,
+ * non-zero, and within the reasonable operating radius / geofence of the fleet base
+ * (rejecting corrupted hardware packet truncation artifacts such as Gulf of Guinea / Prime Meridian coordinates).
+ */
+export function isFleetOperatingCoordinate(
+  lat: unknown,
+  lng: unknown,
+  maxRadiusFromBaseKm = 2500
+): boolean {
+  if (!isValidGpsCoord(lat, lng)) return false;
+  const nLat = Number(lat);
+  const nLng = Number(lng);
+
+  // Reject hardware corruption artifacts where longitude dropped its degree prefix
+  // e.g., 0.2° instead of 77.2° in West Africa (Gulf of Guinea/Togo/Benin)
+  if (nLng < 50 || nLng > 105) return false;
+
+  // Validate that point is within reasonable operating distance from Nanjil Dairy Depot
+  const distFromBase = haversineDistanceKm(
+    NANJIL_DAIRY_DEPOT.lat,
+    NANJIL_DAIRY_DEPOT.lng,
+    nLat,
+    nLng
+  );
+  if (distFromBase > maxRadiusFromBaseKm) return false;
+
   return true;
 }
 
