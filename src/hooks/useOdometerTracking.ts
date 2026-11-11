@@ -268,3 +268,4 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
     isLoading,
   };
 }
+

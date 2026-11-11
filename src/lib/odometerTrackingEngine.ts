@@ -19,6 +19,33 @@ import type { Vehicle } from "./types.ts";
 
 export type OdometerReadingSource = "hardware" | "gps_estimated";
 
+/**
+ * Haversine formula to calculate the distance between two consecutive GPS coordinates.
+ * R = 6371 km.
+ */
+export function calculateDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const R = 6371;
+  const toRad = (value: number) => (value * Math.PI) / 180;
+
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) ** 2;
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
+
 export interface VehicleOdometerState {
   vehicleId: string;
   vehicleNumber?: string;
@@ -31,6 +58,11 @@ export interface VehicleOdometerState {
   isMoving: boolean;
   lastUpdated: string;
   todayDate: string; // YYYY-MM-DD in Asia/Kolkata
+  previousLatitude?: number;
+  previousLongitude?: number;
+  previousGpsTimestamp?: string;
+  lastProcessedTelemetryId?: string;
+  // Backward-compatible aliases:
   lastValidLat?: number;
   lastValidLng?: number;
   lastTelemetryId?: string;
@@ -98,7 +130,8 @@ export function calculateMovementDistanceKm(
     return 0;
   }
 
-  const distKm = haversineDistanceKm(prevLat, prevLng, currLat, currLng);
+  // Exact Haversine formula distance calculation
+  const distKm = calculateDistance(prevLat, prevLng, currLat, currLng);
 
   // Filter tiny GPS drift (< 5 meters)
   if (distKm < 0.005) {
@@ -161,6 +194,14 @@ export function initVehicleOdometerState(
     isMoving: false,
     lastUpdated: new Date().toISOString(),
     todayDate,
+    previousLatitude: undefined,
+    previousLongitude: undefined,
+    previousGpsTimestamp: undefined,
+    lastProcessedTelemetryId: undefined,
+    lastValidLat: undefined,
+    lastValidLng: undefined,
+    lastTelemetryId: undefined,
+    lastTelemetryTime: undefined,
     baselineOdometerKm: baseline,
   };
 }
@@ -188,15 +229,24 @@ export function processOdometerTelemetry(
     // Note: totalOdometerKm and currentTripDistanceKm are preserved across midnight
   }
 
-  // 2. Duplicate telemetry protection
+  // 2. Duplicate or out-of-order telemetry protection
   const inputIdStr = input.id != null ? String(input.id) : undefined;
   const inputTimeStr = input.recordedAt || undefined;
 
   if (
-    (inputIdStr && next.lastTelemetryId === inputIdStr) ||
-    (inputTimeStr && next.lastTelemetryTime === inputTimeStr && !inputIdStr)
+    (inputIdStr && (next.lastProcessedTelemetryId === inputIdStr || next.lastTelemetryId === inputIdStr)) ||
+    (inputTimeStr && (next.previousGpsTimestamp === inputTimeStr || next.lastTelemetryTime === inputTimeStr) && !inputIdStr)
   ) {
     return { updatedState: next, distanceAddedKm: 0, isDuplicate: true };
+  }
+
+  // Reject stale / out-of-order telemetry older than previous point
+  if (inputTimeStr && (next.previousGpsTimestamp || next.lastTelemetryTime)) {
+    const prevMs = new Date(next.previousGpsTimestamp || next.lastTelemetryTime!).getTime();
+    const currMs = new Date(inputTimeStr).getTime();
+    if (!isNaN(prevMs) && !isNaN(currMs) && currMs <= prevMs) {
+      return { updatedState: next, distanceAddedKm: 0, isDuplicate: true };
+    }
   }
 
   // 3. Priority 1: Hardware Odometer
@@ -221,14 +271,17 @@ export function processOdometerTelemetry(
   next.isMoving = isMoving;
 
   let distanceAddedKm = 0;
+  const prevLat = next.previousLatitude ?? next.lastValidLat;
+  const prevLng = next.previousLongitude ?? next.lastValidLng;
+  const prevTime = next.previousGpsTimestamp ?? next.lastTelemetryTime;
 
   // 5. GPS-Based Distance Accumulation (when moving)
   if (isMoving && input.lat != null && input.lng != null) {
     if (isFleetOperatingCoordinate(input.lat, input.lng)) {
-      if (next.lastValidLat != null && next.lastValidLng != null) {
+      if (prevLat != null && prevLng != null) {
         // Check if vehicle was stopped for > 15 minutes before this movement (new trip started)
-        if (next.lastTelemetryTime && input.recordedAt) {
-          const prevMs = new Date(next.lastTelemetryTime).getTime();
+        if (prevTime && input.recordedAt) {
+          const prevMs = new Date(prevTime).getTime();
           const currMs = new Date(input.recordedAt).getTime();
           const gapMins = (currMs - prevMs) / 60000;
           if (gapMins > 15 && !state.isMoving) {
@@ -238,9 +291,9 @@ export function processOdometerTelemetry(
         }
 
         const deltaKm = calculateMovementDistanceKm(
-          next.lastValidLat,
-          next.lastValidLng,
-          next.lastTelemetryTime,
+          prevLat,
+          prevLng,
+          prevTime,
           input.lat,
           input.lng,
           input.recordedAt,
@@ -258,6 +311,8 @@ export function processOdometerTelemetry(
         }
       }
 
+      next.previousLatitude = Number(input.lat);
+      next.previousLongitude = Number(input.lng);
       next.lastValidLat = Number(input.lat);
       next.lastValidLng = Number(input.lng);
     }
@@ -265,13 +320,21 @@ export function processOdometerTelemetry(
     // When vehicle is stopped/idle: freeze odometer reading, do not accrue drift
     // Current trip distance freezes at its completed value
     if (input.lat != null && input.lng != null && isFleetOperatingCoordinate(input.lat, input.lng)) {
+      next.previousLatitude = Number(input.lat);
+      next.previousLongitude = Number(input.lng);
       next.lastValidLat = Number(input.lat);
       next.lastValidLng = Number(input.lng);
     }
   }
 
-  if (inputIdStr) next.lastTelemetryId = inputIdStr;
-  if (inputTimeStr) next.lastTelemetryTime = inputTimeStr;
+  if (inputIdStr) {
+    next.lastProcessedTelemetryId = inputIdStr;
+    next.lastTelemetryId = inputIdStr;
+  }
+  if (inputTimeStr) {
+    next.previousGpsTimestamp = inputTimeStr;
+    next.lastTelemetryTime = inputTimeStr;
+  }
   next.lastUpdated = inputTimeStr || new Date().toISOString();
 
   return { updatedState: next, distanceAddedKm, isDuplicate: false };
@@ -313,8 +376,32 @@ export async function persistVehicleOdometer(
 ): Promise<void> {
   if (!supabaseClient || !state.vehicleId) return;
 
+  const lat = state.previousLatitude ?? state.lastValidLat;
+  const lng = state.previousLongitude ?? state.lastValidLng;
+  const timestamp = state.previousGpsTimestamp ?? state.lastTelemetryTime ?? new Date().toISOString();
+  const telemetryId = state.lastProcessedTelemetryId ?? state.lastTelemetryId;
+
+  // 1. Try atomic server RPC if available
+  try {
+    const { data, error } = await supabaseClient.rpc("accumulate_gps_odometer", {
+      p_vehicle_id: state.vehicleId,
+      p_device_id: state.deviceId || null,
+      p_lat: lat != null ? Number(lat) : null,
+      p_lng: lng != null ? Number(lng) : null,
+      p_speed: Number(state.currentSpeedKmh || 0),
+      p_recorded_at: timestamp,
+      p_telemetry_id: telemetryId ? String(telemetryId) : null,
+      p_hardware_odometer: state.readingSource === "hardware" ? Number(state.totalOdometerKm) : null,
+      p_ist_today_date: state.todayDate,
+    });
+    if (!error && data) return;
+  } catch {
+    // If RPC is unavailable, fallback to direct upsert
+  }
+
   const payload = {
     vehicle_id: state.vehicleId,
+    device_id: state.deviceId,
     total_odometer_km: state.totalOdometerKm,
     today_distance_km: state.todayDistanceKm,
     current_trip_distance_km: state.currentTripDistanceKm,
@@ -322,24 +409,29 @@ export async function persistVehicleOdometer(
     reading_source: state.readingSource,
     today_date: state.todayDate,
     is_moving: state.isMoving,
-    last_valid_lat: state.lastValidLat,
-    last_valid_lng: state.lastValidLng,
-    last_telemetry_id: state.lastTelemetryId,
-    last_telemetry_time: state.lastTelemetryTime,
+    previous_latitude: lat,
+    previous_longitude: lng,
+    previous_gps_timestamp: timestamp,
+    last_processed_telemetry_id: telemetryId,
+    last_valid_lat: lat,
+    last_valid_lng: lng,
+    last_telemetry_id: telemetryId,
+    last_telemetry_time: timestamp,
+    updated_at: new Date().toISOString(),
     last_updated_at: new Date().toISOString(),
   };
 
   try {
-    // 1. Try upserting to vehicle_odometers table
+    // 2. Try upserting to vehicle_odometers table
     const { error: odoError } = await supabaseClient
       .from("vehicle_odometers")
       .upsert(payload, { onConflict: "vehicle_id" });
 
     if (odoError) {
-      // If table doesn't exist yet in remote schema, ignore and sync to vehicles table
+      // Table may be in-flight before migration deploy
     }
 
-    // 2. Also keep canonical vehicles.odometer in sync if higher than baseline
+    // 3. Keep canonical vehicles.odometer in sync if higher than baseline
     const roundedOdo = Math.round(state.totalOdometerKm);
     if (roundedOdo > state.baselineOdometerKm) {
       await supabaseClient
@@ -348,7 +440,6 @@ export async function persistVehicleOdometer(
         .eq("id", state.vehicleId);
     }
   } catch (err) {
-    // Graceful error handling: ensure local tracking never crashes if network fails
     console.warn(`[OdometerEngine] Error syncing odometer for ${state.vehicleId}:`, err);
   }
 }
@@ -391,3 +482,4 @@ export function calculateTodayGpsDistance(
 
   return Math.round(totalDistKm * 100) / 100;
 }
+
