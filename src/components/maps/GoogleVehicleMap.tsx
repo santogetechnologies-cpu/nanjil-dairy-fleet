@@ -27,6 +27,7 @@ export interface GoogleVehicleMapProps {
   selectedId?: string;
   onSelectVehicle?: (vehicle: Vehicle) => void;
   routeHistory?: Array<{ lat: number; lng: number }>;
+  todayRoutes?: Record<string, Array<Array<{ lat: number; lng: number }>>>;
 }
 
 export function GoogleVehicleMap({
@@ -35,6 +36,7 @@ export function GoogleVehicleMap({
   selectedId,
   onSelectVehicle,
   routeHistory,
+  todayRoutes,
 }: GoogleVehicleMapProps) {
   const map = useMap();
 
@@ -102,119 +104,67 @@ export function GoogleVehicleMap({
     }
   }, [selectedId, mappedVehicles, map]);
 
-  const [realRoadCoords, setRealRoadCoords] = useState<Array<{ lat: number; lng: number }> | null>(null);
+  // Prepare Today's Travelled GPS Route Segments (Red Polyline, 5px, 0.9 opacity)
+  const renderedRouteSegments = useMemo(() => {
+    const list: Array<{
+      key: string;
+      path: Array<{ lat: number; lng: number }>;
+      isSelected: boolean;
+    }> = [];
 
-  const targetVehicle =
-    active || (selectedId ? mappedVehicles.find((v) => v.id === selectedId) : null);
+    // 1. If todayRoutes map is provided, render all vehicle routes
+    if (todayRoutes && Object.keys(todayRoutes).length > 0) {
+      const renderedKeys = new Set<string>();
 
-  // Real OSRM Road routing for active/selected vehicle trajectory
-  useEffect(() => {
-    if (
-      !targetVehicle ||
-      typeof targetVehicle.lat !== "number" ||
-      typeof targetVehicle.lng !== "number" ||
-      isNaN(targetVehicle.lat) ||
-      isNaN(targetVehicle.lng)
-    ) {
-      setRealRoadCoords(null);
-      return;
-    }
+      mappedVehicles.forEach((v) => {
+        const isSelected = v.id === selectedId || active?.id === v.id;
+        const segments =
+          todayRoutes[v.id] ||
+          (v.deviceId ? todayRoutes[v.deviceId] : undefined);
 
-    let isSubscribed = true;
+        if (!segments || segments.length === 0) return;
 
-    if (!routeHistory || routeHistory.length === 0) {
-      setRealRoadCoords(null);
-      return;
-    }
+        renderedKeys.add(v.id);
+        if (v.deviceId) renderedKeys.add(v.deviceId);
 
-    const firstPt = routeHistory[0];
-    if (
-      !firstPt ||
-      typeof firstPt.lng !== "number" ||
-      typeof firstPt.lat !== "number" ||
-      isNaN(firstPt.lng) ||
-      isNaN(firstPt.lat)
-    ) {
-      setRealRoadCoords(null);
-      return;
-    }
-
-    const startLng = firstPt.lng;
-    const startLat = firstPt.lat;
-    const endLng = targetVehicle.lng;
-    const endLat = targetVehicle.lat;
-
-    if (Math.abs(startLng - endLng) < 0.0001 && Math.abs(startLat - endLat) < 0.0001) {
-      setRealRoadCoords(null);
-      return;
-    }
-
-    async function fetchRealRoadRoute() {
-      try {
-        const url = `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`;
-        const res = await fetch(url);
-        if (!res.ok) return;
-        const json = await res.json();
-        if (json.routes && json.routes.length > 0 && json.routes[0].geometry?.coordinates) {
-          if (isSubscribed) {
-            const path = json.routes[0].geometry.coordinates.map((c: [number, number]) => ({
-              lat: c[1],
-              lng: c[0],
-            }));
-            setRealRoadCoords(path);
+        segments.forEach((seg, sIdx) => {
+          if (seg && seg.length >= 2) {
+            list.push({
+              key: `today-route-${v.id}-${sIdx}`,
+              path: seg,
+              isSelected,
+            });
           }
-        }
-      } catch (e) {
-        // Fallback gracefully to direct coordinates
+        });
+      });
+
+      // Also render any routes for vehicles in todayRoutes not explicitly in mappedVehicles (e.g. offline vehicles)
+      if (!selectedId && mappedVehicles.length === vehicles.length) {
+        Object.entries(todayRoutes).forEach(([key, segments]) => {
+          if (renderedKeys.has(key)) return;
+          renderedKeys.add(key);
+          segments.forEach((seg, sIdx) => {
+            if (seg && seg.length >= 2) {
+              list.push({
+                key: `today-route-extra-${key}-${sIdx}`,
+                path: seg,
+                isSelected: false,
+              });
+            }
+          });
+        });
       }
+    } else if (routeHistory && routeHistory.length >= 2) {
+      // 2. Fallback to routeHistory for single-vehicle profiles / backward compatibility
+      list.push({
+        key: "legacy-route-history",
+        path: routeHistory,
+        isSelected: Boolean(selectedId),
+      });
     }
 
-    fetchRealRoadRoute();
-
-    return () => {
-      isSubscribed = false;
-    };
-  }, [targetVehicle, routeHistory]);
-
-  const polylinePath = useMemo(() => {
-    if (
-      !targetVehicle ||
-      typeof targetVehicle.lat !== "number" ||
-      typeof targetVehicle.lng !== "number" ||
-      isNaN(targetVehicle.lat) ||
-      isNaN(targetVehicle.lng)
-    ) {
-      return [];
-    }
-
-    if (realRoadCoords && realRoadCoords.length >= 2) {
-      return realRoadCoords;
-    }
-
-    if (routeHistory && routeHistory.length > 0) {
-      const validPoints = routeHistory
-        .filter(
-          (pt) =>
-            pt &&
-            typeof pt.lat === "number" &&
-            !isNaN(pt.lat) &&
-            typeof pt.lng === "number" &&
-            !isNaN(pt.lng),
-        )
-        .map((pt) => ({ lat: pt.lat, lng: pt.lng }));
-
-      if (validPoints.length > 0) {
-        return [...validPoints, { lat: targetVehicle.lat, lng: targetVehicle.lng }];
-      }
-    }
-
-    return [];
-  }, [targetVehicle, realRoadCoords, routeHistory]);
-
-  const startPoint = useMemo(() => {
-    if (!polylinePath || polylinePath.length === 0) return null;
-    return polylinePath[0];
-  }, [polylinePath]);
+    return list;
+  }, [todayRoutes, mappedVehicles, vehicles.length, selectedId, active, routeHistory]);
 
   return (
     <div className="relative rounded-lg overflow-hidden border border-border" style={{ height }}>
@@ -230,23 +180,18 @@ export function GoogleVehicleMap({
         zoomControl={true}
         style={{ width: "100%", height: "100%" }}
       >
-        {/* Route Trajectory Polyline */}
-        {polylinePath.length >= 2 && (
-          <>
-            <Polyline
-              path={polylinePath}
-              strokeColor="#3B82F6"
-              strokeOpacity={0.4}
-              strokeWeight={7}
-            />
-            <Polyline
-              path={polylinePath}
-              strokeColor="#2563EB"
-              strokeOpacity={0.95}
-              strokeWeight={3.5}
-            />
-          </>
-        )}
+        {/* Today's Travelled GPS Routes (Continuous RED Polylines) */}
+        {renderedRouteSegments.map(({ key, path, isSelected }) => (
+          <Polyline
+            key={key}
+            path={path}
+            strokeColor="#FF0000"
+            strokeOpacity={0.9}
+            strokeWeight={5}
+            geodesic={true}
+            zIndex={isSelected ? 50 : 20}
+          />
+        ))}
 
         {/* Nanjil Dairy Plant Base Point Pin Marker */}
         <AdvancedMarker position={NANJIL_DAIRY_DEPOT}>
@@ -255,16 +200,6 @@ export function GoogleVehicleMap({
             <span>Nanjil Dairy Plant (Base Point)</span>
           </div>
         </AdvancedMarker>
-
-        {/* Route Start Point Pin Marker */}
-        {startPoint && active && (
-          <AdvancedMarker position={startPoint}>
-            <div className="flex items-center gap-1 bg-primary/90 text-primary-foreground px-2 py-0.5 rounded text-[10px] font-semibold shadow-md border border-white">
-              <MapPin className="h-3 w-3" />
-              <span>Route Origin</span>
-            </div>
-          </AdvancedMarker>
-        )}
 
         {/* Live Vehicle Markers */}
         {mappedVehicles.map((v) => {

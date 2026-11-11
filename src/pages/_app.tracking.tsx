@@ -8,6 +8,7 @@ import { Search, MapPin, Radio, AlertTriangle, AlertCircle } from "lucide-react"
 import { useVehicles, TELEMETRY_SOURCE, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
 import { getOverspeedStatus } from "@/lib/overspeed";
 import { useOverspeedMonitor } from "@/hooks/useOverspeed";
+import { useTodayTravelledRoutes } from "@/hooks/useTodayTravelledRoutes";
 
 function TrackingPage() {
   const [filter, setFilter] = useState<VehicleStatus | "All">("All");
@@ -18,6 +19,9 @@ function TrackingPage() {
   // Stream live vehicle tracking from the configured telemetry source.
   // Source is controlled by VITE_TELEMETRY_SOURCE ("firebase" | "supabase").
   const vehicles = useVehicles();
+
+  // Load and stream today's actual GPS travelled route for each vehicle (Asia/Kolkata timezone)
+  const { routes: todayRoutes } = useTodayTravelledRoutes(vehicles);
 
   // Real-time overspeed detection, transition tracking, and alert persistence
   const { activeWarnings, activeCriticals } = useOverspeedMonitor(vehicles);
@@ -130,6 +134,7 @@ function TrackingPage() {
                 selectedId={selectedId}
                 onSelectVehicle={handleSelectVehicle}
                 routeHistory={routeHistory}
+                todayRoutes={todayRoutes}
               />
             </div>
           </Card>

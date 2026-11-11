@@ -211,6 +211,7 @@ export function isValidUuid(val?: unknown): boolean {
 }
 
 export function isValidGpsCoord(lat: unknown, lng: unknown): boolean {
+  if (lat == null || lng == null || lat === "" || lng === "") return false;
   const nLat = Number(lat);
   const nLng = Number(lng);
   if (isNaN(nLat) || isNaN(nLng)) return false;

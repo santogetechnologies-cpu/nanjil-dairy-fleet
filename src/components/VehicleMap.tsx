@@ -8,6 +8,7 @@ interface Props {
   selectedId?: string;
   onSelectVehicle?: (vehicle: Vehicle) => void;
   routeHistory?: Array<{ lat: number; lng: number }>;
+  todayRoutes?: Record<string, Array<Array<{ lat: number; lng: number }>>>;
 }
 
 const LazyMap = lazy(() => import("./VehicleMapImpl"));
