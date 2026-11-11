@@ -253,6 +253,7 @@ export default function RoutesPlannerPage() {
 
   // Selected stop on map
   const [activeStopId, setActiveStopId] = useState<string | null>(null);
+  const [mapClickMode, setMapClickMode] = useState<"add_stop" | "set_destination">("add_stop");
 
   // Auto-sync active workspace to localStorage on any state modification
   useEffect(() => {
@@ -597,8 +598,20 @@ export default function RoutesPlannerPage() {
     };
   }, [returnRoadResult, roundTripType]);
 
-  // Handle map click to add a stop
+  // Handle map click to add a stop or set destination
   function handleMapClick(e: { lngLat: { lng: number; lat: number } }) {
+    if (mapClickMode === "set_destination") {
+      const destName = `Destination (${e.lngLat.lat.toFixed(4)}, ${e.lngLat.lng.toFixed(4)})`;
+      setDestinationPoint({
+        name: destName,
+        lat: e.lngLat.lat,
+        lng: e.lngLat.lng,
+      });
+      setMapClickMode("add_stop");
+      showToast(`Destination updated to coordinates`);
+      return;
+    }
+
     const newStop: RoutePoint = {
       id: `stop-${Date.now()}`,
       name: `Custom Waypoint (${e.lngLat.lat.toFixed(4)}, ${e.lngLat.lng.toFixed(4)})`,
@@ -1341,27 +1354,58 @@ export default function RoutesPlannerPage() {
                   <div>
                     <div className="text-xs font-bold text-slate-800">Interactive Road Route Map</div>
                     <div className="text-[10px] text-slate-500">
-                      Click anywhere on the road to place a new stop point
+                      {mapClickMode === "set_destination"
+                        ? "Click anywhere on the map to place the Destination marker"
+                        : "Click anywhere on the road to place a new stop point"}
                     </div>
                   </div>
                 </div>
 
-                {/* Map Legend */}
-                <div className="flex items-center gap-3 text-[11px]">
-                  <div className="flex items-center gap-1">
-                    <span className="h-2.5 w-5 rounded-xs bg-indigo-600 inline-block" />
-                    <span className="font-medium text-slate-700">Outbound Road</span>
+                <div className="flex items-center gap-2.5">
+                  {/* Mode Selector */}
+                  <div className="flex items-center rounded-lg border border-slate-200 bg-white p-0.5 text-[11px] shadow-2xs">
+                    <button
+                      type="button"
+                      onClick={() => setMapClickMode("add_stop")}
+                      className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+                        mapClickMode === "add_stop"
+                          ? "bg-indigo-600 text-white shadow-xs"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      + Add Stop
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMapClickMode("set_destination")}
+                      className={`px-2.5 py-1 rounded-md font-medium transition-all flex items-center gap-1 ${
+                        mapClickMode === "set_destination"
+                          ? "bg-amber-600 text-white shadow-xs"
+                          : "text-amber-700 hover:text-amber-800"
+                      }`}
+                    >
+                      <CheckCircle2 className="h-3 w-3" />
+                      Set Destination
+                    </button>
                   </div>
-                  {roundTripType !== "one_way" && (
+
+                  {/* Map Legend */}
+                  <div className="hidden sm:flex items-center gap-2.5 text-[11px] pl-1">
                     <div className="flex items-center gap-1">
-                      <span className="h-2.5 w-5 rounded-xs bg-emerald-600 inline-block" />
-                      <span className="font-medium text-slate-700">Return Road</span>
+                      <span className="h-2 w-4 rounded-xs bg-indigo-600 inline-block" />
+                      <span className="font-medium text-slate-700">Outbound</span>
                     </div>
-                  )}
+                    {roundTripType !== "one_way" && (
+                      <div className="flex items-center gap-1">
+                        <span className="h-2 w-4 rounded-xs bg-emerald-600 inline-block" />
+                        <span className="font-medium text-slate-700">Return</span>
+                      </div>
+                    )}
+                  </div>
                   {isCalculatingRoute && (
-                    <div className="flex items-center gap-1 text-indigo-600 font-medium">
+                    <div className="flex items-center gap-1 text-indigo-600 font-medium text-[11px]">
                       <Loader2 className="h-3 w-3 animate-spin" />
-                      <span>Calculating roads…</span>
+                      <span>Calculating…</span>
                     </div>
                   )}
                 </div>
@@ -1533,6 +1577,82 @@ export default function RoutesPlannerPage() {
                     </select>
                   </div>
                 </div>
+
+                {/* Origin (Depot) & Destination Selectors */}
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 flex items-center gap-1 mb-1">
+                        <span className="h-2 w-2 rounded-full bg-slate-900 inline-block" />
+                        <span>Origin (Depot)</span>
+                      </label>
+                      <select
+                        value={startPoint?.name || NANJIL_DAIRY_DEPOT.name}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === NANJIL_DAIRY_DEPOT.name) {
+                            setStartPoint(NANJIL_DAIRY_DEPOT);
+                          } else {
+                            const found = PRESET_DAIRY_CENTRES.find((c) => c.name === val);
+                            if (found) setStartPoint(found);
+                          }
+                        }}
+                        className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white outline-none truncate font-medium text-slate-800"
+                      >
+                        <option value={NANJIL_DAIRY_DEPOT.name}>
+                          {NANJIL_DAIRY_DEPOT.name}
+                        </option>
+                        {PRESET_DAIRY_CENTRES.map((c) => (
+                          <option key={c.name} value={c.name}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-600 flex items-center justify-between mb-1">
+                        <span className="flex items-center gap-1">
+                          <span className="h-2 w-2 rounded-full bg-amber-600 inline-block" />
+                          <span>Destination</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMapClickMode("set_destination");
+                            showToast("Click anywhere on the map to set Destination");
+                          }}
+                          className="text-[10px] text-amber-700 hover:underline font-semibold"
+                        >
+                          Pick on map
+                        </button>
+                      </label>
+                      <select
+                        value={destinationPoint?.name || ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const found = PRESET_DAIRY_CENTRES.find((c) => c.name === val);
+                          if (found) {
+                            setDestinationPoint(found);
+                            showToast(`Destination set to ${found.name}`);
+                          }
+                        }}
+                        className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50/60 outline-none truncate font-semibold text-amber-900"
+                      >
+                        {!PRESET_DAIRY_CENTRES.some((c) => c.name === destinationPoint?.name) && destinationPoint?.name && (
+                          <option value={destinationPoint.name}>
+                            {destinationPoint.name}
+                          </option>
+                        )}
+                        {PRESET_DAIRY_CENTRES.map((c) => (
+                          <option key={c.name} value={c.name}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
               </div>
             </Card>
 
@@ -1691,6 +1811,20 @@ export default function RoutesPlannerPage() {
                           title="Duplicate stop"
                         >
                           <Copy className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDestinationPoint({
+                              name: stop.name,
+                              lat: stop.lat,
+                              lng: stop.lng,
+                            });
+                            showToast(`Set "${stop.name}" as Route Destination`);
+                          }}
+                          className="p-1 rounded text-slate-400 hover:text-amber-600"
+                          title="Set as Destination"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
                         </button>
                         <button
                           onClick={() => deleteStop(stop.id)}
