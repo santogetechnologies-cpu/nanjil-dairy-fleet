@@ -124,12 +124,6 @@ export function calculateMovementDistanceKm(
     return 0;
   }
 
-  // Stationary & GPS drift rejection: if speed <= 3 km/h, vehicle is stationary
-  const speed = Math.max(0, Number(currentSpeedKmh || 0));
-  if (speed <= 3) {
-    return 0;
-  }
-
   // Exact Haversine formula distance calculation
   const distKm = calculateDistance(prevLat, prevLng, currLat, currLng);
 
@@ -143,19 +137,35 @@ export function calculateMovementDistanceKm(
     return 0;
   }
 
-  // Check implied speed if timestamps are present
+  // Check implied speed and time gap if timestamps are present
   if (prevRecordedAt && currRecordedAt) {
     const prevMs = new Date(prevRecordedAt).getTime();
     const currMs = new Date(currRecordedAt).getTime();
-    const diffSec = Math.max(0, (currMs - prevMs) / 1000);
 
-    // If signal gap > 15 minutes, do not add fake gap distance
-    if (diffSec > 15 * 60) {
-      return 0;
+    if (!isNaN(prevMs) && !isNaN(currMs)) {
+      const diffSec = Math.max(0, (currMs - prevMs) / 1000);
+
+      // If signal gap > 15 minutes, do not add fake gap distance
+      if (diffSec > 15 * 60) {
+        return 0;
+      }
+
+      // Reject impossible implied speed (> 160 km/h)
+      if (diffSec > 0 && distKm / (diffSec / 3600) > 160) {
+        return 0;
+      }
+
+      // Stationary drift rejection: if reported speed is stationary (<= 3 km/h)
+      // and implied speed is also stationary (<= 3 km/h), reject as drift
+      const speed = Math.max(0, Number(currentSpeedKmh || 0));
+      if (speed <= 3 && diffSec > 0 && distKm / (diffSec / 3600) <= 3) {
+        return 0;
+      }
     }
-
-    // Reject impossible implied speed (> 160 km/h)
-    if (diffSec > 0 && distKm / (diffSec / 3600) > 160) {
+  } else {
+    // Without timestamps, if reported speed <= 3, reject as stationary
+    const speed = Math.max(0, Number(currentSpeedKmh || 0));
+    if (speed <= 3) {
       return 0;
     }
   }
@@ -265,15 +275,46 @@ export function processOdometerTelemetry(
   }
 
   // 4. Moving vs Stationary check
-  const speed = Math.max(0, Number(input.speed ?? 0));
-  const isMoving = speed > 3;
-  next.currentSpeedKmh = speed;
-  next.isMoving = isMoving;
+  const rawSpeed = input.speed != null ? Math.max(0, Number(input.speed)) : 0;
+  let isMoving = rawSpeed > 3;
+  let effectiveSpeed = rawSpeed;
 
-  let distanceAddedKm = 0;
   const prevLat = next.previousLatitude ?? next.lastValidLat;
   const prevLng = next.previousLongitude ?? next.lastValidLng;
   const prevTime = next.previousGpsTimestamp ?? next.lastTelemetryTime;
+
+  // If reported speed <= 3, check whether coordinate progression indicates physical movement
+  if (
+    !isMoving &&
+    input.lat != null &&
+    input.lng != null &&
+    prevLat != null &&
+    prevLng != null &&
+    isFleetOperatingCoordinate(input.lat, input.lng) &&
+    input.recordedAt &&
+    prevTime
+  ) {
+    const prevMs = new Date(prevTime).getTime();
+    const currMs = new Date(input.recordedAt).getTime();
+    if (!isNaN(prevMs) && !isNaN(currMs)) {
+      const diffSec = Math.max(0, (currMs - prevMs) / 1000);
+      if (diffSec > 0 && diffSec <= 15 * 60) {
+        const rawDist = calculateDistance(prevLat, prevLng, input.lat, input.lng);
+        if (rawDist >= 0.005 && rawDist <= 200) {
+          const impliedSpeed = rawDist / (diffSec / 3600);
+          if (impliedSpeed > 3 && impliedSpeed <= 160) {
+            isMoving = true;
+            effectiveSpeed = Math.round(impliedSpeed);
+          }
+        }
+      }
+    }
+  }
+
+  next.currentSpeedKmh = effectiveSpeed;
+  next.isMoving = isMoving;
+
+  let distanceAddedKm = 0;
 
   // 5. GPS-Based Distance Accumulation (when moving)
   if (isMoving && input.lat != null && input.lng != null) {
@@ -297,7 +338,7 @@ export function processOdometerTelemetry(
           input.lat,
           input.lng,
           input.recordedAt,
-          speed,
+          effectiveSpeed,
         );
 
         if (deltaKm > 0) {
