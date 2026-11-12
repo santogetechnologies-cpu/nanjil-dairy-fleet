@@ -5,6 +5,8 @@ import {
   initVehicleOdometerState,
   processOdometerTelemetry,
   reconcileOdometerState,
+  persistVehicleOdometer,
+  resetVehicleOdometersAvailabilityCache,
   calculateMovementDistanceKm,
   calculateTodayGpsDistance,
   calculateTodayAndTripDistances,
@@ -841,4 +843,68 @@ test("21. State Recovery & Reclassification: Rescues spurious hardware states fr
   assert.ok(moved.updatedState.totalOdometerKm >= 14398.99 && moved.updatedState.totalOdometerKm <= 14399.01);
   assert.equal(moved.updatedState.readingSource, "gps_estimated");
 });
+
+test("22. Database Resilience: Persists integer to vehicles.odometer and suppresses missing table 404 spam", async () => {
+  resetVehicleOdometersAvailabilityCache();
+  const state = {
+    vehicleId: "v-persist-1",
+    deviceId: "863110086146753",
+    totalOdometerKm: 14405.42,
+    todayDistanceKm: 27.42,
+    currentTripDistanceKm: 27.42,
+    currentSpeedKmh: 15,
+    readingSource: "gps_estimated",
+    baselineOdometerKm: 14378.0,
+    todayDate: "2026-11-12",
+    isMoving: true,
+  };
+
+  const updateCalls = [];
+  let upsertCount = 0;
+
+  const mockSupabase = {
+    from(table) {
+      if (table === "vehicles") {
+        return {
+          update(payload) {
+            updateCalls.push(payload);
+            return {
+              eq(col, val) {
+                return Promise.resolve({ error: null });
+              },
+            };
+          },
+        };
+      }
+      if (table === "vehicle_odometers") {
+        upsertCount++;
+        return {
+          upsert(payload) {
+            // Simulate missing table on remote Supabase (404 / PGRST205)
+            return Promise.resolve({
+              error: {
+                code: "PGRST205",
+                status: 404,
+                message: "relation 'public.vehicle_odometers' does not exist",
+              },
+            });
+          },
+        };
+      }
+      return {};
+    },
+  };
+
+  // First persist call: should write integer to vehicles (no 400 Bad Request)
+  await persistVehicleOdometer(mockSupabase, state);
+  assert.equal(updateCalls.length, 1);
+  assert.equal(updateCalls[0].odometer, 14405, "Must persist rounded integer to vehicles.odometer to prevent HTTP 400");
+  assert.equal(upsertCount, 1, "Attempted initial upsert to vehicle_odometers");
+
+  // Second persist call: since table was detected as missing, must NOT attempt upsert again (no 404 spam)
+  await persistVehicleOdometer(mockSupabase, state);
+  assert.equal(updateCalls.length, 2);
+  assert.equal(upsertCount, 1, "Must NOT spam missing vehicle_odometers table on subsequent calls");
+});
+
 
