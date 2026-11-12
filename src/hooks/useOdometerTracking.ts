@@ -12,6 +12,7 @@ import {
   type VehicleOdometerState,
   initVehicleOdometerState,
   processOdometerTelemetry,
+  reconcileOdometerState,
   loadLocalOdometerStates,
   saveLocalOdometerStates,
   persistVehicleOdometer,
@@ -66,24 +67,15 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
         ...localMap,
       };
 
-      // Initialize any missing vehicles
+      // Initialize any missing vehicles and safely reconcile existing cached states
       vehicles.forEach((v) => {
+        const currentBase = Math.max(0, Number(v.odometer || 0));
         if (!nextMap[v.id]) {
           nextMap[v.id] = initVehicleOdometerState(v, 0, currentIstDate);
         } else {
-          // Verify baseline odometer hasn't been increased in DB
-          const currentBase = Math.max(0, Number(v.odometer || 0));
-          if (currentBase > nextMap[v.id].baselineOdometerKm) {
-            nextMap[v.id].baselineOdometerKm = currentBase;
-            if (nextMap[v.id].totalOdometerKm < currentBase) {
-              nextMap[v.id].totalOdometerKm = currentBase;
-            }
-          }
-          // Reset daily distance if midnight passed
-          if (nextMap[v.id].todayDate !== currentIstDate) {
-            nextMap[v.id].todayDate = currentIstDate;
-            nextMap[v.id].todayDistanceKm = 0;
-          }
+          // Reconcile cached state: recover from spurious hardware classification,
+          // preserve total odometer, today's distance, coordinates, and precision!
+          nextMap[v.id] = reconcileOdometerState(nextMap[v.id], currentBase, currentIstDate);
         }
       });
 
@@ -158,7 +150,7 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
       lat?: number | null,
       lng?: number | null,
       speed?: number | null,
-      odometer?: number | null,
+      hardwareOdometer?: number | null,
       recordedAt?: string | null,
       telemetryId?: string | number,
     ) => {
@@ -177,7 +169,7 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
           lat,
           lng,
           speed,
-          odometer,
+          hardwareOdometer, // Genuine verified OBD-II/CAN reading from device packet (never database baseline)
           recordedAt,
         },
       );
@@ -214,7 +206,7 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
         v.lat,
         v.lng,
         v.speed,
-        v.odometer,
+        v.hardwareOdometer ?? null, // Never substitute matchedSupabase.odometer for missing hardware telemetry!
         v.lastUpdate,
       );
     });

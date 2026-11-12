@@ -4,6 +4,7 @@ import {
   calculateDistance,
   initVehicleOdometerState,
   processOdometerTelemetry,
+  reconcileOdometerState,
   calculateMovementDistanceKm,
   calculateTodayGpsDistance,
   calculateTodayAndTripDistances,
@@ -668,3 +669,176 @@ test("18. calculateTodayAndTripDistances: Segmenting batch GPS points into Today
   // Current trip distance: ONLY Trip 2 (~3.0 km)
   assert.ok(res.currentTripDistanceKm >= 2.9 && res.currentTripDistanceKm <= 3.1);
 });
+
+test("19. Regression Suite: Starting baseline 14,398.00 km with GPS movement (14,398.25 -> 14,398.50 -> 14,399.00 -> 14,400.25 km)", () => {
+  const vehicle = { id: "v19", number: "TN 75 F 4323", odometer: 14398.0 };
+  let state = initVehicleOdometerState(vehicle);
+
+  // Requirement 1 & 5: Baseline 14,398 km with no hardware telemetry defaults to gps_estimated
+  assert.equal(state.totalOdometerKm, 14398.0);
+  assert.equal(state.readingSource, "gps_estimated");
+
+  // Requirement 2: First GPS coordinate initializes coordinate reference without artificial increment
+  let lat = 8.260000;
+  let lng = 77.288000;
+  let timeMs = new Date("2026-11-12T05:00:00.000Z").getTime();
+
+  let res = processOdometerTelemetry(state, {
+    id: "p1",
+    vehicleId: vehicle.id,
+    lat,
+    lng,
+    speed: 30,
+    recordedAt: new Date(timeMs).toISOString(),
+  });
+  state = res.updatedState;
+  assert.equal(res.distanceAddedKm, 0);
+  assert.equal(state.totalOdometerKm, 14398.0);
+  assert.equal(state.readingSource, "gps_estimated");
+
+  // Requirement 3 & 9: Move +0.25 km north (~0.00225 deg lat in 30 sec) -> 14,398.25 km
+  lat += 0.00225;
+  timeMs += 30000;
+  res = processOdometerTelemetry(state, {
+    id: "p2",
+    vehicleId: vehicle.id,
+    lat,
+    lng,
+    speed: 30,
+    recordedAt: new Date(timeMs).toISOString(),
+  });
+  state = res.updatedState;
+  assert.equal(state.totalOdometerKm, 14398.25);
+  assert.equal(state.todayDistanceKm, 0.25);
+  assert.equal(state.readingSource, "gps_estimated");
+
+  // Requirement 4 & 9: Move another +0.25 km north -> 14,398.50 km
+  lat += 0.00225;
+  timeMs += 30000;
+  res = processOdometerTelemetry(state, {
+    id: "p3",
+    vehicleId: vehicle.id,
+    lat,
+    lng,
+    speed: 30,
+    recordedAt: new Date(timeMs).toISOString(),
+  });
+  state = res.updatedState;
+  assert.equal(state.totalOdometerKm, 14398.5);
+  assert.equal(state.todayDistanceKm, 0.5);
+
+  // Move +0.50 km north (~0.00450 deg lat in 60 sec) -> 14,399.00 km
+  lat += 0.0045;
+  timeMs += 60000;
+  res = processOdometerTelemetry(state, {
+    id: "p4",
+    vehicleId: vehicle.id,
+    lat,
+    lng,
+    speed: 30,
+    recordedAt: new Date(timeMs).toISOString(),
+  });
+  state = res.updatedState;
+  assert.equal(state.totalOdometerKm, 14399.0);
+  assert.equal(state.todayDistanceKm, 1.0);
+
+  // Move +1.25 km north (~0.01125 deg lat in 150 sec) -> 14,400.25 km
+  lat += 0.01125;
+  timeMs += 150000;
+  res = processOdometerTelemetry(state, {
+    id: "p5",
+    vehicleId: vehicle.id,
+    lat,
+    lng,
+    speed: 30,
+    recordedAt: new Date(timeMs).toISOString(),
+  });
+  state = res.updatedState;
+  assert.equal(state.totalOdometerKm, 14400.25);
+  assert.equal(state.todayDistanceKm, 2.25);
+  assert.equal(state.readingSource, "gps_estimated");
+});
+
+test("20. Hardware Odometer Protection & GPS Non-Double-Counting", () => {
+  const vehicle = { id: "v20", number: "TN 75 BC 2219", odometer: 345000.0 };
+  let state = initVehicleOdometerState(vehicle);
+
+  // GPS movement at 345,000 km
+  state = processOdometerTelemetry(state, {
+    id: "1",
+    vehicleId: vehicle.id,
+    lat: 8.2600,
+    lng: 77.2880,
+    speed: 30,
+    recordedAt: "2026-11-12T06:00:00Z",
+  }).updatedState;
+
+  // Genuine hardware telemetry arrives from CAN bus (345010.00 km)
+  const hwStep = processOdometerTelemetry(state, {
+    id: "2",
+    vehicleId: vehicle.id,
+    lat: 8.2690,
+    lng: 77.2880,
+    speed: 30,
+    hardwareOdometer: 345010.0,
+    isVerifiedHardware: true,
+    recordedAt: "2026-11-12T06:02:00Z",
+  });
+  state = hwStep.updatedState;
+
+  // Requirement 7 & 8: Genuine hardware reading is authoritative; GPS distance in that packet is NOT double counted
+  assert.equal(state.totalOdometerKm, 345010.0);
+  assert.equal(state.readingSource, "hardware");
+
+  // Requirement 8: When hardware telemetry ceases in next packet, fall back to GPS Estimated without resetting total
+  const nextGps = processOdometerTelemetry(state, {
+    id: "3",
+    vehicleId: vehicle.id,
+    lat: 8.2780, // +1.0 km north
+    lng: 77.2880,
+    speed: 30,
+    hardwareOdometer: null, // hardware telemetry missing
+    recordedAt: "2026-11-12T06:04:00Z",
+  });
+  state = nextGps.updatedState;
+
+  assert.equal(state.readingSource, "gps_estimated");
+  assert.ok(state.totalOdometerKm >= 345010.99 && state.totalOdometerKm <= 345011.01);
+});
+
+test("21. State Recovery & Reclassification: Rescues spurious hardware states from baseline", () => {
+  // Existing state in localStorage was classified as hardware because baseline odometer was passed
+  const spuriousState = {
+    vehicleId: "v21",
+    totalOdometerKm: 14398.0,
+    todayDistanceKm: 0.0,
+    currentTripDistanceKm: 0.0,
+    currentSpeedKmh: 0,
+    readingSource: "hardware", // spuriously classified
+    isMoving: false,
+    lastUpdated: "2026-11-12T04:00:00Z",
+    todayDate: "2026-11-12",
+    baselineOdometerKm: 14398.0,
+    previousLatitude: 8.2600,
+    previousLongitude: 77.2880,
+    previousGpsTimestamp: "2026-11-12T04:00:00Z",
+  };
+
+  const recovered = reconcileOdometerState(spuriousState, 14398.0, "2026-11-12");
+  assert.equal(recovered.readingSource, "gps_estimated", "Spurious hardware baseline must be restored to gps_estimated");
+  assert.equal(recovered.totalOdometerKm, 14398.0);
+  assert.equal(recovered.previousLatitude, 8.2600);
+
+  // Now incoming movement increments odometer immediately
+  const moved = processOdometerTelemetry(recovered, {
+    id: "recov-move",
+    vehicleId: "v21",
+    lat: 8.2690,
+    lng: 77.2880,
+    speed: 30,
+    recordedAt: "2026-11-12T04:02:00Z",
+  });
+  assert.ok(moved.updatedState.totalOdometerKm >= 14398.99 && moved.updatedState.totalOdometerKm <= 14399.01);
+  assert.equal(moved.updatedState.readingSource, "gps_estimated");
+});
+
