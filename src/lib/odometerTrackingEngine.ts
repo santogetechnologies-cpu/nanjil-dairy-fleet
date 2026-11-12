@@ -513,6 +513,13 @@ export function saveLocalOdometerStates(states: Record<string, VehicleOdometerSt
   }
 }
 
+// Track availability of vehicle_odometers table in remote database
+let isVehicleOdometersTableAvailable: boolean | null = null;
+
+export function resetVehicleOdometersAvailabilityCache(): void {
+  isVehicleOdometersTableAvailable = null;
+}
+
 /**
  * Persists an odometer state to Supabase vehicles table and vehicle_odometers table with 2 decimal precision.
  */
@@ -524,56 +531,66 @@ export async function persistVehicleOdometer(
 
   try {
     const decimalOdo = Math.round(state.totalOdometerKm * 100) / 100;
-    if (decimalOdo > state.baselineOdometerKm) {
-      // 1. Try persisting exact 2-decimal odometer to vehicles table
-      const { error: vErr } = await supabaseClient
+    const integerOdo = Math.round(decimalOdo);
+
+    // 1. Persist to vehicles table. We use integerOdo because the default schema defines
+    // vehicles.odometer as INTEGER. Writing a decimal causes PostgreSQL 22P02 error and HTTP 400 Bad Request.
+    // An integer update succeeds cleanly on both INTEGER and NUMERIC column types.
+    if (integerOdo >= state.baselineOdometerKm) {
+      await supabaseClient
         .from("vehicles")
         .update({
-          odometer: decimalOdo,
+          odometer: integerOdo,
           updated_at: new Date().toISOString(),
         })
         .eq("id", state.vehicleId);
+    }
 
-      // If database column is integer (error code 22P02), fallback to rounded integer
-      if (vErr && (vErr.code === "22P02" || String(vErr.message).includes("integer"))) {
-        await supabaseClient
-          .from("vehicles")
-          .update({
-            odometer: Math.round(decimalOdo),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", state.vehicleId);
+    // 2. Also upsert to vehicle_odometers table (with full decimal precision) if table is available
+    if (isVehicleOdometersTableAvailable !== false) {
+      try {
+        const { error: voErr } = await supabaseClient
+          .from("vehicle_odometers")
+          .upsert(
+            {
+              vehicle_id: state.vehicleId,
+              device_id: state.deviceId,
+              total_odometer_km: decimalOdo,
+              today_distance_km: Math.round(state.todayDistanceKm * 100) / 100,
+              current_trip_distance_km: Math.round(state.currentTripDistanceKm * 100) / 100,
+              current_speed_kmh: Math.round(state.currentSpeedKmh * 100) / 100,
+              reading_source: state.readingSource,
+              today_date: state.todayDate,
+              is_moving: state.isMoving,
+              previous_latitude: state.previousLatitude ?? state.lastValidLat,
+              previous_longitude: state.previousLongitude ?? state.lastValidLng,
+              previous_gps_timestamp: state.previousGpsTimestamp ?? state.lastTelemetryTime,
+              last_processed_telemetry_id: state.lastProcessedTelemetryId ?? state.lastTelemetryId,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "vehicle_id" },
+          );
+
+        if (voErr) {
+          const isMissingTable =
+            voErr.code === "42P01" ||
+            voErr.code === "PGRST205" ||
+            (voErr as any).status === 404 ||
+            String(voErr.message).includes("does not exist") ||
+            String(voErr.message).includes("404");
+
+          if (isMissingTable) {
+            isVehicleOdometersTableAvailable = false;
+          }
+        } else {
+          isVehicleOdometersTableAvailable = true;
+        }
+      } catch {
+        isVehicleOdometersTableAvailable = false;
       }
     }
-
-    // 2. Also upsert to vehicle_odometers table (with full decimal precision)
-    try {
-      await supabaseClient
-        .from("vehicle_odometers")
-        .upsert(
-          {
-            vehicle_id: state.vehicleId,
-            device_id: state.deviceId,
-            total_odometer_km: decimalOdo,
-            today_distance_km: Math.round(state.todayDistanceKm * 100) / 100,
-            current_trip_distance_km: Math.round(state.currentTripDistanceKm * 100) / 100,
-            current_speed_kmh: Math.round(state.currentSpeedKmh * 100) / 100,
-            reading_source: state.readingSource,
-            today_date: state.todayDate,
-            is_moving: state.isMoving,
-            previous_latitude: state.previousLatitude ?? state.lastValidLat,
-            previous_longitude: state.previousLongitude ?? state.lastValidLng,
-            previous_gps_timestamp: state.previousGpsTimestamp ?? state.lastTelemetryTime,
-            last_processed_telemetry_id: state.lastProcessedTelemetryId ?? state.lastTelemetryId,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "vehicle_id" },
-        );
-    } catch {
-      // Optional if table not yet migrated on remote instance
-    }
   } catch (err) {
-    console.warn(`[OdometerEngine] Error syncing odometer for ${state.vehicleId}:`, err);
+    // Non-fatal error handler
   }
 }
 
