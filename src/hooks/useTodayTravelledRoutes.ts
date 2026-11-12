@@ -118,7 +118,7 @@ export function printFleetRouteDiagnostics(
   if (typeof console !== "undefined" && console.groupCollapsed) {
     console.groupCollapsed(
       "%c[Nanjil Fleet] 7-Vehicle Today GPS Route Diagnostics",
-      "color: #dc2626; font-weight: bold; font-size: 11px;",
+      "color: #0284c7; font-weight: bold; font-size: 11px;",
     );
     if (console.table) {
       console.table(diagList);

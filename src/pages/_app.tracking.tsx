@@ -45,7 +45,7 @@ function TrackingPage() {
   const { activeWarnings, activeCriticals } = useOverspeedMonitor(vehicles);
 
   // Real-time cumulative odometer and daily distance tracking engine
-  const { getVehicleOdometer } = useOdometerTracking(vehicles);
+  const { getVehicleOdometer, odometerStates } = useOdometerTracking(vehicles);
 
   function handleSelectVehicle(v: Vehicle) {
     setSelectedId(v.id);
@@ -157,6 +157,8 @@ function TrackingPage() {
                 onSelectVehicle={handleSelectVehicle}
                 routeHistory={routeHistory}
                 todayRoutes={todayRoutes}
+                odometerStates={odometerStates}
+                getVehicleOdometer={getVehicleOdometer}
               />
             </div>
           </Card>

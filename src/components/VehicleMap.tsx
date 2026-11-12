@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import type { Vehicle } from "@/lib/types";
+import type { VehicleOdometerState } from "@/lib/odometerTrackingEngine";
 import { Loader2 } from "lucide-react";
 
 interface Props {
@@ -9,6 +10,8 @@ interface Props {
   onSelectVehicle?: (vehicle: Vehicle) => void;
   routeHistory?: Array<{ lat: number; lng: number }>;
   todayRoutes?: Record<string, Array<Array<{ lat: number; lng: number }>>>;
+  odometerStates?: Record<string, VehicleOdometerState>;
+  getVehicleOdometer?: (idOrDeviceId?: string) => VehicleOdometerState;
 }
 
 const LazyMap = lazy(() => import("./VehicleMapImpl"));
