@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui-kit";
 import { Link } from "react-router-dom";
 import { getOverspeedStatus } from "@/lib/overspeed";
 import { isFleetOperatingCoordinate } from "@/lib/tripHistoryEngine";
+import { KNOWN_NANJIL_DEVICE_MAP } from "@/lib/vehicle-stop-detection";
 import {
   NANJIL_DAIRY_DEPOT,
   DEFAULT_MAP_CENTER,
@@ -88,14 +89,43 @@ export function GoogleVehicleMap({
   // Handle selectedId camera pan
   useEffect(() => {
     if (selectedId && map) {
-      const match = mappedVehicles.find((v) => v.id === selectedId);
+      const match = vehicles.find((v) => v.id === selectedId || v.deviceId === selectedId);
       if (match) {
         setActive(match);
-        map.panTo({ lat: match.lat, lng: match.lng });
-        map.setZoom(14);
+        if (match.lat != null && match.lng != null && isFleetOperatingCoordinate(match.lat, match.lng)) {
+          map.panTo({ lat: match.lat, lng: match.lng });
+          map.setZoom(14);
+        } else {
+          // If vehicle has no live GPS fix, pan to the last coordinate of today's route
+          const segs =
+            todayRoutes?.[match.id] ||
+            (match.deviceId ? todayRoutes?.[match.deviceId] : undefined) ||
+            (match.deviceId ? todayRoutes?.[match.deviceId.replace(/^device_/, "")] : undefined);
+          if (segs && segs.length > 0) {
+            const lastSeg = segs[segs.length - 1];
+            if (lastSeg && lastSeg.length > 0) {
+              const lastPt = lastSeg[lastSeg.length - 1];
+              if (isFleetOperatingCoordinate(lastPt.lat, lastPt.lng)) {
+                map.panTo({ lat: lastPt.lat, lng: lastPt.lng });
+                map.setZoom(14);
+              }
+            }
+          }
+        }
       }
     }
-  }, [selectedId, mappedVehicles, map]);
+  }, [selectedId, vehicles, map, todayRoutes]);
+
+  // Check whether the active / selected vehicle has a valid today route
+  const activeHasRoute = useMemo(() => {
+    if (!active || !todayRoutes) return false;
+    const segs =
+      todayRoutes[active.id] ||
+      (active.deviceId ? todayRoutes[active.deviceId] : undefined) ||
+      (active.deviceId ? todayRoutes[active.deviceId.replace(/^device_/, "")] : undefined);
+    if (!segs || segs.length === 0) return false;
+    return segs.some((s) => s && s.length >= 2);
+  }, [active, todayRoutes]);
 
   // Prepare Today's Travelled GPS Route Segments (Red Polyline, 5px, 0.9 opacity)
   const renderedRouteSegments = useMemo(() => {
@@ -107,18 +137,32 @@ export function GoogleVehicleMap({
 
     // 1. If todayRoutes map is provided, render all vehicle routes
     if (todayRoutes && Object.keys(todayRoutes).length > 0) {
-      const renderedKeys = new Set<string>();
+      const renderedVehicleKeys = new Set<string>();
 
-      mappedVehicles.forEach((v) => {
-        const isSelected = v.id === selectedId || active?.id === v.id;
-        const segments =
-          todayRoutes[v.id] ||
-          (v.deviceId ? todayRoutes[v.deviceId] : undefined);
+      const getSegmentsForVehicle = (v: Vehicle): Array<Array<{ lat: number; lng: number }>> | undefined => {
+        if (todayRoutes[v.id] && todayRoutes[v.id].length > 0) return todayRoutes[v.id];
+        if (v.deviceId && todayRoutes[v.deviceId] && todayRoutes[v.deviceId].length > 0) return todayRoutes[v.deviceId];
+        const cleanDev = v.deviceId ? v.deviceId.replace(/^device_/, "") : undefined;
+        if (cleanDev && todayRoutes[cleanDev] && todayRoutes[cleanDev].length > 0) return todayRoutes[cleanDev];
+        if (v.deviceId && KNOWN_NANJIL_DEVICE_MAP[v.deviceId]) {
+          const mappedUuid = KNOWN_NANJIL_DEVICE_MAP[v.deviceId].id;
+          if (todayRoutes[mappedUuid] && todayRoutes[mappedUuid].length > 0) return todayRoutes[mappedUuid];
+        }
+        return undefined;
+      };
+
+      // 1. Iterate through ALL fleet vehicles (including offline vehicles without live coordinates)
+      vehicles.forEach((v) => {
+        const isSelected = v.id === selectedId || active?.id === v.id || (v.deviceId && v.deviceId === selectedId);
+        const segments = getSegmentsForVehicle(v);
 
         if (!segments || segments.length === 0) return;
 
-        renderedKeys.add(v.id);
-        if (v.deviceId) renderedKeys.add(v.deviceId);
+        renderedVehicleKeys.add(v.id);
+        if (v.deviceId) {
+          renderedVehicleKeys.add(v.deviceId);
+          renderedVehicleKeys.add(v.deviceId.replace(/^device_/, ""));
+        }
 
         segments.forEach((seg, sIdx) => {
           if (seg && seg.length >= 2) {
@@ -127,32 +171,33 @@ export function GoogleVehicleMap({
               list.push({
                 key: `today-route-${v.id}-${sIdx}`,
                 path: cleanSeg,
-                isSelected,
+                isSelected: Boolean(isSelected),
               });
             }
           }
         });
       });
 
-      // Also render any routes for vehicles in todayRoutes not explicitly in mappedVehicles (e.g. offline vehicles)
-      if (!selectedId && mappedVehicles.length === vehicles.length) {
-        Object.entries(todayRoutes).forEach(([key, segments]) => {
-          if (renderedKeys.has(key)) return;
-          renderedKeys.add(key);
-          segments.forEach((seg, sIdx) => {
-            if (seg && seg.length >= 2) {
-              const cleanSeg = seg.filter((p) => isFleetOperatingCoordinate(p.lat, p.lng));
-              if (cleanSeg.length >= 2) {
-                list.push({
-                  key: `today-route-extra-${key}-${sIdx}`,
-                  path: cleanSeg,
-                  isSelected: false,
-                });
-              }
+      // 2. Also render any orphaned routes in todayRoutes that weren't matched in the vehicles array
+      Object.entries(todayRoutes).forEach(([key, segments]) => {
+        if (renderedVehicleKeys.has(key)) return;
+        renderedVehicleKeys.add(key);
+
+        const isSelected = key === selectedId || (active && (active.id === key || active.deviceId === key));
+
+        segments.forEach((seg, sIdx) => {
+          if (seg && seg.length >= 2) {
+            const cleanSeg = seg.filter((p) => isFleetOperatingCoordinate(p.lat, p.lng));
+            if (cleanSeg.length >= 2) {
+              list.push({
+                key: `today-route-unmatched-${key}-${sIdx}`,
+                path: cleanSeg,
+                isSelected: Boolean(isSelected),
+              });
             }
-          });
+          }
         });
-      }
+      });
     } else if (routeHistory && routeHistory.length >= 2) {
       // 2. Fallback to routeHistory for single-vehicle profiles / backward compatibility
       const cleanHistory = routeHistory.filter((p) => isFleetOperatingCoordinate(p.lat, p.lng));
@@ -166,7 +211,7 @@ export function GoogleVehicleMap({
     }
 
     return list;
-  }, [todayRoutes, mappedVehicles, vehicles.length, selectedId, active, routeHistory]);
+  }, [todayRoutes, vehicles, selectedId, active, routeHistory]);
 
   return (
     <div className="relative rounded-lg overflow-hidden border border-border" style={{ height }}>
@@ -443,11 +488,22 @@ export function GoogleVehicleMap({
           </div>
         ))}
         {active && (
-          <div className="pl-2 border-l border-border text-primary font-semibold flex items-center gap-1">
-            <Navigation className="h-3 w-3 animate-pulse" />
-            <span>
-              Tracking: <strong className="font-mono">{getVehicleRegistrationNumber(active)}</strong>
-            </span>
+          <div className="pl-2 border-l border-border text-primary font-semibold flex items-center gap-2">
+            <div className="flex items-center gap-1">
+              <Navigation className="h-3 w-3 animate-pulse" />
+              <span>
+                Tracking: <strong className="font-mono">{getVehicleRegistrationNumber(active)}</strong>
+              </span>
+            </div>
+            {activeHasRoute ? (
+              <span className="text-[10px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
+                Route Active
+              </span>
+            ) : (
+              <span className="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded border border-border">
+                Route Unavailable (No GPS track today)
+              </span>
+            )}
           </div>
         )}
       </div>
