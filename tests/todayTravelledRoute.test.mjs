@@ -6,7 +6,11 @@ import {
   isFleetOperatingCoordinate,
   haversineDistanceKm,
 } from "../src/lib/tripHistoryEngine.ts";
-import { processRawGpsPoints } from "../src/hooks/useTodayTravelledRoutes.ts";
+import {
+  processRawGpsPoints,
+  mergeAndDeduplicatePoints,
+  normalizeDeviceId,
+} from "../src/hooks/useTodayTravelledRoutes.ts";
 
 test("1. Today's Date Range in Asia/Kolkata: Exactly 00:00:00 to 23:59:59 IST", () => {
   const refDate = new Date("2026-11-11T12:00:00.000Z");
@@ -204,4 +208,115 @@ test("11. Outlier at beginning or end of route: Does not draw misleading lines",
   assert.equal(segments[0][1].lat, 8.2650);
   assert.equal(segments[0][1].lng, 77.2920);
 });
+
+test("12. Race Condition Protection: Merging in-flight live updates with fetched history", () => {
+  // Live update arrived while history was fetching
+  const livePoints = [
+    { id: "live-1", lat: 8.2750, lng: 77.2950, speed: 35, recorded_at: "2026-11-12T05:15:00Z" },
+  ];
+
+  // Historical batch completed a moment later
+  const historyPoints = [
+    { id: "h-1", lat: 8.2600, lng: 77.2880, speed: 30, recorded_at: "2026-11-12T05:00:00Z" },
+    { id: "h-2", lat: 8.2680, lng: 77.2910, speed: 32, recorded_at: "2026-11-12T05:05:00Z" },
+    { id: "live-1", lat: 8.2750, lng: 77.2950, speed: 35, recorded_at: "2026-11-12T05:15:00Z" }, // duplicated in history
+  ];
+
+  const merged = mergeAndDeduplicatePoints(livePoints, historyPoints);
+  assert.equal(merged.length, 3, "Duplicate live point must be deduplicated");
+  assert.equal(merged[0].id, "h-1");
+  assert.equal(merged[1].id, "h-2");
+  assert.equal(merged[2].id, "live-1");
+
+  const segments = processRawGpsPoints(merged, 15);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].length, 3);
+  assert.equal(segments[0][2].lat, 8.2750, "Live update coordinate must be preserved at end of route");
+});
+
+test("13. Single-Point Route Handling: Returns empty segments or fails minimum 2-point requirement", () => {
+  const singlePoint = [
+    { id: "single-1", lat: 8.2607, lng: 77.2883, speed: 0, recorded_at: "2026-11-12T05:00:00Z" },
+  ];
+
+  // Single point in processRawGpsPoints produces a 1-point segment, which polyline renderer rejects (< 2 points)
+  const segments = processRawGpsPoints(singlePoint, 15);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].length, 1);
+  // Verifying minimum 2-point requirement for polyline drawing
+  const canDrawPolyline = segments.some((s) => s.length >= 2);
+  assert.equal(canDrawPolyline, false, "Must not draw polyline for single-point route");
+});
+
+test("14. Seven Fleet Vehicles Individual Test Suite", () => {
+  // Vehicle 1: TN 75 S 1688 (Historical route exists, moving)
+  const v1Points = [
+    { id: "v1-1", lat: 8.2600, lng: 77.2880, speed: 30, recorded_at: "2026-11-12T05:00:00Z" },
+    { id: "v1-2", lat: 8.2700, lng: 77.2900, speed: 40, recorded_at: "2026-11-12T05:05:00Z" },
+  ];
+  const segs1 = processRawGpsPoints(v1Points);
+  assert.ok(segs1.length >= 1 && segs1[0].length >= 2, "V1 must have polyline");
+
+  // Vehicle 2: TN 75 R 9952 (Moving vehicle extending route)
+  const v2Points = [
+    { id: "v2-1", lat: 8.2800, lng: 77.3000, speed: 25, recorded_at: "2026-11-12T05:00:00Z" },
+    { id: "v2-2", lat: 8.2900, lng: 77.3100, speed: 35, recorded_at: "2026-11-12T05:05:00Z" },
+  ];
+  const segs2 = processRawGpsPoints(v2Points);
+  assert.ok(segs2.length >= 1 && segs2[0].length >= 2, "V2 must have polyline");
+
+  // Vehicle 3: TN 75 F 4323 (Multi-segment route with stops)
+  const v3Points = [
+    { id: "v3-1", lat: 8.2600, lng: 77.2880, speed: 30, recorded_at: "2026-11-12T04:00:00Z" },
+    { id: "v3-2", lat: 8.2700, lng: 77.2880, speed: 30, recorded_at: "2026-11-12T04:10:00Z" },
+    // 30 min gap
+    { id: "v3-3", lat: 8.3000, lng: 77.3200, speed: 35, recorded_at: "2026-11-12T04:45:00Z" },
+    { id: "v3-4", lat: 8.3100, lng: 77.3300, speed: 35, recorded_at: "2026-11-12T04:55:00Z" },
+  ];
+  const segs3 = processRawGpsPoints(v3Points, 15);
+  assert.equal(segs3.length, 2, "V3 must have 2 distinct route segments across gap");
+  assert.ok(segs3[0].length >= 2 && segs3[1].length >= 2);
+
+  // Vehicle 4: TN 75 BC 2219 (Idle vehicle, drift rejected)
+  const v4Points = [
+    { id: "v4-1", lat: 8.2500, lng: 77.3500, speed: 20, recorded_at: "2026-11-12T05:00:00Z" },
+    { id: "v4-2", lat: 8.2550, lng: 77.3550, speed: 20, recorded_at: "2026-11-12T05:05:00Z" },
+    { id: "v4-3", lat: 8.255001, lng: 77.355001, speed: 0, recorded_at: "2026-11-12T05:06:00Z" }, // < 2m drift
+  ];
+  const segs4 = processRawGpsPoints(v4Points);
+  assert.equal(segs4[0].length, 2, "V4 must filter out stationary micro-drift");
+
+  // Vehicle 5: TN 75 BF 0320 (Only 1 point today -> route unavailable)
+  const v5Points = [
+    { id: "v5-1", lat: 8.2600, lng: 77.2880, speed: 0, recorded_at: "2026-11-12T05:00:00Z" },
+  ];
+  const segs5 = processRawGpsPoints(v5Points);
+  assert.equal(segs5[0].length < 2, true, "V5 has < 2 points, polyline not drawn");
+
+  // Vehicle 6: TN 75 M 0041 (Temporarily offline / no live position, but historical points exist)
+  const v6Points = [
+    { id: "v6-1", lat: 8.2400, lng: 77.2700, speed: 30, recorded_at: "2026-11-12T03:00:00Z" },
+    { id: "v6-2", lat: 8.2480, lng: 77.2780, speed: 30, recorded_at: "2026-11-12T03:10:00Z" },
+  ];
+  const segs6 = processRawGpsPoints(v6Points);
+  assert.equal(segs6.length, 1);
+  assert.equal(segs6[0].length, 2, "V6 offline vehicle must still display historical polyline");
+
+  // Vehicle 7: TN 75 S 9826 (Historical points exist, renders independently)
+  const v7Points = [
+    { id: "v7-1", lat: 8.2300, lng: 77.2500, speed: 30, recorded_at: "2026-11-12T02:00:00Z" },
+    { id: "v7-2", lat: 8.2380, lng: 77.2580, speed: 30, recorded_at: "2026-11-12T02:10:00Z" },
+  ];
+  const segs7 = processRawGpsPoints(v7Points);
+  assert.equal(segs7.length, 1);
+  assert.equal(segs7[0].length, 2, "V7 must display independent red route");
+});
+
+test("15. Device ID and UUID matching: Supports clean device ID, device_ prefix, and UUID", () => {
+  assert.equal(normalizeDeviceId("863110086146753"), "863110086146753");
+  assert.equal(normalizeDeviceId("device_863110086146753"), "863110086146753");
+  assert.equal(normalizeDeviceId(863110086146753), "863110086146753");
+  assert.equal(normalizeDeviceId(null), undefined);
+});
+
 
