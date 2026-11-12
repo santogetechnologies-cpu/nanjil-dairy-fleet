@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { Plus, X, Loader2, Trash2, AlertTriangle, Pencil, Radio } from "lucide-react";
 import { useVehicleList } from "@/hooks/useVehicleTracking";
+import { notifyManualOdometerUpdate } from "@/lib/odometerTrackingEngine";
 
 function VehiclesPage() {
   const { user } = useAuth();
@@ -366,6 +367,10 @@ function VehiclesPage() {
         }
         throw error;
       }
+
+      // Authoritative manual odometer update: instantly sync local odometer cache and notify Live Tracking
+      const newOdoKm = Number(editForm.odometer) || 0;
+      notifyManualOdometerUpdate(editTarget.id, newOdoKm, devId);
 
       setEditTarget(null);
       load();

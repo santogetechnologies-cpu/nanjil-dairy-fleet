@@ -87,7 +87,7 @@ export interface RawTelemetryInput {
   source?: string | null;
 }
 
-const LOCAL_STORAGE_KEY = "nanjil_fleet_vehicle_odometers";
+export const LOCAL_STORAGE_KEY = "nanjil_fleet_vehicle_odometers";
 
 /**
  * Returns the current date in Asia/Kolkata formatted as YYYY-MM-DD.
@@ -229,8 +229,97 @@ export function initVehicleOdometerState(
 }
 
 /**
+ * Synchronizes an odometer state with a newly edited manual baseline from Vehicle Directory or Supabase.
+ * Sets totalOdometerKm and baselineOdometerKm to newManualKm while preserving GPS tracking context
+ * (previous coordinates, timestamps, today's distance, and trip distance).
+ */
+export function syncManualOdometerBaseline(
+  state: VehicleOdometerState | undefined,
+  newManualKm: number,
+  vehicleId?: string,
+  deviceId?: string,
+  updatedAt = new Date().toISOString(),
+): VehicleOdometerState {
+  const cleanKm = Math.round(Math.max(0, Number(newManualKm || 0)) * 100) / 100;
+
+  if (!state) {
+    return {
+      vehicleId: vehicleId || "",
+      deviceId,
+      totalOdometerKm: cleanKm,
+      todayDistanceKm: 0,
+      currentTripDistanceKm: 0,
+      currentSpeedKmh: 0,
+      readingSource: "gps_estimated",
+      todayDate: getTodayIstDateString(),
+      isMoving: false,
+      baselineOdometerKm: cleanKm,
+      lastUpdated: updatedAt,
+      manualBaselineSetAt: updatedAt,
+    };
+  }
+
+  return {
+    ...state,
+    baselineOdometerKm: cleanKm,
+    totalOdometerKm: cleanKm,
+    readingSource: "gps_estimated",
+    lastUpdated: updatedAt,
+    manualBaselineSetAt: updatedAt,
+  };
+}
+
+/**
+ * Notifies the local odometer cache, current window, and other tabs that an administrator
+ * manually updated a vehicle's odometer in Vehicle Directory.
+ */
+export function notifyManualOdometerUpdate(
+  vehicleId: string,
+  newOdometerKm: number,
+  deviceId?: string,
+): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    const cleanOdo = Math.round(Math.max(0, Number(newOdometerKm || 0)) * 100) / 100;
+    const localMap = loadLocalOdometerStates();
+    const existing = localMap[vehicleId];
+    localMap[vehicleId] = syncManualOdometerBaseline(existing, cleanOdo, vehicleId, deviceId);
+    if (deviceId) {
+      localMap[deviceId] = localMap[vehicleId];
+    }
+    saveLocalOdometerStates(localMap);
+
+    // Also update cached supabase vehicles in localStorage if present
+    try {
+      const cachedVehiclesRaw = window.localStorage.getItem("nanjil_cached_supabase_vehicles");
+      if (cachedVehiclesRaw) {
+        const cachedVehicles = JSON.parse(cachedVehiclesRaw);
+        if (Array.isArray(cachedVehicles)) {
+          const match = cachedVehicles.find((v: any) => v.id === vehicleId || v.device_id === deviceId);
+          if (match) {
+            match.odometer = cleanOdo;
+            window.localStorage.setItem("nanjil_cached_supabase_vehicles", JSON.stringify(cachedVehicles));
+          }
+        }
+      }
+    } catch {}
+
+    // Dispatch custom event for current window
+    window.dispatchEvent(
+      new CustomEvent("nanjil_fleet_odometer_manual_update", {
+        detail: { vehicleId, deviceId, odometer: cleanOdo },
+      }),
+    );
+  } catch (err) {
+    console.warn("[OdometerEngine] Failed to notify manual odometer update:", err);
+  }
+}
+
+/**
  * Safely reconciles cached odometer state against database baseline and restores
  * GPS Estimated mode if hardware classification was spuriously applied from baseline.
+ * Accurately synchronizes manually edited odometer values from Vehicle Directory.
  */
 export function reconcileOdometerState(
   cachedState: VehicleOdometerState,
@@ -238,7 +327,7 @@ export function reconcileOdometerState(
   currentIstDate = getTodayIstDateString(),
 ): VehicleOdometerState {
   const reconciled = { ...cachedState };
-  const base = Math.max(0, Number(vehicleBaseline || 0));
+  const base = Math.round(Math.max(0, Number(vehicleBaseline || 0)) * 100) / 100;
 
   // 1. Detect states where hardware classification came only from the vehicle baseline
   if (
@@ -250,18 +339,33 @@ export function reconcileOdometerState(
     reconciled.readingSource = "gps_estimated";
   }
 
-  // 2. Ensure baseline is at least the database baseline
-  if (base > (reconciled.baselineOdometerKm || 0)) {
+  // 2. Detect if database baseline was manually changed in Vehicle Directory:
+  // If base differs from cached baselineOdometerKm and this difference is not just integer rounding
+  // from natural GPS persistence (i.e. |totalOdometerKm - base| > 1.05 km),
+  // then an administrator manually edited the odometer!
+  const isNaturalGpsPersistence =
+    Math.abs(reconciled.totalOdometerKm - base) <= 1.05 ||
+    (reconciled.totalOdometerKm >= base && Math.abs(reconciled.baselineOdometerKm - base) <= 1.05);
+
+  if (base > 0 && Math.abs(base - (reconciled.baselineOdometerKm || 0)) >= 0.01 && !isNaturalGpsPersistence) {
+    // Administrator manual baseline edit: update baseline and total odometer
+    reconciled.baselineOdometerKm = base;
+    reconciled.totalOdometerKm = base;
+    reconciled.readingSource = "gps_estimated";
+    reconciled.manualBaselineSetAt = new Date().toISOString();
+  }
+
+  // 3. Ensure baseline is at least the database baseline (monotonic safety check)
+  if (base > (reconciled.baselineOdometerKm || 0) && !isNaturalGpsPersistence) {
     reconciled.baselineOdometerKm = base;
   }
 
-  // 3. Ensure totalOdometerKm is at least baselineOdometerKm + todayDistanceKm
-  const minExpectedTotal = Math.round((reconciled.baselineOdometerKm + (reconciled.todayDistanceKm || 0)) * 100) / 100;
-  if (reconciled.totalOdometerKm < minExpectedTotal) {
-    reconciled.totalOdometerKm = minExpectedTotal;
+  // 4. Ensure totalOdometerKm never falls below baselineOdometerKm
+  if (reconciled.totalOdometerKm < (reconciled.baselineOdometerKm || 0)) {
+    reconciled.totalOdometerKm = reconciled.baselineOdometerKm;
   }
 
-  // 4. Midnight check (Asia/Kolkata)
+  // 5. Midnight check (Asia/Kolkata)
   if (reconciled.todayDate !== currentIstDate) {
     reconciled.todayDate = currentIstDate;
     reconciled.todayDistanceKm = 0;
