@@ -13,6 +13,7 @@ import { Link } from "react-router-dom";
 import { getOverspeedStatus } from "@/lib/overspeed";
 import { isFleetOperatingCoordinate } from "@/lib/tripHistoryEngine";
 import { KNOWN_NANJIL_DEVICE_MAP } from "@/lib/vehicle-stop-detection";
+import { type VehicleOdometerState, loadLocalOdometerStates } from "@/lib/odometerTrackingEngine";
 import {
   NANJIL_DAIRY_DEPOT,
   DEFAULT_MAP_CENTER,
@@ -30,6 +31,8 @@ export interface GoogleVehicleMapProps {
   onSelectVehicle?: (vehicle: Vehicle) => void;
   routeHistory?: Array<{ lat: number; lng: number }>;
   todayRoutes?: Record<string, Array<Array<{ lat: number; lng: number }>>>;
+  odometerStates?: Record<string, VehicleOdometerState>;
+  getVehicleOdometer?: (idOrDeviceId?: string) => VehicleOdometerState;
 }
 
 export function GoogleVehicleMap({
@@ -39,12 +42,43 @@ export function GoogleVehicleMap({
   onSelectVehicle,
   routeHistory,
   todayRoutes,
+  odometerStates,
+  getVehicleOdometer,
 }: GoogleVehicleMapProps) {
   const map = useMap();
 
   const [active, setActive] = useState<Vehicle | null>(
     selectedId ? (vehicles.find((v) => v.id === selectedId) ?? null) : null,
   );
+
+  // Always resolve the latest live vehicle object from vehicles stream to keep popup in sync with sidebar
+  const currentActive = useMemo(() => {
+    if (!active) return null;
+    return vehicles.find((v) => v.id === active.id || (v.deviceId && v.deviceId === active.deviceId)) ?? active;
+  }, [active, vehicles]);
+
+  // Synchronize live odometer reading with sidebar and top header
+  const activeOdo = useMemo(() => {
+    if (!currentActive) return null;
+    if (getVehicleOdometer) {
+      return getVehicleOdometer(currentActive.id || currentActive.deviceId);
+    }
+    if (odometerStates) {
+      return (
+        odometerStates[currentActive.id] ||
+        (currentActive.deviceId && odometerStates[currentActive.deviceId]) ||
+        (currentActive.deviceId && odometerStates[currentActive.deviceId.replace(/^device_/, "")]) ||
+        null
+      );
+    }
+    const local = loadLocalOdometerStates();
+    return (
+      local[currentActive.id] ||
+      (currentActive.deviceId && local[currentActive.deviceId]) ||
+      (currentActive.deviceId && local[currentActive.deviceId.replace(/^device_/, "")]) ||
+      null
+    );
+  }, [currentActive, getVehicleOdometer, odometerStates]);
 
   if (!GOOGLE_MAPS_API_KEY) {
     return (
@@ -392,14 +426,14 @@ export function GoogleVehicleMap({
         })}
 
         {/* Active Vehicle InfoWindow */}
-        {active &&
-          typeof active.lat === "number" &&
-          typeof active.lng === "number" &&
+        {currentActive &&
+          typeof currentActive.lat === "number" &&
+          typeof currentActive.lng === "number" &&
           (() => {
-            const activeOverspeed = getOverspeedStatus(active.speed);
+            const activeOverspeed = getOverspeedStatus(currentActive.speed);
             return (
               <InfoWindow
-                position={{ lat: active.lat, lng: active.lng }}
+                position={{ lat: currentActive.lat, lng: currentActive.lng }}
                 onCloseClick={() => setActive(null)}
                 pixelOffset={[0, -28]}
               >
@@ -415,13 +449,13 @@ export function GoogleVehicleMap({
                         <span className="text-[8px] font-sans font-bold bg-black text-amber-400 px-1 py-0.5 rounded-xs leading-none">
                           IND
                         </span>
-                        <span>{getVehicleRegistrationNumber(active)}</span>
+                        <span>{getVehicleRegistrationNumber(currentActive)}</span>
                       </div>
                       <div className="text-[11px] text-slate-500 mt-1">
-                        {active.type} · {active.model}
+                        {currentActive.type} · {currentActive.model}
                       </div>
                     </div>
-                    <Badge status={active.status}>{active.status}</Badge>
+                    <Badge status={currentActive.status}>{currentActive.status}</Badge>
                   </div>
 
                   {/* Overspeed Warning Alert Banner */}
@@ -431,7 +465,7 @@ export function GoogleVehicleMap({
                       <div className="flex-1 min-w-0">
                         <div className="leading-tight text-[11px]">⚠ Overspeed Warning</div>
                         <div className="text-[10px] font-normal text-orange-600/90">
-                          {active.speed} km/h (Limit: 60 km/h)
+                          {currentActive.speed} km/h (Limit: 60 km/h)
                         </div>
                       </div>
                     </div>
@@ -443,7 +477,7 @@ export function GoogleVehicleMap({
                       <div className="flex-1 min-w-0">
                         <div className="leading-tight text-[11px]">⚠ Critical Overspeed</div>
                         <div className="text-[10px] font-normal text-red-600/90">
-                          {active.speed} km/h (Limit: 100 km/h)
+                          {currentActive.speed} km/h (Limit: 100 km/h)
                         </div>
                       </div>
                     </div>
@@ -454,7 +488,7 @@ export function GoogleVehicleMap({
                     <div>
                       <div className="text-[10px] text-slate-500">Driver</div>
                       <div className="font-semibold text-slate-800 truncate">
-                        {active.driver || "Unassigned"}
+                        {currentActive.driver || "Unassigned"}
                       </div>
                     </div>
                     <div>
@@ -468,42 +502,78 @@ export function GoogleVehicleMap({
                               : "text-slate-800"
                         }`}
                       >
-                        {active.speed} km/h
+                        {currentActive.speed} km/h
                       </div>
                     </div>
                     <div>
                       <div className="text-[10px] text-slate-500">Avg Speed</div>
                       <div className="font-semibold text-slate-800">
-                        {active.averageSpeed != null && active.averageSpeed > 0 ? `${active.averageSpeed.toFixed(1)} km/h` : "—"}
+                        {currentActive.averageSpeed != null && currentActive.averageSpeed > 0 ? `${currentActive.averageSpeed.toFixed(1)} km/h` : "—"}
                       </div>
                     </div>
                     <div>
                       <div className="text-[10px] text-slate-500">Fuel Level</div>
-                      <div className="font-semibold text-slate-800">{active.fuel}%</div>
+                      <div className="font-semibold text-slate-800">{currentActive.fuel}%</div>
                     </div>
                     <div>
-                      <div className="text-[10px] text-slate-500">Odometer</div>
-                      <div className="font-semibold text-slate-800">
-                        {active.odometer ? `${active.odometer.toLocaleString()} km` : "—"}
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] text-slate-500">Odometer</span>
+                        {activeOdo?.readingSource && (
+                          <span
+                            className={`text-[8px] font-semibold px-1 py-0.2 rounded border ${
+                              activeOdo.readingSource === "hardware"
+                                ? "bg-blue-50 text-blue-600 border-blue-200"
+                                : "bg-emerald-50 text-emerald-600 border-emerald-200"
+                            }`}
+                          >
+                            {activeOdo.readingSource === "hardware" ? "HW" : "GPS Est."}
+                          </span>
+                        )}
+                      </div>
+                      <div className="font-semibold text-slate-800 font-mono">
+                        {activeOdo != null
+                          ? `${activeOdo.totalOdometerKm.toLocaleString("en-IN", {
+                              minimumFractionDigits: 1,
+                              maximumFractionDigits: 1,
+                            })} km`
+                          : currentActive.odometer
+                            ? `${currentActive.odometer.toLocaleString()} km`
+                            : "—"}
                       </div>
                     </div>
                     <div>
                       <div className="text-[10px] text-slate-500">Sector</div>
-                      <div className="font-medium text-slate-800 truncate" title={active.location || "Live Location"}>
-                        {active.location || "Live Location"}
+                      <div className="font-medium text-slate-800 truncate" title={currentActive.location || "Live Location"}>
+                        {currentActive.location || "Live Location"}
                       </div>
                     </div>
+                    {activeOdo != null && (
+                      <div className="col-span-2 grid grid-cols-2 gap-1.5 pt-1.5 border-t border-slate-200 text-[10px]">
+                        <div>
+                          <div className="text-[9px] text-slate-500">Today Distance</div>
+                          <div className="font-mono font-semibold text-slate-800">
+                            {activeOdo.todayDistanceKm.toFixed(1)} km
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] text-slate-500">Current Trip</div>
+                          <div className="font-mono font-semibold text-slate-800">
+                            {activeOdo.currentTripDistanceKm.toFixed(1)} km
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     <div className="col-span-2 text-[10px] text-slate-500 font-mono truncate border-t border-slate-200 pt-1 flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
-                      <span>Device ID: {active.deviceId || "—"}</span>
+                      <span>Device ID: {currentActive.deviceId || "—"}</span>
                     </div>
                   </div>
 
                   {/* Action Link */}
                   <div className="pt-1">
-                    {active.id && !active.id.startsWith("unassigned-") ? (
+                    {currentActive.id && !currentActive.id.startsWith("unassigned-") ? (
                       <Link
-                        to={`/vehicles/${active.id}`}
+                        to={`/vehicles/${currentActive.id}`}
                         className="block text-center text-xs font-semibold bg-indigo-600 text-white rounded py-1 hover:bg-indigo-700 transition-colors shadow-xs"
                       >
                         Inspect Telemetry →
@@ -528,14 +598,19 @@ export function GoogleVehicleMap({
             <span className="font-medium text-foreground">{s}</span>
           </div>
         ))}
-        {active && (
+        {currentActive && (
           <div className="pl-2 border-l border-border text-primary font-semibold flex items-center gap-2">
             <div className="flex items-center gap-1">
               <Navigation className="h-3 w-3 animate-pulse" />
               <span>
-                Tracking: <strong className="font-mono">{getVehicleRegistrationNumber(active)}</strong>
+                Tracking: <strong className="font-mono">{getVehicleRegistrationNumber(currentActive)}</strong>
               </span>
             </div>
+            {activeOdo && (
+              <span className="text-[11px] font-mono text-slate-600 dark:text-slate-300">
+                · {activeOdo.totalOdometerKm.toFixed(1)} km (Today: {activeOdo.todayDistanceKm.toFixed(1)} km)
+              </span>
+            )}
             {activeHasRoute ? (
               <span className="text-[10px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-1.5 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
                 Route Active
