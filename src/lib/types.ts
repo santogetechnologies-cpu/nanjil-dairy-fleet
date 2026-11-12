@@ -28,6 +28,7 @@ export interface Vehicle {
   lastUpdate: string;
   deviceId?: string;
   averageSpeed?: number | null;
+  hardwareOdometer?: number | null;
 }
 
 export interface Driver {

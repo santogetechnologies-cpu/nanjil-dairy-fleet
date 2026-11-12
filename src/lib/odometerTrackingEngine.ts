@@ -68,6 +68,8 @@ export interface VehicleOdometerState {
   lastTelemetryId?: string;
   lastTelemetryTime?: string;
   baselineOdometerKm: number;
+  gpsEstimatedDistanceKm?: number;
+  lastVerifiedHardwareOdometerKm?: number;
   stationaryStartTime?: string;
   tripStartTime?: string;
 }
@@ -78,7 +80,9 @@ export interface RawTelemetryInput {
   lat?: number | null;
   lng?: number | null;
   speed?: number | null;
-  odometer?: number | null;
+  odometer?: number | null; // Baseline/reported odometer
+  hardwareOdometer?: number | null; // Genuine verified OBD-II/CAN reading from device packet
+  isVerifiedHardware?: boolean;
   recordedAt?: string | null;
   source?: string | null;
 }
@@ -193,18 +197,18 @@ export function initVehicleOdometerState(
   const baseline = Math.max(0, Number(vehicle.odometer || 0));
   const todayDist = Math.max(0, initialTodayDistance);
   const tripDist = Math.max(0, initialTripDistance);
-  const total = baseline + todayDist;
+  const total = Math.round((baseline + todayDist) * 100) / 100;
   const todayDate = initialTodayDate || getTodayIstDateString();
 
   return {
     vehicleId: vehicle.id,
     vehicleNumber: vehicle.number,
     deviceId: vehicle.deviceId || vehicle.device_id,
-    totalOdometerKm: Math.round(total * 100) / 100,
+    totalOdometerKm: total,
     todayDistanceKm: Math.round(todayDist * 100) / 100,
     currentTripDistanceKm: Math.round(tripDist * 100) / 100,
     currentSpeedKmh: 0,
-    readingSource: "gps_estimated",
+    readingSource: "gps_estimated", // Always default to GPS Estimated; never assume static baseline is hardware!
     isMoving: false,
     lastUpdated: new Date().toISOString(),
     todayDate,
@@ -217,9 +221,57 @@ export function initVehicleOdometerState(
     lastTelemetryId: undefined,
     lastTelemetryTime: undefined,
     baselineOdometerKm: baseline,
+    gpsEstimatedDistanceKm: Math.round(todayDist * 100) / 100,
+    lastVerifiedHardwareOdometerKm: undefined,
     stationaryStartTime: undefined,
     tripStartTime: undefined,
   };
+}
+
+/**
+ * Safely reconciles cached odometer state against database baseline and restores
+ * GPS Estimated mode if hardware classification was spuriously applied from baseline.
+ */
+export function reconcileOdometerState(
+  cachedState: VehicleOdometerState,
+  vehicleBaseline: number,
+  currentIstDate = getTodayIstDateString(),
+): VehicleOdometerState {
+  const reconciled = { ...cachedState };
+  const base = Math.max(0, Number(vehicleBaseline || 0));
+
+  // 1. Detect states where hardware classification came only from the vehicle baseline
+  if (
+    reconciled.readingSource === "hardware" &&
+    (!reconciled.lastVerifiedHardwareOdometerKm ||
+      reconciled.totalOdometerKm <= base ||
+      reconciled.totalOdometerKm === reconciled.baselineOdometerKm)
+  ) {
+    reconciled.readingSource = "gps_estimated";
+  }
+
+  // 2. Ensure baseline is at least the database baseline
+  if (base > (reconciled.baselineOdometerKm || 0)) {
+    reconciled.baselineOdometerKm = base;
+  }
+
+  // 3. Ensure totalOdometerKm is at least baselineOdometerKm + todayDistanceKm
+  const minExpectedTotal = Math.round((reconciled.baselineOdometerKm + (reconciled.todayDistanceKm || 0)) * 100) / 100;
+  if (reconciled.totalOdometerKm < minExpectedTotal) {
+    reconciled.totalOdometerKm = minExpectedTotal;
+  }
+
+  // 4. Midnight check (Asia/Kolkata)
+  if (reconciled.todayDate !== currentIstDate) {
+    reconciled.todayDate = currentIstDate;
+    reconciled.todayDistanceKm = 0;
+  }
+
+  reconciled.totalOdometerKm = Math.round(reconciled.totalOdometerKm * 100) / 100;
+  reconciled.todayDistanceKm = Math.round((reconciled.todayDistanceKm || 0) * 100) / 100;
+  reconciled.currentTripDistanceKm = Math.round((reconciled.currentTripDistanceKm || 0) * 100) / 100;
+
+  return reconciled;
 }
 
 /**
@@ -265,18 +317,43 @@ export function processOdometerTelemetry(
     }
   }
 
-  // 3. Priority 1: Hardware Odometer
-  const rawOdo = input.odometer != null ? Number(input.odometer) : null;
-  if (rawOdo != null && !isNaN(rawOdo) && rawOdo > 0) {
-    // Only accept hardware odometer if it doesn't roll backwards from verified baseline
-    if (rawOdo >= next.baselineOdometerKm) {
-      if (rawOdo >= next.totalOdometerKm) {
-        const added = rawOdo - next.totalOdometerKm;
-        next.totalOdometerKm = Math.round(rawOdo * 100) / 100;
+  // 3. Priority 1: Genuine Hardware Odometer Verification
+  let hardwareUpdatedInThisPacket = false;
+  const hasExplicitHw =
+    input.hardwareOdometer != null &&
+    !isNaN(Number(input.hardwareOdometer)) &&
+    Number(input.hardwareOdometer) > 0;
+
+  const isVerifiedHardware =
+    hasExplicitHw ||
+    (input.isVerifiedHardware === true &&
+      input.odometer != null &&
+      !isNaN(Number(input.odometer)) &&
+      Number(input.odometer) > 0);
+
+  const rawHw = isVerifiedHardware
+    ? Number(input.hardwareOdometer ?? input.odometer)
+    : null;
+
+  if (rawHw != null) {
+    // Only accept genuine hardware reading if it doesn't roll backwards from verified baseline
+    if (rawHw >= next.baselineOdometerKm) {
+      if (rawHw >= next.totalOdometerKm) {
+        const added = rawHw - next.totalOdometerKm;
+        next.totalOdometerKm = Math.round(rawHw * 100) / 100;
         next.readingSource = "hardware";
+        next.lastVerifiedHardwareOdometerKm = next.totalOdometerKm;
         next.todayDistanceKm = Math.round((next.todayDistanceKm + added) * 100) / 100;
         next.currentTripDistanceKm = Math.round((next.currentTripDistanceKm + added) * 100) / 100;
+        hardwareUpdatedInThisPacket = true;
       }
+    }
+  } else {
+    // Hardware odometer not provided in this packet.
+    // If vehicle was previously in hardware mode, transition seamlessly to GPS Estimated fallback
+    // starting from the last verified reading without resetting the cumulative total!
+    if (next.readingSource === "hardware") {
+      next.readingSource = "gps_estimated";
     }
   }
 
@@ -364,12 +441,14 @@ export function processOdometerTelemetry(
 
         if (deltaKm > 0) {
           distanceAddedKm = deltaKm;
-          // If reading source is not hardware, increment total odometer with GPS distance
-          if (next.readingSource !== "hardware") {
+          // Add valid GPS distance to cumulative odometer if hardware didn't update in this packet
+          // (prevents double-counting when hardware telemetry is active)
+          if (!hardwareUpdatedInThisPacket) {
             next.totalOdometerKm = Math.round((next.totalOdometerKm + deltaKm) * 100) / 100;
+            next.todayDistanceKm = Math.round((next.todayDistanceKm + deltaKm) * 100) / 100;
+            next.currentTripDistanceKm = Math.round((next.currentTripDistanceKm + deltaKm) * 100) / 100;
+            next.gpsEstimatedDistanceKm = Math.round(((next.gpsEstimatedDistanceKm || 0) + deltaKm) * 100) / 100;
           }
-          next.todayDistanceKm = Math.round((next.todayDistanceKm + deltaKm) * 100) / 100;
-          next.currentTripDistanceKm = Math.round((next.currentTripDistanceKm + deltaKm) * 100) / 100;
         }
       }
 
@@ -435,7 +514,7 @@ export function saveLocalOdometerStates(states: Record<string, VehicleOdometerSt
 }
 
 /**
- * Persists an odometer state to Supabase vehicles table.
+ * Persists an odometer state to Supabase vehicles table and vehicle_odometers table with 2 decimal precision.
  */
 export async function persistVehicleOdometer(
   supabaseClient: any,
@@ -444,16 +523,54 @@ export async function persistVehicleOdometer(
   if (!supabaseClient || !state.vehicleId) return;
 
   try {
-    // Keep canonical vehicles.odometer in sync if higher than baseline
-    const roundedOdo = Math.round(state.totalOdometerKm);
-    if (roundedOdo > state.baselineOdometerKm) {
-      await supabaseClient
+    const decimalOdo = Math.round(state.totalOdometerKm * 100) / 100;
+    if (decimalOdo > state.baselineOdometerKm) {
+      // 1. Try persisting exact 2-decimal odometer to vehicles table
+      const { error: vErr } = await supabaseClient
         .from("vehicles")
         .update({
-          odometer: roundedOdo,
+          odometer: decimalOdo,
           updated_at: new Date().toISOString(),
         })
         .eq("id", state.vehicleId);
+
+      // If database column is integer (error code 22P02), fallback to rounded integer
+      if (vErr && (vErr.code === "22P02" || String(vErr.message).includes("integer"))) {
+        await supabaseClient
+          .from("vehicles")
+          .update({
+            odometer: Math.round(decimalOdo),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", state.vehicleId);
+      }
+    }
+
+    // 2. Also upsert to vehicle_odometers table (with full decimal precision)
+    try {
+      await supabaseClient
+        .from("vehicle_odometers")
+        .upsert(
+          {
+            vehicle_id: state.vehicleId,
+            device_id: state.deviceId,
+            total_odometer_km: decimalOdo,
+            today_distance_km: Math.round(state.todayDistanceKm * 100) / 100,
+            current_trip_distance_km: Math.round(state.currentTripDistanceKm * 100) / 100,
+            current_speed_kmh: Math.round(state.currentSpeedKmh * 100) / 100,
+            reading_source: state.readingSource,
+            today_date: state.todayDate,
+            is_moving: state.isMoving,
+            previous_latitude: state.previousLatitude ?? state.lastValidLat,
+            previous_longitude: state.previousLongitude ?? state.lastValidLng,
+            previous_gps_timestamp: state.previousGpsTimestamp ?? state.lastTelemetryTime,
+            last_processed_telemetry_id: state.lastProcessedTelemetryId ?? state.lastTelemetryId,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "vehicle_id" },
+        );
+    } catch {
+      // Optional if table not yet migrated on remote instance
     }
   } catch (err) {
     console.warn(`[OdometerEngine] Error syncing odometer for ${state.vehicleId}:`, err);

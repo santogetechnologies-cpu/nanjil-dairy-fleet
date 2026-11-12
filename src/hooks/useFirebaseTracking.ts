@@ -571,6 +571,10 @@ export function usePureFirebaseTracking() {
         lastService: matchedSupabase?.last_service || "",
         nextServiceKm: matchedSupabase?.next_service_km || 0,
         odometer: matchedSupabase?.odometer || 0,
+        hardwareOdometer:
+          data.odometer != null && !isNaN(Number(data.odometer)) && Number(data.odometer) > 0
+            ? Number(data.odometer)
+            : undefined,
         engineHours: matchedSupabase?.engine_hours ? Number(matchedSupabase.engine_hours) : 0,
         lastUpdate: parsed.lastUpdate || new Date().toISOString(),
         deviceId: cleanDevId || rawDevId,
