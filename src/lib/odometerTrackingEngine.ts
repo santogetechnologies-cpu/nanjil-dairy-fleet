@@ -513,15 +513,10 @@ export function saveLocalOdometerStates(states: Record<string, VehicleOdometerSt
   }
 }
 
-// Track availability of vehicle_odometers table in remote database
-let isVehicleOdometersTableAvailable: boolean | null = null;
-
-export function resetVehicleOdometersAvailabilityCache(): void {
-  isVehicleOdometersTableAvailable = null;
-}
-
 /**
- * Persists an odometer state to Supabase vehicles table and vehicle_odometers table with 2 decimal precision.
+ * Persists an odometer state to the Supabase vehicles table.
+ * Persists rounded integer to vehicles.odometer to prevent PostgreSQL 22P02 / HTTP 400 Bad Request errors.
+ * Never calls non-existent tables like vehicle_odometers to avoid HTTP 404 console errors.
  */
 export async function persistVehicleOdometer(
   supabaseClient: any,
@@ -533,9 +528,9 @@ export async function persistVehicleOdometer(
     const decimalOdo = Math.round(state.totalOdometerKm * 100) / 100;
     const integerOdo = Math.round(decimalOdo);
 
-    // 1. Persist to vehicles table. We use integerOdo because the default schema defines
+    // Persist to vehicles table. We use integerOdo because the default schema defines
     // vehicles.odometer as INTEGER. Writing a decimal causes PostgreSQL 22P02 error and HTTP 400 Bad Request.
-    // An integer update succeeds cleanly on both INTEGER and NUMERIC column types.
+    // An integer update succeeds cleanly on both INTEGER and NUMERIC column types without errors.
     if (integerOdo >= state.baselineOdometerKm) {
       await supabaseClient
         .from("vehicles")
@@ -544,50 +539,6 @@ export async function persistVehicleOdometer(
           updated_at: new Date().toISOString(),
         })
         .eq("id", state.vehicleId);
-    }
-
-    // 2. Also upsert to vehicle_odometers table (with full decimal precision) if table is available
-    if (isVehicleOdometersTableAvailable !== false) {
-      try {
-        const { error: voErr } = await supabaseClient
-          .from("vehicle_odometers")
-          .upsert(
-            {
-              vehicle_id: state.vehicleId,
-              device_id: state.deviceId,
-              total_odometer_km: decimalOdo,
-              today_distance_km: Math.round(state.todayDistanceKm * 100) / 100,
-              current_trip_distance_km: Math.round(state.currentTripDistanceKm * 100) / 100,
-              current_speed_kmh: Math.round(state.currentSpeedKmh * 100) / 100,
-              reading_source: state.readingSource,
-              today_date: state.todayDate,
-              is_moving: state.isMoving,
-              previous_latitude: state.previousLatitude ?? state.lastValidLat,
-              previous_longitude: state.previousLongitude ?? state.lastValidLng,
-              previous_gps_timestamp: state.previousGpsTimestamp ?? state.lastTelemetryTime,
-              last_processed_telemetry_id: state.lastProcessedTelemetryId ?? state.lastTelemetryId,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "vehicle_id" },
-          );
-
-        if (voErr) {
-          const isMissingTable =
-            voErr.code === "42P01" ||
-            voErr.code === "PGRST205" ||
-            (voErr as any).status === 404 ||
-            String(voErr.message).includes("does not exist") ||
-            String(voErr.message).includes("404");
-
-          if (isMissingTable) {
-            isVehicleOdometersTableAvailable = false;
-          }
-        } else {
-          isVehicleOdometersTableAvailable = true;
-        }
-      } catch {
-        isVehicleOdometersTableAvailable = false;
-      }
     }
   } catch (err) {
     // Non-fatal error handler
