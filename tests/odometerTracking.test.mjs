@@ -5,11 +5,14 @@ import {
   initVehicleOdometerState,
   processOdometerTelemetry,
   reconcileOdometerState,
+  syncManualOdometerBaseline,
+  notifyManualOdometerUpdate,
   persistVehicleOdometer,
   calculateMovementDistanceKm,
   calculateTodayGpsDistance,
   calculateTodayAndTripDistances,
   getTodayIstDateString,
+  LOCAL_STORAGE_KEY,
 } from "../src/lib/odometerTrackingEngine.ts";
 
 test("0. Haversine Formula Verification: Calculates exact distance between user example coordinates", () => {
@@ -883,5 +886,229 @@ test("22. Database Resilience: Persists integer to vehicles.odometer and never c
   assert.equal(updateCalls.length, 1);
   assert.equal(updateCalls[0].odometer, 14405, "Must persist rounded integer to vehicles.odometer to prevent HTTP 400");
 });
+
+test("23. Test 1: Vehicle Directory Odometer Edit (14,398 -> 15,000 km) Reflects in Live Tracking", () => {
+  // Existing vehicle state in Live Tracking
+  const existingCached = {
+    vehicleId: "v-sync-1",
+    deviceId: "863110086146753",
+    totalOdometerKm: 14398.0,
+    todayDistanceKm: 27.4,
+    currentTripDistanceKm: 10.0,
+    currentSpeedKmh: 0,
+    readingSource: "gps_estimated",
+    baselineOdometerKm: 14398.0,
+    todayDate: "2026-11-12",
+    isMoving: false,
+    previousLatitude: 8.2600,
+    previousLongitude: 77.2880,
+    previousGpsTimestamp: "2026-11-12T04:00:00Z",
+  };
+
+  // Administrator edits odometer in Vehicle Directory to 15,000 km (stored in Supabase vehicles.odometer)
+  const newDatabaseOdometer = 15000.0;
+
+  // Live Tracking reconciles with the updated database baseline
+  const reconciled = reconcileOdometerState(existingCached, newDatabaseOdometer, "2026-11-12");
+
+  // Expected Live Tracking Map reading: 15,000.00 km (NOT 14,398 km, NOT 15,027.4 km)
+  assert.equal(reconciled.baselineOdometerKm, 15000.0, "Baseline must update to 15,000 km");
+  assert.equal(reconciled.totalOdometerKm, 15000.0, "Total odometer must be exactly 15,000.00 km");
+  assert.equal(reconciled.todayDistanceKm, 27.4, "Today's distance must be preserved");
+  assert.equal(reconciled.currentTripDistanceKm, 10.0, "Current trip distance must be preserved");
+  assert.equal(reconciled.previousLatitude, 8.2600, "GPS tracking coordinates must remain intact");
+});
+
+test("24. Test 2: Live Tracking Updates Instantly on Cross-Page Manual Edit Without Refresh", () => {
+  const currentState = {
+    vehicleId: "v-sync-2",
+    deviceId: "863110086146985",
+    totalOdometerKm: 14398.0,
+    todayDistanceKm: 74.2,
+    currentTripDistanceKm: 46.8,
+    currentSpeedKmh: 16,
+    readingSource: "gps_estimated",
+    baselineOdometerKm: 14398.0,
+    todayDate: "2026-11-12",
+    isMoving: true,
+  };
+
+  // Cross-page sync helper updates state directly
+  const updated = syncManualOdometerBaseline(currentState, 15000.0);
+
+  assert.equal(updated.baselineOdometerKm, 15000.0);
+  assert.equal(updated.totalOdometerKm, 15000.0, "Map must immediately show 15,000.00 km without refresh");
+  assert.equal(updated.todayDistanceKm, 74.2, "Today distance is preserved");
+  assert.equal(updated.currentTripDistanceKm, 46.8, "Current trip is preserved");
+  assert.equal(updated.isMoving, true, "Active moving state is preserved");
+});
+
+test("25. Test 3: GPS Accumulation Continues After Manual Edit (15,000.00 -> 15,000.25 -> 15,000.50 km)", () => {
+  let state = syncManualOdometerBaseline(
+    {
+      vehicleId: "v-sync-3",
+      deviceId: "863110086146753",
+      totalOdometerKm: 14398.0,
+      todayDistanceKm: 27.4,
+      currentTripDistanceKm: 10.0,
+      currentSpeedKmh: 20,
+      readingSource: "gps_estimated",
+      baselineOdometerKm: 14398.0,
+      todayDate: "2026-11-12",
+      isMoving: true,
+      previousLatitude: 8.2600,
+      previousLongitude: 77.2880,
+      previousGpsTimestamp: "2026-11-12T05:00:00Z",
+    },
+    15000.0,
+  );
+
+  assert.equal(state.totalOdometerKm, 15000.0);
+
+  // Vehicle travels another 0.25 km (~0.00225 deg north) at 30 km/h
+  const ping1 = processOdometerTelemetry(state, {
+    id: "move-after-edit-1",
+    vehicleId: "v-sync-3",
+    lat: 8.26225,
+    lng: 77.2880,
+    speed: 30,
+    recordedAt: "2026-11-12T05:00:30Z",
+  });
+
+  state = ping1.updatedState;
+  assert.ok(ping1.distanceAddedKm >= 0.24 && ping1.distanceAddedKm <= 0.26);
+  assert.equal(Math.round(state.totalOdometerKm * 100) / 100, 15000.25, "Odometer must become 15,000.25 km");
+  assert.equal(Math.round(state.todayDistanceKm * 100) / 100, 27.65, "Today distance increments by 0.25 km");
+
+  // Vehicle travels another 0.25 km
+  const ping2 = processOdometerTelemetry(state, {
+    id: "move-after-edit-2",
+    vehicleId: "v-sync-3",
+    lat: 8.26450,
+    lng: 77.2880,
+    speed: 30,
+    recordedAt: "2026-11-12T05:01:00Z",
+  });
+
+  state = ping2.updatedState;
+  assert.equal(Math.round(state.totalOdometerKm * 100) / 100, 15000.50, "Odometer must become 15,000.50 km");
+});
+
+test("26. Test 4: Browser Refresh Preserves 15,000.25 km Without Double Counting", () => {
+  // State saved in localStorage after 0.25 km movement
+  const cachedAfterMove = {
+    vehicleId: "v-sync-4",
+    totalOdometerKm: 15000.25,
+    todayDistanceKm: 27.65,
+    currentTripDistanceKm: 10.25,
+    currentSpeedKmh: 30,
+    readingSource: "gps_estimated",
+    baselineOdometerKm: 15000.0,
+    todayDate: "2026-11-12",
+    isMoving: true,
+  };
+
+  // Database baseline returned on page refresh
+  const databaseBaseline = 15000;
+
+  // On page refresh, reconcileOdometerState runs
+  const reconciled = reconcileOdometerState(cachedAfterMove, databaseBaseline, "2026-11-12");
+
+  // Must preserve 15,000.25 km (neither resets to 15,000 nor adds 27.65 km to make 15,027.65)
+  assert.equal(reconciled.totalOdometerKm, 15000.25, "Total odometer must remain exactly 15,000.25 km on refresh");
+  assert.equal(reconciled.baselineOdometerKm, 15000.0);
+  assert.equal(reconciled.todayDistanceKm, 27.65);
+});
+
+test("27. Test 5: Multi-Vehicle Isolation (Editing 1 Vehicle Leaves Other 6 Vehicles Unchanged)", () => {
+  const fleetStates = {
+    "v1": { vehicleId: "v1", baselineOdometerKm: 14398.0, totalOdometerKm: 14398.0, todayDistanceKm: 10.0 },
+    "v2": { vehicleId: "v2", baselineOdometerKm: 860.0, totalOdometerKm: 1007.2, todayDistanceKm: 74.2 },
+    "v3": { vehicleId: "v3", baselineOdometerKm: 48250.0, totalOdometerKm: 48250.0, todayDistanceKm: 5.0 },
+    "v4": { vehicleId: "v4", baselineOdometerKm: 62000.0, totalOdometerKm: 62000.0, todayDistanceKm: 12.0 },
+    "v5": { vehicleId: "v5", baselineOdometerKm: 31500.0, totalOdometerKm: 31500.0, todayDistanceKm: 0.0 },
+    "v6": { vehicleId: "v6", baselineOdometerKm: 19800.0, totalOdometerKm: 19800.0, todayDistanceKm: 15.0 },
+    "v7": { vehicleId: "v7", baselineOdometerKm: 25400.0, totalOdometerKm: 25400.0, todayDistanceKm: 20.0 },
+  };
+
+  // Admin edits only v1 to 15,000 km
+  const updatedV1 = syncManualOdometerBaseline(fleetStates["v1"], 15000.0, "v1");
+  const nextFleet = {
+    ...fleetStates,
+    ["v1"]: updatedV1,
+  };
+
+  // Verify v1 is updated
+  assert.equal(nextFleet["v1"].totalOdometerKm, 15000.0);
+  assert.equal(nextFleet["v1"].baselineOdometerKm, 15000.0);
+
+  // Verify other 6 vehicles are completely unchanged
+  assert.equal(nextFleet["v2"].totalOdometerKm, 1007.2);
+  assert.equal(nextFleet["v3"].totalOdometerKm, 48250.0);
+  assert.equal(nextFleet["v4"].totalOdometerKm, 62000.0);
+  assert.equal(nextFleet["v5"].totalOdometerKm, 31500.0);
+  assert.equal(nextFleet["v6"].totalOdometerKm, 19800.0);
+  assert.equal(nextFleet["v7"].totalOdometerKm, 25400.0);
+});
+
+test("28. Test 6: Concurrent Manual Edit While Live GPS Telemetry Is Streaming", () => {
+  let state = {
+    vehicleId: "v-race-1",
+    totalOdometerKm: 14398.0,
+    todayDistanceKm: 27.4,
+    currentTripDistanceKm: 5.0,
+    currentSpeedKmh: 35,
+    readingSource: "gps_estimated",
+    baselineOdometerKm: 14398.0,
+    todayDate: "2026-11-12",
+    isMoving: true,
+    previousLatitude: 8.2600,
+    previousLongitude: 77.2880,
+    previousGpsTimestamp: "2026-11-12T06:00:00Z",
+  };
+
+  // Telemetry point 1 arrives
+  state = processOdometerTelemetry(state, {
+    id: "gps-pt-1",
+    vehicleId: "v-race-1",
+    lat: 8.2610,
+    lng: 77.2880,
+    speed: 35,
+    recordedAt: "2026-11-12T06:00:10Z",
+  }).updatedState;
+
+  const preEditKm = state.totalOdometerKm;
+  assert.ok(preEditKm > 14398.0 && preEditKm < 14398.2);
+
+  // Admin manual edit to 15,000 km happens concurrently
+  state = syncManualOdometerBaseline(state, 15000.0, "v-race-1");
+  assert.equal(state.totalOdometerKm, 15000.0);
+
+  // Stale or duplicate telemetry packet from before the edit arrives -> rejected
+  const staleAttempt = processOdometerTelemetry(state, {
+    id: "gps-pt-old",
+    vehicleId: "v-race-1",
+    lat: 8.2605,
+    lng: 77.2880,
+    speed: 35,
+    recordedAt: "2026-11-12T06:00:05Z", // timestamp before 06:00:10Z
+  });
+  assert.equal(staleAttempt.isDuplicate, true, "Out-of-order telemetry must be rejected");
+  assert.equal(staleAttempt.updatedState.totalOdometerKm, 15000.0, "Stale packet cannot revert manual edit");
+
+  // Fresh telemetry packet arriving after the edit accumulates onto 15,000 km
+  const freshMove = processOdometerTelemetry(state, {
+    id: "gps-pt-2",
+    vehicleId: "v-race-1",
+    lat: 8.26325,
+    lng: 77.2880, // ~0.25 km from 8.2610
+    speed: 35,
+    recordedAt: "2026-11-12T06:00:30Z",
+  });
+
+  assert.equal(freshMove.isDuplicate, false);
+  assert.equal(Math.round(freshMove.updatedState.totalOdometerKm * 100) / 100, 15000.25, "Fresh GPS movement advances 15,000.00 -> 15,000.25 km");
+});
+
 
 

@@ -5,7 +5,7 @@
  * today's distance, and trip distance for all vehicles in Live Tracking.
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import type { Vehicle } from "@/lib/types";
 import {
@@ -13,12 +13,14 @@ import {
   initVehicleOdometerState,
   processOdometerTelemetry,
   reconcileOdometerState,
+  syncManualOdometerBaseline,
   loadLocalOdometerStates,
   saveLocalOdometerStates,
   persistVehicleOdometer,
   getTodayIstDateString,
   calculateTodayGpsDistance,
   calculateTodayAndTripDistances,
+  LOCAL_STORAGE_KEY,
 } from "@/lib/odometerTrackingEngine";
 import { getIstDateRange, fetchPaginatedTelemetryHistory } from "@/lib/tripHistoryEngine";
 import { KNOWN_NANJIL_DEVICE_MAP } from "@/lib/vehicle-stop-detection";
@@ -54,7 +56,16 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
     syncTimersRef.current.set(state.vehicleId, timer);
   }, []);
 
-  // 1. Initial State Hydration on Mount
+  // Stable key of vehicle baselines (e.g. "uuid1:15000|uuid2:860")
+  // Detects manual baseline edits from Vehicle Directory without re-running on live GPS pings
+  const vehicleBaselinesKey = useMemo(() => {
+    return (vehicles || [])
+      .map((v) => `${v.id}:${Number(v.odometer || 0)}`)
+      .sort()
+      .join("|");
+  }, [vehicles]);
+
+  // 1. Initial State Hydration & Manual Baseline Synchronization
   useEffect(() => {
     let isCancelled = false;
 
@@ -74,7 +85,7 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
           nextMap[v.id] = initVehicleOdometerState(v, 0, currentIstDate);
         } else {
           // Reconcile cached state: recover from spurious hardware classification,
-          // preserve total odometer, today's distance, coordinates, and precision!
+          // synchronize manual baseline edits, and preserve GPS tracking precision!
           nextMap[v.id] = reconcileOdometerState(nextMap[v.id], currentBase, currentIstDate);
         }
       });
@@ -106,12 +117,15 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
 
                   const existing = nextMap[vId];
                   if (existing) {
-                    const maxToday = Math.max(existing.todayDistanceKm, todayDistanceKm);
+                    const maxToday = Math.max(existing.todayDistanceKm || 0, todayDistanceKm);
                     existing.todayDistanceKm = maxToday;
-                    existing.totalOdometerKm =
-                      Math.round((existing.baselineOdometerKm + maxToday) * 100) / 100;
                     existing.currentTripDistanceKm = currentTripDistanceKm;
                     existing.isMoving = isCurrentTripActive;
+
+                    // Ensure total odometer is at least baselineOdometerKm without double-counting past today's distance
+                    if (!existing.totalOdometerKm || existing.totalOdometerKm < existing.baselineOdometerKm) {
+                      existing.totalOdometerKm = existing.baselineOdometerKm;
+                    }
                   }
                 }
               } catch (err) {
@@ -141,7 +155,7 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
     return () => {
       isCancelled = true;
     };
-  }, [vehicles.length]); // Re-run if vehicles count changes on initial load
+  }, [vehicleBaselinesKey]); // Re-run when vehicle count OR manual odometer baseline changes
 
   // Helper to ingest an incoming telemetry point for a vehicle
   const ingestTelemetryPoint = useCallback(
@@ -192,13 +206,28 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
     [schedulePersist, vehicles],
   );
 
-  // 2. Real-Time Extension: Process incoming vehicles stream
+  // 2. Real-Time Extension: Process incoming vehicles stream & detect manual baseline updates
   useEffect(() => {
     if (vehicles.length === 0) return;
 
     vehicles.forEach((v) => {
       if (v.deviceId && v.id) {
         deviceToIdMapRef.current.set(v.deviceId, v.id);
+      }
+
+      // Check if v.odometer from Supabase differs from cached baseline (manual edit detected via vehicles prop)
+      const current = statesRef.current[v.id];
+      if (current && typeof v.odometer === "number" && v.odometer > 0) {
+        const cleanBase = Math.round(Number(v.odometer) * 100) / 100;
+        const isNaturalGpsPersistence =
+          Math.abs(current.totalOdometerKm - cleanBase) <= 1.05 ||
+          (current.totalOdometerKm >= cleanBase && Math.abs(current.baselineOdometerKm - cleanBase) <= 1.05);
+
+        if (Math.abs(cleanBase - current.baselineOdometerKm) >= 0.01 && !isNaturalGpsPersistence) {
+          statesRef.current[v.id] = syncManualOdometerBaseline(current, cleanBase, v.id, v.deviceId);
+          saveLocalOdometerStates(statesRef.current);
+          setOdometerStates({ ...statesRef.current });
+        }
       }
 
       ingestTelemetryPoint(
@@ -212,12 +241,73 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
     });
   }, [vehicles, ingestTelemetryPoint]);
 
-  // 3. Real-Time Telemetry Subscriptions (vehicle_telemetry upserts & telemetry_history inserts)
+  // 3. Real-Time Telemetry & Manual Baseline Subscriptions
   useEffect(() => {
     const { startUtcIso } = getIstDateRange("today");
 
+    // A. Listen for same-window custom manual update events from Vehicle Directory
+    const handleManualEvent = (e: any) => {
+      const { vehicleId, odometer, deviceId } = e.detail || {};
+      if (vehicleId && typeof odometer === "number") {
+        const cleanOdo = Math.round(Number(odometer) * 100) / 100;
+        const current = statesRef.current[vehicleId];
+        const updated = syncManualOdometerBaseline(current, cleanOdo, vehicleId, deviceId);
+        const nextMap = {
+          ...statesRef.current,
+          [vehicleId]: updated,
+        };
+        statesRef.current = nextMap;
+        setOdometerStates(nextMap);
+        saveLocalOdometerStates(nextMap);
+      }
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("nanjil_fleet_odometer_manual_update", handleManualEvent);
+    }
+
+    // B. Listen for cross-tab localStorage updates
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === LOCAL_STORAGE_KEY && e.newValue) {
+        try {
+          const nextMap = JSON.parse(e.newValue);
+          statesRef.current = nextMap;
+          setOdometerStates(nextMap);
+        } catch {}
+      }
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("storage", handleStorageEvent);
+    }
+
+    // C. Supabase Realtime channel: listen to manual edits on vehicles table & incoming telemetry
     const channel = supabase
       .channel("tracking-odometer-stream")
+      // Real-time manual odometer updates on vehicles table in Supabase
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "vehicles" },
+        (payload) => {
+          const row = payload.new as any;
+          if (!row || !row.id || typeof row.odometer !== "number") return;
+          const cleanBase = Math.round(Number(row.odometer) * 100) / 100;
+          const current = statesRef.current[row.id];
+          const isNaturalGpsPersistence =
+            current &&
+            (Math.abs(current.totalOdometerKm - cleanBase) <= 1.05 ||
+              (current.totalOdometerKm >= cleanBase && Math.abs(current.baselineOdometerKm - cleanBase) <= 1.05));
+
+          if (!isNaturalGpsPersistence) {
+            const updatedState = syncManualOdometerBaseline(current, cleanBase, row.id, row.device_id);
+            const nextMap = {
+              ...statesRef.current,
+              [row.id]: updatedState,
+            };
+            statesRef.current = nextMap;
+            setOdometerStates(nextMap);
+            saveLocalOdometerStates(nextMap);
+          }
+        },
+      )
       // Listen to live telemetry updates from EMQX ingestion
       .on(
         "postgres_changes",
@@ -267,6 +357,10 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
       .subscribe();
 
     return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener("nanjil_fleet_odometer_manual_update", handleManualEvent);
+        window.removeEventListener("storage", handleStorageEvent);
+      }
       supabase.removeChannel(channel);
     };
   }, [ingestTelemetryPoint]);
