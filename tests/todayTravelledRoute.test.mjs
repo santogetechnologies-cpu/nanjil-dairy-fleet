@@ -10,6 +10,7 @@ import {
   processRawGpsPoints,
   mergeAndDeduplicatePoints,
   normalizeDeviceId,
+  printFleetRouteDiagnostics,
 } from "../src/hooks/useTodayTravelledRoutes.ts";
 
 test("1. Today's Date Range in Asia/Kolkata: Exactly 00:00:00 to 23:59:59 IST", () => {
@@ -318,5 +319,54 @@ test("15. Device ID and UUID matching: Supports clean device ID, device_ prefix,
   assert.equal(normalizeDeviceId(863110086146753), "863110086146753");
   assert.equal(normalizeDeviceId(null), undefined);
 });
+
+test("16. printFleetRouteDiagnostics: Generates complete 7-vehicle diagnostic metrics", () => {
+  const mockVehicles = [
+    {
+      id: "d0fea864-64a4-4148-b3b2-600f68459583",
+      deviceId: "863110086192104",
+      number: "TN 75 BC 2219",
+      lat: 8.2068,
+      lng: 77.3702,
+      speed: 15,
+      status: "Moving",
+    },
+  ];
+
+  const mockRoutes = {
+    "d0fea864-64a4-4148-b3b2-600f68459583": [
+      [
+        { lat: 8.2000, lng: 77.3600 },
+        { lat: 8.2068, lng: 77.3702 },
+      ],
+    ],
+  };
+
+  const rawMap = new Map();
+  rawMap.set("d0fea864-64a4-4148-b3b2-600f68459583", [
+    { id: "1", lat: 8.2000, lng: 77.3600, speed: 20, recorded_at: "2026-11-12T05:00:00Z" },
+    { id: "2", lat: 8.2068, lng: 77.3702, speed: 15, recorded_at: "2026-11-12T05:05:00Z" },
+  ]);
+
+  const report = printFleetRouteDiagnostics(mockVehicles, mockRoutes, rawMap);
+  assert.equal(report.length, 7, "Report must cover all 7 Nanjil GPS vehicles");
+
+  const vBC2219 = report.find((r) => r.registrationNumber === "TN 75 BC 2219");
+  assert.ok(vBC2219, "TN 75 BC 2219 must be present");
+  assert.equal(vBC2219.gpsDeviceId, "863110086192104");
+  assert.equal(vBC2219.firebaseDocId, "863110086192104");
+  assert.equal(vBC2219.todayTelemetryCount, 2);
+  assert.equal(vBC2219.validGpsCount, 2);
+  assert.equal(vBC2219.rejectedGpsCount, 0);
+  assert.equal(vBC2219.segmentsGte2Points, 1);
+  assert.equal(vBC2219.polylineRenderedStatus, "Active / Rendered");
+
+  const vBF0320 = report.find((r) => r.registrationNumber === "TN 75 BF 0320");
+  assert.ok(vBF0320, "TN 75 BF 0320 must be present");
+  assert.equal(vBF0320.todayTelemetryCount, 0);
+  assert.equal(vBF0320.segmentsGte2Points, 0);
+  assert.equal(vBF0320.polylineRenderedStatus, "Insufficient Data (< 2 points)");
+});
+
 
 

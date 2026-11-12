@@ -119,10 +119,13 @@ export function GoogleVehicleMap({
   // Check whether the active / selected vehicle has a valid today route
   const activeHasRoute = useMemo(() => {
     if (!active || !todayRoutes) return false;
+    const cleanDev = active.deviceId ? active.deviceId.replace(/^device_/, "") : undefined;
     const segs =
       todayRoutes[active.id] ||
       (active.deviceId ? todayRoutes[active.deviceId] : undefined) ||
-      (active.deviceId ? todayRoutes[active.deviceId.replace(/^device_/, "")] : undefined);
+      (cleanDev ? todayRoutes[cleanDev] : undefined) ||
+      (cleanDev ? todayRoutes[`device_${cleanDev}`] : undefined) ||
+      (cleanDev && KNOWN_NANJIL_DEVICE_MAP[cleanDev] ? todayRoutes[KNOWN_NANJIL_DEVICE_MAP[cleanDev].id] : undefined);
     if (!segs || segs.length === 0) return false;
     return segs.some((s) => s && s.length >= 2);
   }, [active, todayRoutes]);
@@ -140,14 +143,42 @@ export function GoogleVehicleMap({
       const renderedVehicleKeys = new Set<string>();
 
       const getSegmentsForVehicle = (v: Vehicle): Array<Array<{ lat: number; lng: number }>> | undefined => {
+        // 1. Direct ID / UUID match
         if (todayRoutes[v.id] && todayRoutes[v.id].length > 0) return todayRoutes[v.id];
+
+        // 2. Direct deviceId match
         if (v.deviceId && todayRoutes[v.deviceId] && todayRoutes[v.deviceId].length > 0) return todayRoutes[v.deviceId];
+
+        // 3. Normalized deviceId match
         const cleanDev = v.deviceId ? v.deviceId.replace(/^device_/, "") : undefined;
         if (cleanDev && todayRoutes[cleanDev] && todayRoutes[cleanDev].length > 0) return todayRoutes[cleanDev];
-        if (v.deviceId && KNOWN_NANJIL_DEVICE_MAP[v.deviceId]) {
-          const mappedUuid = KNOWN_NANJIL_DEVICE_MAP[v.deviceId].id;
+        if (cleanDev && todayRoutes[`device_${cleanDev}`] && todayRoutes[`device_${cleanDev}`].length > 0) return todayRoutes[`device_${cleanDev}`];
+
+        // 4. Forward lookup in KNOWN_NANJIL_DEVICE_MAP
+        if (cleanDev && KNOWN_NANJIL_DEVICE_MAP[cleanDev]) {
+          const mappedUuid = KNOWN_NANJIL_DEVICE_MAP[cleanDev].id;
           if (todayRoutes[mappedUuid] && todayRoutes[mappedUuid].length > 0) return todayRoutes[mappedUuid];
         }
+
+        // 5. Reverse lookup in KNOWN_NANJIL_DEVICE_MAP
+        const knownEntry = Object.entries(KNOWN_NANJIL_DEVICE_MAP).find(([, meta]) => meta.id === v.id);
+        if (knownEntry) {
+          const [kDevId] = knownEntry;
+          if (todayRoutes[kDevId] && todayRoutes[kDevId].length > 0) return todayRoutes[kDevId];
+          if (todayRoutes[`device_${kDevId}`] && todayRoutes[`device_${kDevId}`].length > 0) return todayRoutes[`device_${kDevId}`];
+        }
+
+        // 6. Registration plate match
+        if (v.number) {
+          const cleanNum = v.number.replace(/\s+/g, "").toUpperCase();
+          for (const [kDev, meta] of Object.entries(KNOWN_NANJIL_DEVICE_MAP)) {
+            if (meta.number.replace(/\s+/g, "").toUpperCase() === cleanNum) {
+              if (todayRoutes[meta.id] && todayRoutes[meta.id].length > 0) return todayRoutes[meta.id];
+              if (todayRoutes[kDev] && todayRoutes[kDev].length > 0) return todayRoutes[kDev];
+            }
+          }
+        }
+
         return undefined;
       };
 
@@ -160,8 +191,18 @@ export function GoogleVehicleMap({
 
         renderedVehicleKeys.add(v.id);
         if (v.deviceId) {
+          const clean = v.deviceId.replace(/^device_/, "");
           renderedVehicleKeys.add(v.deviceId);
-          renderedVehicleKeys.add(v.deviceId.replace(/^device_/, ""));
+          renderedVehicleKeys.add(clean);
+          renderedVehicleKeys.add(`device_${clean}`);
+          if (KNOWN_NANJIL_DEVICE_MAP[clean]) {
+            renderedVehicleKeys.add(KNOWN_NANJIL_DEVICE_MAP[clean].id);
+          }
+        }
+        const knownEntry = Object.entries(KNOWN_NANJIL_DEVICE_MAP).find(([, meta]) => meta.id === v.id);
+        if (knownEntry) {
+          renderedVehicleKeys.add(knownEntry[0]);
+          renderedVehicleKeys.add(`device_${knownEntry[0]}`);
         }
 
         segments.forEach((seg, sIdx) => {

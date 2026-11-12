@@ -24,11 +24,118 @@ export interface LatLngPoint {
 export type VehicleRouteSegments = LatLngPoint[][];
 export type TodayRoutesMap = Record<string, VehicleRouteSegments>;
 
+export interface VehicleRouteDiagnosticItem {
+  registrationNumber: string;
+  supabaseUuid: string;
+  firebaseDocId: string;
+  gpsDeviceId: string;
+  currentCoords: string;
+  todayTelemetryCount: number;
+  validGpsCount: number;
+  rejectedGpsCount: number;
+  routeSegmentsCount: number;
+  segmentsGte2Points: number;
+  polylineRenderedStatus: string;
+  reason: string;
+}
+
 export function normalizeDeviceId(devId?: string | number | null): string | undefined {
   if (devId == null) return undefined;
   const s = String(devId).trim();
   if (!s) return undefined;
   return s.replace(/^device_/, "");
+}
+
+/**
+ * Diagnostic logger for all 7 Nanjil GPS fleet vehicles.
+ * Generates an authoritative console report breaking down coordinates, segments, and rendering status.
+ */
+export function printFleetRouteDiagnostics(
+  vehicles: Vehicle[],
+  routesMap: TodayRoutesMap,
+  rawPointsMap: Map<string, GpsPoint[]>,
+): VehicleRouteDiagnosticItem[] {
+  const diagList: VehicleRouteDiagnosticItem[] = [];
+
+  Object.entries(KNOWN_NANJIL_DEVICE_MAP).forEach(([devId, meta]) => {
+    const vMatch = (vehicles || []).find(
+      (v) =>
+        v.id === meta.id ||
+        normalizeDeviceId(v.deviceId) === devId ||
+        v.deviceId === devId ||
+        v.deviceId === `device_${devId}`,
+    );
+
+    const points =
+      rawPointsMap.get(meta.id) ||
+      rawPointsMap.get(devId) ||
+      rawPointsMap.get(`device_${devId}`) ||
+      [];
+
+    const segments =
+      routesMap[meta.id] ||
+      routesMap[devId] ||
+      routesMap[`device_${devId}`] ||
+      [];
+
+    const segsGte2 = segments.filter((s) => s && s.length >= 2);
+    const renderedPts = segsGte2.reduce((acc, s) => acc + s.length, 0);
+
+    const validCount = points.filter((p) => isFleetOperatingCoordinate(p.lat, p.lng)).length;
+    const rejectedCount = Math.max(0, points.length - validCount);
+
+    const currLat = vMatch?.lat;
+    const currLng = vMatch?.lng;
+    const currentCoords =
+      currLat != null && currLng != null && isValidGpsCoord(currLat, currLng)
+        ? `${Number(currLat).toFixed(4)}, ${Number(currLng).toFixed(4)}`
+        : "0.0000, 0.0000 (Idle)";
+
+    const isRendered = segsGte2.length > 0;
+    const polylineStatus = isRendered ? "Active / Rendered" : "Insufficient Data (< 2 points)";
+    const reason = isRendered
+      ? `${segsGte2.length} segment(s) (${renderedPts} points)`
+      : points.length === 0
+        ? "Stationary / No GPS transmission today"
+        : "Fewer than 2 valid points";
+
+    diagList.push({
+      registrationNumber: meta.number,
+      supabaseUuid: meta.id,
+      firebaseDocId: devId,
+      gpsDeviceId: devId,
+      currentCoords,
+      todayTelemetryCount: points.length,
+      validGpsCount: validCount,
+      rejectedGpsCount: rejectedCount,
+      routeSegmentsCount: segments.length,
+      segmentsGte2Points: segsGte2.length,
+      polylineRenderedStatus: polylineStatus,
+      reason,
+    });
+  });
+
+  if (typeof console !== "undefined" && console.groupCollapsed) {
+    console.groupCollapsed(
+      "%c[Nanjil Fleet] 7-Vehicle Today GPS Route Diagnostics",
+      "color: #dc2626; font-weight: bold; font-size: 11px;",
+    );
+    if (console.table) {
+      console.table(diagList);
+    }
+    diagList.forEach((d) => {
+      console.log(
+        `[Vehicle Route] ${d.registrationNumber} (Device: ${d.gpsDeviceId}) | UUID: ${d.supabaseUuid} | Firebase Doc: ${d.firebaseDocId} | Coords: ${d.currentCoords} | Records: ${d.todayTelemetryCount} | Valid: ${d.validGpsCount} | Rejected: ${d.rejectedGpsCount} | Segments: ${d.routeSegmentsCount} (>=2 pts: ${d.segmentsGte2Points}) | Status: ${d.polylineRenderedStatus} | Reason: ${d.reason}`,
+      );
+    });
+    console.groupEnd();
+  }
+
+  if (typeof window !== "undefined") {
+    (window as any).__NANJIL_ROUTE_DIAGNOSTICS__ = diagList;
+  }
+
+  return diagList;
 }
 
 /**
@@ -171,7 +278,10 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Keep a ref to the latest routes state for real-time appends without re-fetching
+  // Keep a ref to the latest vehicles and routes state for real-time appends without re-fetching
+  const vehiclesRef = useRef<Vehicle[]>(vehicles);
+  vehiclesRef.current = vehicles;
+
   const routesRef = useRef<TodayRoutesMap>({});
   routesRef.current = routes;
 
@@ -279,6 +389,7 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
         }
         if (devId && devId !== targetKey) {
           nextMap[devId] = updatedSegments;
+          nextMap[`device_${devId}`] = updatedSegments;
         }
         routesRef.current = nextMap;
         return nextMap;
@@ -335,10 +446,18 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
           fetchResults.forEach(({ uuid, points }) => {
             const devId = uuidToDeviceMapRef.current.get(uuid);
 
-            // Merge safely with any live points that arrived while fetch was in flight!
-            const existingLivePoints = rawPointsMapRef.current.get(uuid) || [];
+            // Merge safely with any live points that arrived while fetch was in flight across all alias keys
+            const existingLivePoints = [
+              ...(rawPointsMapRef.current.get(uuid) || []),
+              ...(devId ? rawPointsMapRef.current.get(devId) || [] : []),
+              ...(devId ? rawPointsMapRef.current.get(`device_${devId}`) || [] : []),
+            ];
             const mergedPoints = mergeAndDeduplicatePoints(existingLivePoints, points);
             rawPointsMapRef.current.set(uuid, mergedPoints);
+            if (devId) {
+              rawPointsMapRef.current.set(devId, mergedPoints);
+              rawPointsMapRef.current.set(`device_${devId}`, mergedPoints);
+            }
 
             const segments = processRawGpsPoints(mergedPoints, 15);
 
@@ -353,10 +472,12 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
             nextRoutes[uuid] = segments;
             if (devId) {
               nextRoutes[devId] = segments;
+              nextRoutes[`device_${devId}`] = segments;
             }
           });
 
           routesRef.current = nextRoutes;
+          printFleetRouteDiagnostics(vehiclesRef.current, nextRoutes, rawPointsMapRef.current);
           return nextRoutes;
         });
       } catch (err: any) {
@@ -473,6 +594,8 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]) {
     );
     if (unfetched.length > 0) {
       loadHistoryForUuids(unfetched);
+    } else {
+      printFleetRouteDiagnostics(vehicles, routesRef.current, rawPointsMapRef.current);
     }
   }, [vehicles, registerMapping, appendCoordinateToVehicle, loadHistoryForUuids]);
 
