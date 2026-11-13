@@ -55,7 +55,7 @@ function TrackingPage() {
   const vehicles = useVehicles();
 
   // Load and stream today's actual GPS travelled route for each vehicle (Asia/Kolkata timezone)
-  const { routes: todayRoutes, tripStartTimes } = useTodayTravelledRoutes(vehicles);
+  const { routes: todayRoutes, plantConnectors, tripStartTimes } = useTodayTravelledRoutes(vehicles);
 
   // Real-time overspeed detection, transition tracking, and alert persistence
   const { activeWarnings, activeCriticals } = useOverspeedMonitor(vehicles);
@@ -267,6 +267,7 @@ function TrackingPage() {
                 onSelectVehicle={handleSelectVehicle}
                 routeHistory={routeHistory}
                 todayRoutes={todayRoutes}
+                plantConnectors={plantConnectors}
                 tripStartTimes={tripStartTimes}
                 odometerStates={odometerStates}
                 getVehicleOdometer={getVehicleOdometer}

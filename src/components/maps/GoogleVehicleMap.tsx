@@ -32,6 +32,7 @@ export interface GoogleVehicleMapProps {
   onSelectVehicle?: (vehicle: Vehicle) => void;
   routeHistory?: Array<{ lat: number; lng: number }>;
   todayRoutes?: Record<string, Array<Array<{ lat: number; lng: number }>>>;
+  plantConnectors?: Record<string, Array<Array<{ lat: number; lng: number }>>>;
   tripStartTimes?: Record<string, string>;
   odometerStates?: Record<string, VehicleOdometerState>;
   getVehicleOdometer?: (idOrDeviceId?: string) => VehicleOdometerState;
@@ -44,6 +45,7 @@ export function GoogleVehicleMap({
   onSelectVehicle,
   routeHistory,
   todayRoutes,
+  plantConnectors,
   tripStartTimes,
   odometerStates,
   getVehicleOdometer,
@@ -53,6 +55,16 @@ export function GoogleVehicleMap({
   const [active, setActive] = useState<Vehicle | null>(
     selectedId ? (vehicles.find((v) => v.id === selectedId) ?? null) : null,
   );
+
+  // Synchronize active vehicle selection whenever selectedId changes externally
+  useEffect(() => {
+    if (selectedId) {
+      const match = vehicles.find((v) => v.id === selectedId || v.deviceId === selectedId);
+      if (match) {
+        setActive(match);
+      }
+    }
+  }, [selectedId, vehicles]);
 
   // Always resolve the latest live vehicle object from vehicles stream to keep popup in sync with sidebar
   const currentActive = useMemo(() => {
@@ -301,6 +313,73 @@ export function GoogleVehicleMap({
     return list;
   }, [todayRoutes, vehicles, selectedId, active, routeHistory]);
 
+  // Prepare Estimated Plant Connectors (Dashed Orange Polyline, #F59E0B)
+  const renderedConnectors = useMemo(() => {
+    if (!plantConnectors || Object.keys(plantConnectors).length === 0) return [];
+
+    const list: Array<{
+      key: string;
+      path: Array<{ lat: number; lng: number }>;
+      isSelected: boolean;
+    }> = [];
+
+    const renderedKeys = new Set<string>();
+
+    const getConnectorForVehicle = (v: Vehicle): Array<Array<{ lat: number; lng: number }>> | undefined => {
+      if (plantConnectors[v.id] && plantConnectors[v.id].length > 0) return plantConnectors[v.id];
+      if (v.deviceId && plantConnectors[v.deviceId] && plantConnectors[v.deviceId].length > 0) return plantConnectors[v.deviceId];
+      const cleanDev = v.deviceId ? v.deviceId.replace(/^device_/, "") : undefined;
+      if (cleanDev && plantConnectors[cleanDev] && plantConnectors[cleanDev].length > 0) return plantConnectors[cleanDev];
+      if (cleanDev && plantConnectors[`device_${cleanDev}`] && plantConnectors[`device_${cleanDev}`].length > 0) return plantConnectors[`device_${cleanDev}`];
+
+      const knownEntry = Object.entries(KNOWN_NANJIL_DEVICE_MAP).find(([, meta]) => meta.id === v.id);
+      if (knownEntry) {
+        const [kDevId] = knownEntry;
+        if (plantConnectors[kDevId] && plantConnectors[kDevId].length > 0) return plantConnectors[kDevId];
+        if (plantConnectors[`device_${kDevId}`] && plantConnectors[`device_${kDevId}`].length > 0) return plantConnectors[`device_${kDevId}`];
+      }
+
+      return undefined;
+    };
+
+    vehicles.forEach((v) => {
+      const isSelected = v.id === selectedId || active?.id === v.id || (v.deviceId && v.deviceId === selectedId);
+      const segments = getConnectorForVehicle(v);
+      if (!segments || segments.length === 0) return;
+
+      renderedKeys.add(v.id);
+      if (v.deviceId) renderedKeys.add(v.deviceId);
+
+      segments.forEach((seg, sIdx) => {
+        if (seg && seg.length >= 2) {
+          list.push({
+            key: `plant-conn-${v.id}-${sIdx}`,
+            path: seg,
+            isSelected: Boolean(isSelected),
+          });
+        }
+      });
+    });
+
+    Object.entries(plantConnectors).forEach(([key, segments]) => {
+      if (renderedKeys.has(key)) return;
+      renderedKeys.add(key);
+
+      const isSelected = key === selectedId || (active && (active.id === key || active.deviceId === key));
+      segments.forEach((seg, sIdx) => {
+        if (seg && seg.length >= 2) {
+          list.push({
+            key: `plant-conn-orphan-${key}-${sIdx}`,
+            path: seg,
+            isSelected: Boolean(isSelected),
+          });
+        }
+      });
+    });
+
+    return list;
+  }, [plantConnectors, vehicles, selectedId, active]);
+
   return (
     <div className="relative rounded-lg overflow-hidden border border-border" style={{ height }}>
       <Map
@@ -368,6 +447,94 @@ export function GoogleVehicleMap({
               strokeWeight={3.8}
               geodesic={true}
               zIndex={20}
+            />
+          );
+        })}
+
+        {/* Estimated Road Connectors from Nanjil Dairy Plant (Dashed Orange Polyline, #F59E0B) */}
+        {renderedConnectors.map(({ key, path, isSelected }) => {
+          const hasSelection = Boolean(selectedId);
+          if (isSelected) {
+            return (
+              <div key={`group-conn-${key}`}>
+                <Polyline
+                  key={`${key}-halo`}
+                  path={path}
+                  strokeColor="#FFFFFF"
+                  strokeOpacity={0.8}
+                  strokeWeight={6}
+                  geodesic={true}
+                  zIndex={85}
+                />
+                <Polyline
+                  key={key}
+                  path={path}
+                  strokeColor="#F59E0B"
+                  strokeOpacity={0}
+                  icons={[
+                    {
+                      icon: {
+                        path: "M 0,-1 0,1",
+                        strokeOpacity: 1,
+                        scale: 3.5,
+                        strokeColor: "#F59E0B",
+                      },
+                      offset: "0",
+                      repeat: "14px",
+                    },
+                  ]}
+                  geodesic={true}
+                  zIndex={95}
+                />
+              </div>
+            );
+          }
+
+          if (hasSelection) {
+            return (
+              <Polyline
+                key={key}
+                path={path}
+                strokeColor="#D97706"
+                strokeOpacity={0}
+                icons={[
+                  {
+                    icon: {
+                      path: "M 0,-1 0,1",
+                      strokeOpacity: 0.18,
+                      scale: 2.2,
+                      strokeColor: "#D97706",
+                    },
+                    offset: "0",
+                    repeat: "18px",
+                  },
+                ]}
+                geodesic={true}
+                zIndex={8}
+              />
+            );
+          }
+
+          return (
+            <Polyline
+              key={key}
+              path={path}
+              strokeColor="#F59E0B"
+              strokeOpacity={0}
+              icons={[
+                {
+                  icon: {
+                    path: "M 0,-1 0,1",
+                    strokeOpacity: 0.75,
+                    scale: 2.8,
+                    strokeColor: "#F59E0B",
+                  },
+                  offset: "0",
+                  repeat: "15px",
+                },
+              ]}
+              geodesic={true}
+              zIndex={18}
             />
           );
         })}
@@ -702,13 +869,23 @@ export function GoogleVehicleMap({
       </Map>
 
       {/* Legend & Tracking Notice */}
-      <div className="absolute bottom-3 left-3 z-10 bg-card/95 backdrop-blur border border-border rounded-md px-3 py-2 text-xs flex items-center gap-3 shadow">
+      <div className="absolute bottom-3 left-3 z-10 bg-card/95 backdrop-blur border border-border rounded-md px-3 py-2 text-xs flex items-center gap-3 shadow flex-wrap">
         {(["Moving", "Idle", "Parked", "Offline"] as const).map((s) => (
           <div key={s} className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full" style={{ background: getVehicleStatusColor(s) }} />
             <span className="font-medium text-foreground">{s}</span>
           </div>
         ))}
+        <div className="pl-2 border-l border-border flex items-center gap-3">
+          <div className="flex items-center gap-1.5" title="Actual GPS travelled route">
+            <span className="h-1 w-4 bg-red-600 rounded-full inline-block" />
+            <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300">GPS Route</span>
+          </div>
+          <div className="flex items-center gap-1.5" title="Estimated road connector from Nanjil Dairy Plant (not added to odometer)">
+            <span className="h-0.5 w-4 border-b-2 border-dashed border-amber-500 inline-block" />
+            <span className="text-[11px] font-medium text-amber-600 dark:text-amber-400">Plant Connector</span>
+          </div>
+        </div>
         {currentActive && (
           <div className="pl-2 border-l border-border text-primary font-semibold flex items-center gap-2">
             <div className="flex items-center gap-1">
