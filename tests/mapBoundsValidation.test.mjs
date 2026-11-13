@@ -12,7 +12,6 @@ function calculateMapTarget({
   vehicles,
   todayRoutes,
   plantConnectors,
-  directionsConnectors = {},
 }) {
   const match = vehicles.find((v) => v.id === selectedId || v.deviceId === selectedId);
   if (!match) return { action: "none" };
@@ -26,9 +25,6 @@ function calculateMapTarget({
     (cleanDev && KNOWN_NANJIL_DEVICE_MAP[cleanDev] ? todayRoutes?.[KNOWN_NANJIL_DEVICE_MAP[cleanDev].id] : undefined);
 
   const connPts =
-    directionsConnectors[match.id] ||
-    (match.deviceId ? directionsConnectors[match.deviceId] : undefined) ||
-    (cleanDev ? directionsConnectors[cleanDev] : undefined) ||
     plantConnectors?.[match.id]?.[0] ||
     (match.deviceId ? plantConnectors?.[match.deviceId]?.[0] : undefined) ||
     (cleanDev ? plantConnectors?.[cleanDev]?.[0] : undefined);

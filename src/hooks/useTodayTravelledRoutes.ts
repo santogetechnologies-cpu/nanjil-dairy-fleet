@@ -223,41 +223,7 @@ export async function buildPlantConnector(
     return plantConnectorCache.get(cacheKey)!;
   }
 
-  // 1. Try Google Maps DirectionsService if available in browser
-  if (typeof window !== "undefined" && (window as any).google?.maps?.DirectionsService) {
-    try {
-      const gMaps = (window as any).google.maps;
-      const service = new gMaps.DirectionsService();
-      const googleRes = await new Promise<LatLngPoint[] | null>((resolve) => {
-        service.route(
-          {
-            origin: new gMaps.LatLng(NANJIL_DAIRY_DEPOT.lat, NANJIL_DAIRY_DEPOT.lng),
-            destination: new gMaps.LatLng(firstPoint.lat, firstPoint.lng),
-            travelMode: gMaps.TravelMode.DRIVING,
-          },
-          (result: any, status: any) => {
-            if (status === gMaps.DirectionsStatus.OK && result?.routes?.[0]?.overview_path) {
-              const roadPath: LatLngPoint[] = result.routes[0].overview_path.map((p: any) => ({
-                lat: p.lat(),
-                lng: p.lng(),
-              }));
-              resolve(roadPath);
-            } else {
-              resolve(null);
-            }
-          },
-        );
-      });
-
-      if (googleRes && googleRes.length >= 2) {
-        plantConnectorCache.set(cacheKey, googleRes);
-        return googleRes;
-      }
-    } catch {
-      // Fall through to calculateRoadRoute
-    }
-  }
-
+  // Calculate road-following route from Nanjil Dairy Depot to vehicle first GPS point
   try {
     const roadRes = await calculateRoadRoute([
       NANJIL_DAIRY_DEPOT,

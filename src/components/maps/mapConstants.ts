@@ -6,10 +6,10 @@ export { NANJIL_DAIRY_DEPOT };
 export const GOOGLE_MAPS_API_KEY =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_GOOGLE_MAPS_API_KEY as string) || "";
 
-export const GOOGLE_MAPS_LIBRARIES: ("marker" | "geometry" | "places" | "routes")[] = [
+export const GOOGLE_MAPS_LIBRARIES: ("marker" | "geometry" | "places")[] = [
   "marker",
   "geometry",
-  "routes",
+  "places",
 ];
 
 export const DEFAULT_MAP_CENTER = {
