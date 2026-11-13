@@ -2,6 +2,8 @@ import { Link, useParams } from "react-router-dom";
 import { Card, CardHeader, Badge, Button } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { VehicleMap } from "@/components/VehicleMap";
+import { isValidFleetCoord } from "@/components/maps/GoogleVehicleMap";
+import { NANJIL_DAIRY_DEPOT } from "@/components/maps/mapConstants";
 import {
   ResponsiveContainer,
   LineChart,
@@ -161,8 +163,12 @@ function VehicleDetailPage() {
         engineHours: Number(vehicleData.engine_hours || 0),
         status: vehicleData.status,
         location: vehicleData.location || "",
-        lat: Number(vehicleData.lat || 0),
-        lng: Number(vehicleData.lng || 0),
+        lat: isValidFleetCoord({ lat: vehicleData.lat, lng: vehicleData.lng })
+          ? Number(vehicleData.lat)
+          : NANJIL_DAIRY_DEPOT.lat,
+        lng: isValidFleetCoord({ lat: vehicleData.lat, lng: vehicleData.lng })
+          ? Number(vehicleData.lng)
+          : NANJIL_DAIRY_DEPOT.lng,
         speed: vehicleData.speed || 0,
         fuel: vehicleData.fuel || 0,
         temperature: Number(vehicleData.temperature || 0),
