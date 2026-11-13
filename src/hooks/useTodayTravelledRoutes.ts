@@ -13,6 +13,7 @@ import {
 } from "../lib/tripHistoryEngine.ts";
 import { KNOWN_NANJIL_DEVICE_MAP } from "../lib/vehicle-stop-detection.ts";
 import { NANJIL_DAIRY_DEPOT } from "../lib/routeTemplates.ts";
+import { calculateRoadRoute } from "../lib/roadRouting.ts";
 
 export { isFleetOperatingCoordinate, NANJIL_DAIRY_DEPOT };
 
@@ -116,24 +117,23 @@ export function printFleetRouteDiagnostics(
     });
   });
 
-  if (typeof console !== "undefined" && console.groupCollapsed) {
-    console.groupCollapsed(
-      "%c[Nanjil Fleet] 7-Vehicle Today GPS Route Diagnostics",
-      "color: #0284c7; font-weight: bold; font-size: 11px;",
-    );
-    if (console.table) {
-      console.table(diagList);
-    }
-    diagList.forEach((d) => {
-      console.log(
-        `[Vehicle Route] ${d.registrationNumber} (Device: ${d.gpsDeviceId}) | UUID: ${d.supabaseUuid} | Firebase Doc: ${d.firebaseDocId} | Coords: ${d.currentCoords} | Records: ${d.todayTelemetryCount} | Valid: ${d.validGpsCount} | Rejected: ${d.rejectedGpsCount} | Segments: ${d.routeSegmentsCount} (>=2 pts: ${d.segmentsGte2Points}) | Status: ${d.polylineRenderedStatus} | Reason: ${d.reason}`,
-      );
-    });
-    console.groupEnd();
-  }
-
   if (typeof window !== "undefined") {
     (window as any).__NANJIL_ROUTE_DIAGNOSTICS__ = diagList;
+    if ((window as any).__DEBUG_FLEET_ROUTES__ && typeof console !== "undefined" && console.groupCollapsed) {
+      console.groupCollapsed(
+        "%c[Nanjil Fleet] 7-Vehicle Today GPS Route Diagnostics",
+        "color: #0284c7; font-weight: bold; font-size: 11px;",
+      );
+      if (console.table) {
+        console.table(diagList);
+      }
+      diagList.forEach((d) => {
+        console.log(
+          `[Vehicle Route] ${d.registrationNumber} (Device: ${d.gpsDeviceId}) | UUID: ${d.supabaseUuid} | Firebase Doc: ${d.firebaseDocId} | Coords: ${d.currentCoords} | Records: ${d.todayTelemetryCount} | Valid: ${d.validGpsCount} | Rejected: ${d.rejectedGpsCount} | Segments: ${d.routeSegmentsCount} (>=2 pts: ${d.segmentsGte2Points}) | Status: ${d.polylineRenderedStatus} | Reason: ${d.reason}`,
+        );
+      });
+      console.groupEnd();
+    }
   }
 
   return diagList;
@@ -188,26 +188,84 @@ export function anchorPointsToNanjilPlant(points: GpsPoint[]): GpsPoint[] {
 }
 
 /**
+ * In-memory cache for computed road-following plant connectors.
+ * Avoids redundant network round-trips for identical start coordinates.
+ */
+const plantConnectorCache = new Map<string, LatLngPoint[]>();
+
+/**
+ * Computes an estimated road connector between Nanjil Dairy Plant and the vehicle's earliest GPS location.
+ * If the vehicle's first GPS record is already within 150m of the plant, no connector is needed.
+ * If the first GPS record is far away, an estimated road connector is generated separately (dashed line).
+ * Under NO circumstances is this connector included in actual travelled distance or odometer!
+ */
+export async function buildPlantConnector(
+  firstPoint?: { lat: number; lng: number } | null,
+): Promise<LatLngPoint[] | null> {
+  if (!firstPoint || !isFleetOperatingCoordinate(firstPoint.lat, firstPoint.lng)) {
+    return null;
+  }
+
+  const distKm = haversineDistanceKm(
+    NANJIL_DAIRY_DEPOT.lat,
+    NANJIL_DAIRY_DEPOT.lng,
+    firstPoint.lat,
+    firstPoint.lng,
+  );
+
+  // If vehicle already started at the plant (<150 meters), no connector is needed!
+  if (distKm < 0.15) {
+    return null;
+  }
+
+  const cacheKey = `${firstPoint.lat.toFixed(4)}_${firstPoint.lng.toFixed(4)}`;
+  if (plantConnectorCache.has(cacheKey)) {
+    return plantConnectorCache.get(cacheKey)!;
+  }
+
+  try {
+    const roadRes = await calculateRoadRoute([
+      NANJIL_DAIRY_DEPOT,
+      { lat: firstPoint.lat, lng: firstPoint.lng },
+    ]);
+
+    if (roadRes.coordinates && roadRes.coordinates.length >= 2) {
+      const roadPts: LatLngPoint[] = roadRes.coordinates.map(([lng, lat]) => ({ lat, lng }));
+      plantConnectorCache.set(cacheKey, roadPts);
+      return roadPts;
+    }
+  } catch (err) {
+    // Graceful fallback on network/API failure
+  }
+
+  const fallback: LatLngPoint[] = [
+    { lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng },
+    { lat: firstPoint.lat, lng: firstPoint.lng },
+  ];
+  plantConnectorCache.set(cacheKey, fallback);
+  return fallback;
+}
+
+/**
  * Filter and segment time-series GPS points for today:
- * 1. Filter out coordinates outside the fleet operating geofence or with corrupted longitudes (e.g. Africa artifacts).
- * 2. Optionally anchor the route to Nanjil Dairy Plant as the base location.
- * 3. Chronologically sort by timestamp.
- * 4. Reject teleport jumps (>200 km or implied speed >160 km/h).
- * 5. Filter consecutive stationary duplicate points (<2 meters apart).
- * 6. Break the polyline across signal gaps (>15 minutes) into separate segments.
+ * 1. Filter out coordinates outside the fleet operating geofence or with corrupted longitudes.
+ * 2. Chronologically sort by timestamp.
+ * 3. Reject teleport jumps (>200 km or implied speed >160 km/h).
+ * 4. Filter consecutive stationary duplicate points (<2 meters apart).
+ * 5. Break the polyline across signal gaps (>15 minutes) into separate segments.
+ *
+ * NOTE: Never inserts artificial coordinates into authentic GPS history!
  */
 export function processRawGpsPoints(
   points: GpsPoint[],
   maxGapMinutes = 15,
-  anchorToDepot = false,
+  _deprecatedAnchor = false,
 ): VehicleRouteSegments {
   if (!points || points.length === 0) return [];
 
-  const sourcePoints = anchorToDepot ? anchorPointsToNanjilPlant(points) : points;
-
   // Filter out any points that are not valid fleet operating coordinates
   // (eliminates hardware truncation glitches like West Africa / Gulf of Guinea)
-  const validFleetPoints = sourcePoints.filter(
+  const validFleetPoints = points.filter(
     (pt) => pt && isFleetOperatingCoordinate(pt.lat, pt.lng),
   );
   if (validFleetPoints.length === 0) return [];
@@ -242,8 +300,8 @@ export function processRawGpsPoints(
       // Duplicate stationary filter: omit consecutive points within 2 meters
       if (distKm < 0.002) continue;
 
-      // Signal gap splitting: if gap > 15 minutes, break into separate segment (except when connecting from plant origin)
-      if (timeDiffSec > maxGapMinutes * 60 && !String(prevValid.id || "").includes("plant-origin")) {
+      // Signal gap splitting: if gap > 15 minutes, break into separate segment
+      if (timeDiffSec > maxGapMinutes * 60) {
         if (currentSegment.length > 0) {
           segments.push(currentSegment);
         }
@@ -324,6 +382,7 @@ export function mergeAndDeduplicatePoints(
 
 export interface UseTodayTravelledRoutesReturn {
   routes: TodayRoutesMap;
+  plantConnectors: TodayRoutesMap;
   tripStartTimes: Record<string, string>;
   routeDistances: Record<string, number>;
   isLoading: boolean;
@@ -333,10 +392,11 @@ export interface UseTodayTravelledRoutesReturn {
 /**
  * useTodayTravelledRoutes — Hook to fetch and maintain today's actual GPS travelled route
  * for all vehicles in Live Tracking with real-time incremental extension.
- * Anchors all travelled routes to Nanjil Dairy Plant as the base location.
+ * Keeps Nanjil Dairy Plant as the base location marker, with optional road connector.
  */
 export function useTodayTravelledRoutes(vehicles: Vehicle[]): UseTodayTravelledRoutesReturn {
   const [routes, setRoutes] = useState<TodayRoutesMap>({});
+  const [plantConnectors, setPlantConnectors] = useState<TodayRoutesMap>({});
   const [tripStartTimes, setTripStartTimes] = useState<Record<string, string>>({});
   const [routeDistances, setRouteDistances] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -441,7 +501,7 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]): UseTodayTravelledR
       existingPoints.push(newPoint);
       rawPointsMapRef.current.set(targetKey, existingPoints);
 
-      const updatedSegments = processRawGpsPoints(existingPoints, 15, true);
+      const updatedSegments = processRawGpsPoints(existingPoints, 15);
 
       let distKm = 0;
       updatedSegments.forEach((seg) => {
@@ -450,6 +510,29 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]): UseTodayTravelledR
         }
       });
       const roundedDist = Math.round(distKm * 10) / 10;
+
+      // Check if plant connector should be computed (only if first point is far from plant)
+      if (existingPoints.length > 0) {
+        const firstPt = existingPoints[0];
+        const distFromPlantKm = haversineDistanceKm(
+          NANJIL_DAIRY_DEPOT.lat,
+          NANJIL_DAIRY_DEPOT.lng,
+          firstPt.lat,
+          firstPt.lng,
+        );
+        if (distFromPlantKm >= 0.15) {
+          buildPlantConnector(firstPt).then((conn) => {
+            if (conn && conn.length >= 2) {
+              setPlantConnectors((prev) => ({
+                ...prev,
+                [targetKey]: [conn],
+                ...(uuid ? { [uuid]: [conn] } : {}),
+                ...(devId ? { [devId]: [conn], [`device_${devId}`]: [conn] } : {}),
+              }));
+            }
+          });
+        }
+      }
 
       setRouteDistances((prev) => ({
         ...prev,
@@ -551,8 +634,8 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]): UseTodayTravelledR
               rawPointsMapRef.current.set(`device_${devId}`, mergedPoints);
             }
 
-            // Anchor travelled route to Nanjil Dairy Plant
-            const segments = processRawGpsPoints(mergedPoints, 15, true);
+            // Process authentic GPS telemetry without artificial depot prepending
+            const segments = processRawGpsPoints(mergedPoints, 15);
 
             // Hydrate the authoritative GPS speed tracker with today's telemetry points
             if (mergedPoints.length >= 2) {
@@ -566,6 +649,28 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]): UseTodayTravelledR
             if (devId) {
               nextRoutes[devId] = segments;
               nextRoutes[`device_${devId}`] = segments;
+            }
+
+            // Check if estimated plant connector should be generated (only when first GPS ping is far from plant)
+            if (mergedPoints.length > 0) {
+              const firstPt = mergedPoints[0];
+              const distFromPlantKm = haversineDistanceKm(
+                NANJIL_DAIRY_DEPOT.lat,
+                NANJIL_DAIRY_DEPOT.lng,
+                firstPt.lat,
+                firstPt.lng,
+              );
+              if (distFromPlantKm >= 0.15) {
+                buildPlantConnector(firstPt).then((conn) => {
+                  if (conn && conn.length >= 2) {
+                    setPlantConnectors((prev) => ({
+                      ...prev,
+                      [uuid]: [conn],
+                      ...(devId ? { [devId]: [conn], [`device_${devId}`]: [conn] } : {}),
+                    }));
+                  }
+                });
+              }
             }
 
             // Record earliest trip start time and total distance
@@ -766,6 +871,7 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]): UseTodayTravelledR
 
   return {
     routes,
+    plantConnectors,
     tripStartTimes,
     routeDistances,
     isLoading,

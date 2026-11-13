@@ -12,6 +12,7 @@ import {
   normalizeDeviceId,
   printFleetRouteDiagnostics,
   anchorPointsToNanjilPlant,
+  buildPlantConnector,
   NANJIL_DAIRY_DEPOT,
 } from "../src/hooks/useTodayTravelledRoutes.ts";
 
@@ -377,29 +378,43 @@ test("17. Nanjil Dairy Plant Base Location: Verified Depot Coordinates and Name"
   assert.equal(isFleetOperatingCoordinate(NANJIL_DAIRY_DEPOT.lat, NANJIL_DAIRY_DEPOT.lng), true);
 });
 
-test("18. Plant-Based Route Origin: anchorPointsToNanjilPlant Prepend Depot Coordinates", () => {
+test("18. No Artificial GPS Anchoring: processRawGpsPoints Preserves Authentic Telemetry", () => {
   // Vehicle points recorded away from the plant (e.g. out on route)
   const remotePoints = [
     { id: "p1", lat: 8.5177, lng: 77.8580, speed: 20, recorded_at: "2026-11-13T05:00:00Z" },
     { id: "p2", lat: 8.5200, lng: 77.8600, speed: 25, recorded_at: "2026-11-13T05:05:00Z" },
   ];
 
-  const anchored = anchorPointsToNanjilPlant(remotePoints);
-  assert.equal(anchored.length, 3, "Must prepend depot to remote points");
-  assert.equal(anchored[0].lat, NANJIL_DAIRY_DEPOT.lat);
-  assert.equal(anchored[0].lng, NANJIL_DAIRY_DEPOT.lng);
-  assert.equal(anchored[1].lat, 8.5177);
-  assert.equal(anchored[2].lat, 8.5200);
-
-  // When processed into segments with anchorToDepot = true
-  const segments = processRawGpsPoints(remotePoints, 15, true);
+  // Authentic GPS route MUST NOT prepend depot coordinates or create straight-line connection
+  const segments = processRawGpsPoints(remotePoints, 15);
   assert.equal(segments.length, 1);
-  assert.equal(segments[0][0].lat, NANJIL_DAIRY_DEPOT.lat);
-  assert.equal(segments[0][0].lng, NANJIL_DAIRY_DEPOT.lng);
-  assert.equal(segments[0][segments[0].length - 1].lat, 8.5200);
+  assert.equal(segments[0].length, 2, "Must contain exactly the authentic GPS points");
+  assert.equal(segments[0][0].lat, 8.5177);
+  assert.equal(segments[0][0].lng, 77.8580);
+  assert.equal(segments[0][1].lat, 8.5200);
+  assert.equal(segments[0][1].lng, 77.8600);
+  assert.notEqual(segments[0][0].lat, NANJIL_DAIRY_DEPOT.lat);
 });
 
-test("19. Individual Vehicle Tracking: Selected Vehicle Highlighting vs Dimmed Unselected Routes", () => {
+test("19. Plant Road Connector: Separately Generated When Vehicle Origin Is Away from Plant", async () => {
+  // Vehicle whose first point is at the plant (<150m away)
+  const atPlantPoint = { lat: 8.2608, lng: 77.2884 };
+  const nullConnector = await buildPlantConnector(atPlantPoint);
+  assert.equal(nullConnector, null, "Vehicle already at plant must not have an artificial connector");
+
+  // Vehicle whose first point is remote (away from plant)
+  const remotePoint = { lat: 8.5177, lng: 77.8580 };
+  const connector = await buildPlantConnector(remotePoint);
+  assert.ok(connector != null, "Must generate connector when remote");
+  assert.ok(connector.length >= 2, "Connector must have at least 2 points");
+  assert.equal(connector[0].lat, NANJIL_DAIRY_DEPOT.lat);
+  assert.equal(connector[0].lng, NANJIL_DAIRY_DEPOT.lng);
+  const lastConnPt = connector[connector.length - 1];
+  assert.equal(lastConnPt.lat, remotePoint.lat);
+  assert.equal(lastConnPt.lng, remotePoint.lng);
+});
+
+test("20. Individual Vehicle Tracking: Selected Vehicle Highlighting vs Dimmed Unselected Routes", () => {
   const selectedVehicleRouteProps = {
     strokeColor: "#DC2626",
     strokeWeight: 5.5,
@@ -429,7 +444,7 @@ test("19. Individual Vehicle Tracking: Selected Vehicle Highlighting vs Dimmed U
   assert.equal(unselectedVehicleRouteProps.strokeOpacity, 0.22);
 });
 
-test("20. Real-Time Extension: Appending New Valid Point Without Route Replacement", () => {
+test("21. Real-Time Extension: Appending New Valid Point Without Route Replacement", () => {
   const existing = [
     { id: "1", lat: 8.260765, lng: 77.288373, speed: 0, recorded_at: "2026-11-13T04:00:00Z" },
     { id: "2", lat: 8.270000, lng: 77.290000, speed: 30, recorded_at: "2026-11-13T04:05:00Z" },
@@ -445,12 +460,40 @@ test("20. Real-Time Extension: Appending New Valid Point Without Route Replaceme
 
   const merged = mergeAndDeduplicatePoints(existing, [newGpsPoint]);
   assert.equal(merged.length, 3, "New GPS point must be appended to historical route");
-  assert.equal(merged[0].lat, 8.260765, "Depot origin must remain intact");
+  assert.equal(merged[0].lat, 8.260765);
   assert.equal(merged[2].lat, 8.275000, "Latest location must be at route tip");
 
-  const segments = processRawGpsPoints(merged, 15, true);
+  const segments = processRawGpsPoints(merged, 15);
   assert.equal(segments.length, 1);
   assert.equal(segments[0].length, 3);
+});
+
+test("22. Strict Odometer Integrity: Zero Artificial Connector Distance in Odometer Calculations", () => {
+  // 2 authentic points 1.0 km apart
+  const actualPoints = [
+    { id: "1", lat: 8.5177, lng: 77.8580, speed: 30, recorded_at: "2026-11-13T05:00:00Z" },
+    { id: "2", lat: 8.5200, lng: 77.8600, speed: 30, recorded_at: "2026-11-13T05:02:00Z" },
+  ];
+
+  const segments = processRawGpsPoints(actualPoints, 15);
+  let actualGpsDistance = 0;
+  segments.forEach((seg) => {
+    for (let i = 0; i < seg.length - 1; i++) {
+      actualGpsDistance += haversineDistanceKm(seg[i].lat, seg[i].lng, seg[i + 1].lat, seg[i + 1].lng);
+    }
+  });
+
+  // Calculate distance including straight depot jump (which was the bug!)
+  const buggyJumpDist = haversineDistanceKm(
+    NANJIL_DAIRY_DEPOT.lat,
+    NANJIL_DAIRY_DEPOT.lng,
+    actualPoints[0].lat,
+    actualPoints[0].lng,
+  );
+
+  // The actual GPS distance must be < 1.0 km, NOT 60+ km from depot!
+  assert.ok(actualGpsDistance < 1.0, `Actual distance should be <1km, got ${actualGpsDistance}`);
+  assert.ok(buggyJumpDist > 50.0, "Depot distance jump is huge and must NEVER be in route distance");
 });
 
 
