@@ -23,7 +23,10 @@ import {
   GOOGLE_MAPS_API_KEY,
   getVehicleStatusColor,
   getVehicleRegistrationNumber,
+  isValidFleetCoord,
 } from "./mapConstants";
+
+export { isValidFleetCoord };
 
 export interface GoogleVehicleMapProps {
   vehicles: Vehicle[];
@@ -173,8 +176,7 @@ export function GoogleVehicleMap({
   const mappedVehicles = useMemo(() => {
     return vehicles.filter(
       (v) =>
-        v.lat != null &&
-        v.lng != null &&
+        isValidFleetCoord({ lat: v.lat, lng: v.lng }) &&
         isFleetOperatingCoordinate(v.lat, v.lng),
     );
   }, [vehicles]);
@@ -182,101 +184,156 @@ export function GoogleVehicleMap({
   const initialCenter = useMemo(() => {
     if (selectedId) {
       const v = mappedVehicles.find((x) => x.id === selectedId);
-      if (v) return { lat: v.lat, lng: v.lng };
+      if (v && isValidFleetCoord({ lat: v.lat, lng: v.lng })) {
+        return { lat: Number(v.lat), lng: Number(v.lng) };
+      }
     }
-    if (mappedVehicles.length) {
-      const lat = mappedVehicles.reduce((s, v) => s + v.lat, 0) / mappedVehicles.length;
-      const lng = mappedVehicles.reduce((s, v) => s + v.lng, 0) / mappedVehicles.length;
-      return { lat, lng };
+    if (mappedVehicles.length > 0) {
+      const valid = mappedVehicles.filter((v) => isValidFleetCoord({ lat: v.lat, lng: v.lng }));
+      if (valid.length > 0) {
+        const lat = valid.reduce((s, v) => s + Number(v.lat), 0) / valid.length;
+        const lng = valid.reduce((s, v) => s + Number(v.lng), 0) / valid.length;
+        if (isValidFleetCoord({ lat, lng })) return { lat, lng };
+      }
     }
     return DEFAULT_MAP_CENTER;
   }, [mappedVehicles, selectedId]);
 
+  // Keep track of the active selection so camera auto-fit only runs when selection changes,
+  // preventing zoom-out reset on real-time GPS telemetry updates or popup open/close
+  const lastHandledSelectionRef = useRef<string | null>(null);
+
   // Handle selectedId camera fitBounds & auto-centering
   useEffect(() => {
-    if (selectedId && map) {
-      const match = vehicles.find((v) => v.id === selectedId || v.deviceId === selectedId);
-      if (match) {
-        setActive(match);
+    if (!map) return;
 
-        const cleanDev = match.deviceId ? match.deviceId.replace(/^device_/, "") : undefined;
-        const segs =
-          todayRoutes?.[match.id] ||
-          (match.deviceId ? todayRoutes?.[match.deviceId] : undefined) ||
-          (cleanDev ? todayRoutes?.[cleanDev] : undefined) ||
-          (cleanDev ? todayRoutes?.[`device_${cleanDev}`] : undefined) ||
-          (cleanDev && KNOWN_NANJIL_DEVICE_MAP[cleanDev] ? todayRoutes?.[KNOWN_NANJIL_DEVICE_MAP[cleanDev].id] : undefined);
+    // When selection is cleared, reset the tracked ref and do not zoom out
+    if (!selectedId) {
+      lastHandledSelectionRef.current = null;
+      return;
+    }
 
-        const connPts =
-          directionsConnectors[match.id] ||
-          (match.deviceId ? directionsConnectors[match.deviceId] : undefined) ||
-          (cleanDev ? directionsConnectors[cleanDev] : undefined) ||
-          plantConnectors?.[match.id]?.[0] ||
-          (match.deviceId ? plantConnectors?.[match.deviceId]?.[0] : undefined) ||
-          (cleanDev ? plantConnectors?.[cleanDev]?.[0] : undefined);
+    // Guard: Only adjust camera when selectedId actually changes
+    if (lastHandledSelectionRef.current === selectedId) {
+      return;
+    }
+    lastHandledSelectionRef.current = selectedId;
 
-        // Build LatLngBounds to encompass Nanjil Plant, vehicle destination, and all road points
-        if (typeof google !== "undefined" && google.maps && google.maps.LatLngBounds) {
-          const bounds = new google.maps.LatLngBounds();
-          let pointCount = 0;
+    const match = vehicles.find((v) => v.id === selectedId || v.deviceId === selectedId);
+    if (!match) return;
 
-          // 1. Nanjil Dairy Plant Base Location
-          bounds.extend(NANJIL_DAIRY_DEPOT);
-          pointCount++;
+    setActive(match);
 
-          // 2. Vehicle destination / live coordinate
-          if (match.lat != null && match.lng != null && isFleetOperatingCoordinate(match.lat, match.lng)) {
-            bounds.extend({ lat: match.lat, lng: match.lng });
-            pointCount++;
-          }
+    const cleanDev = match.deviceId ? match.deviceId.replace(/^device_/, "") : undefined;
+    const segs =
+      todayRoutes?.[match.id] ||
+      (match.deviceId ? todayRoutes?.[match.deviceId] : undefined) ||
+      (cleanDev ? todayRoutes?.[cleanDev] : undefined) ||
+      (cleanDev ? todayRoutes?.[`device_${cleanDev}`] : undefined) ||
+      (cleanDev && KNOWN_NANJIL_DEVICE_MAP[cleanDev] ? todayRoutes?.[KNOWN_NANJIL_DEVICE_MAP[cleanDev].id] : undefined);
 
-          // 3. Travelled GPS Route points
-          if (segs && Array.isArray(segs)) {
-            segs.forEach((seg) => {
-              if (Array.isArray(seg)) {
-                seg.forEach((pt) => {
-                  if (isFleetOperatingCoordinate(pt.lat, pt.lng)) {
-                    bounds.extend(pt);
-                    pointCount++;
-                  }
-                });
-              }
-            });
-          }
+    const connPts =
+      directionsConnectors[match.id] ||
+      (match.deviceId ? directionsConnectors[match.deviceId] : undefined) ||
+      (cleanDev ? directionsConnectors[cleanDev] : undefined) ||
+      plantConnectors?.[match.id]?.[0] ||
+      (match.deviceId ? plantConnectors?.[match.deviceId]?.[0] : undefined) ||
+      (cleanDev ? plantConnectors?.[cleanDev]?.[0] : undefined);
 
-          // 4. Plant connector points
-          if (connPts && Array.isArray(connPts)) {
-            connPts.forEach((pt) => {
-              if (isFleetOperatingCoordinate(pt.lat, pt.lng)) {
-                bounds.extend(pt);
-                pointCount++;
-              }
-            });
-          }
+    // Collect valid coordinates strictly per requirements:
+    // 1. Include selected vehicle's current position
+    // 2. Include selected vehicle's valid route points
+    // 3. Include Nanjil Dairy Plant ONLY when displaying its relevant connector
+    // 4. Exclude unrelated vehicles and invalid GPS points
+    const validPoints: Array<{ lat: number; lng: number }> = [];
 
-          if (pointCount > 0) {
-            const ne = bounds.getNorthEast();
-            const sw = bounds.getSouthWest();
-            const spanLat = Math.abs(ne.lat() - sw.lat());
-            const spanLng = Math.abs(ne.lng() - sw.lng());
+    // 1. Current position
+    if (isValidFleetCoord({ lat: match.lat, lng: match.lng })) {
+      validPoints.push({ lat: Number(match.lat), lng: Number(match.lng) });
+    }
 
-            // If bounds is tiny (e.g. vehicle parked at the plant depot), center with zoom 15
-            if (spanLat < 0.005 && spanLng < 0.005) {
-              const centerPt =
-                match.lat != null && isFleetOperatingCoordinate(match.lat, match.lng)
-                  ? { lat: match.lat, lng: match.lng }
-                  : NANJIL_DAIRY_DEPOT;
-              map.panTo(centerPt);
-              map.setZoom(15);
-            } else {
-              map.fitBounds(bounds, { top: 70, right: 70, bottom: 70, left: 70 });
+    // 2. Travelled route points
+    if (segs && Array.isArray(segs)) {
+      segs.forEach((seg) => {
+        if (Array.isArray(seg)) {
+          seg.forEach((pt) => {
+            if (isValidFleetCoord(pt)) {
+              validPoints.push({ lat: Number(pt.lat), lng: Number(pt.lng) });
             }
-          }
-        } else if (match.lat != null && match.lng != null && isFleetOperatingCoordinate(match.lat, match.lng)) {
-          map.panTo({ lat: match.lat, lng: match.lng });
-          map.setZoom(14);
+          });
         }
+      });
+    }
+
+    // 3. Include Nanjil Dairy Plant and connector points ONLY when displaying its relevant connector
+    const hasValidConnector = Boolean(connPts && Array.isArray(connPts) && connPts.length >= 2);
+    if (hasValidConnector) {
+      if (isValidFleetCoord(NANJIL_DAIRY_DEPOT)) {
+        validPoints.push(NANJIL_DAIRY_DEPOT);
       }
+      connPts.forEach((pt) => {
+        if (isValidFleetCoord(pt)) {
+          validPoints.push({ lat: Number(pt.lat), lng: Number(pt.lng) });
+        }
+      });
+    }
+
+    // Case A: No valid points at all -> center on Nanjil Dairy Depot
+    if (validPoints.length === 0) {
+      map.setCenter(NANJIL_DAIRY_DEPOT);
+      map.setZoom(14);
+      return;
+    }
+
+    // Case B: If only one valid location exists, use setCenter() and an appropriate zoom level instead of fitBounds()
+    if (validPoints.length === 1) {
+      map.setCenter(validPoints[0]);
+      map.setZoom(15);
+      return;
+    }
+
+    // Case C: Multiple points exist -> calculate bounding box span
+    let minLat = validPoints[0].lat;
+    let maxLat = validPoints[0].lat;
+    let minLng = validPoints[0].lng;
+    let maxLng = validPoints[0].lng;
+
+    for (let i = 1; i < validPoints.length; i++) {
+      const p = validPoints[i];
+      if (p.lat < minLat) minLat = p.lat;
+      if (p.lat > maxLat) maxLat = p.lat;
+      if (p.lng < minLng) minLng = p.lng;
+      if (p.lng > maxLng) maxLng = p.lng;
+    }
+
+    const spanLat = maxLat - minLat;
+    const spanLng = maxLng - minLng;
+
+    // If span is minuscule (< ~200 meters, e.g. vehicle stationary at yard), center with zoom 15 instead of fitBounds()
+    if (spanLat < 0.002 && spanLng < 0.002) {
+      map.setCenter({ lat: (minLat + maxLat) / 2, lng: (minLng + maxLng) / 2 });
+      map.setZoom(15);
+      return;
+    }
+
+    // Multiple points with distinct spatial span -> safely fitBounds
+    if (typeof google !== "undefined" && google.maps && google.maps.LatLngBounds) {
+      const bounds = new google.maps.LatLngBounds();
+      validPoints.forEach((pt) => bounds.extend(pt));
+
+      map.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
+
+      // Add one-time idle listener to clamp zoom within regional limits (10 to 15)
+      const listener = google.maps.event.addListenerOnce(map, "idle", () => {
+        const currentZoom = map.getZoom();
+        if (currentZoom !== undefined) {
+          if (currentZoom < 10) map.setZoom(10);
+          if (currentZoom > 16) map.setZoom(15);
+        }
+      });
+    } else {
+      map.setCenter(validPoints[0]);
+      map.setZoom(14);
     }
   }, [selectedId, vehicles, map, todayRoutes, plantConnectors, directionsConnectors]);
 
@@ -371,7 +428,7 @@ export function GoogleVehicleMap({
 
         segments.forEach((seg, sIdx) => {
           if (seg && seg.length >= 2) {
-            const cleanSeg = seg.filter((p) => isFleetOperatingCoordinate(p.lat, p.lng));
+            const cleanSeg = seg.filter((p) => isValidFleetCoord(p) && isFleetOperatingCoordinate(p.lat, p.lng));
             if (cleanSeg.length >= 2) {
               list.push({
                 key: `today-route-${v.id}-${sIdx}`,
@@ -392,7 +449,7 @@ export function GoogleVehicleMap({
 
         segments.forEach((seg, sIdx) => {
           if (seg && seg.length >= 2) {
-            const cleanSeg = seg.filter((p) => isFleetOperatingCoordinate(p.lat, p.lng));
+            const cleanSeg = seg.filter((p) => isValidFleetCoord(p) && isFleetOperatingCoordinate(p.lat, p.lng));
             if (cleanSeg.length >= 2) {
               list.push({
                 key: `today-route-unmatched-${key}-${sIdx}`,
@@ -405,7 +462,7 @@ export function GoogleVehicleMap({
       });
     } else if (routeHistory && routeHistory.length >= 2) {
       // 2. Fallback to routeHistory for single-vehicle profiles / backward compatibility
-      const cleanHistory = routeHistory.filter((p) => isFleetOperatingCoordinate(p.lat, p.lng));
+      const cleanHistory = routeHistory.filter((p) => isValidFleetCoord(p) && isFleetOperatingCoordinate(p.lat, p.lng));
       if (cleanHistory.length >= 2) {
         list.push({
           key: "legacy-route-history",
@@ -470,11 +527,14 @@ export function GoogleVehicleMap({
 
       segments.forEach((seg, sIdx) => {
         if (seg && seg.length >= 2) {
-          list.push({
-            key: `plant-conn-${v.id}-${sIdx}`,
-            path: seg,
-            isSelected: Boolean(isSelected),
-          });
+          const cleanSeg = seg.filter((p) => isValidFleetCoord(p) && isFleetOperatingCoordinate(p.lat, p.lng));
+          if (cleanSeg.length >= 2) {
+            list.push({
+              key: `plant-conn-${v.id}-${sIdx}`,
+              path: cleanSeg,
+              isSelected: Boolean(isSelected),
+            });
+          }
         }
       });
     });
@@ -493,11 +553,14 @@ export function GoogleVehicleMap({
       const isSelected = key === selectedId || (active && (active.id === key || active.deviceId === key));
       segments.forEach((seg, sIdx) => {
         if (seg && seg.length >= 2) {
-          list.push({
-            key: `plant-conn-orphan-${key}-${sIdx}`,
-            path: seg,
-            isSelected: Boolean(isSelected),
-          });
+          const cleanSeg = seg.filter((p) => isValidFleetCoord(p) && isFleetOperatingCoordinate(p.lat, p.lng));
+          if (cleanSeg.length >= 2) {
+            list.push({
+              key: `plant-conn-orphan-${key}-${sIdx}`,
+              path: cleanSeg,
+              isSelected: Boolean(isSelected),
+            });
+          }
         }
       });
     });
@@ -515,6 +578,8 @@ export function GoogleVehicleMap({
       <Map
         defaultCenter={initialCenter}
         defaultZoom={DEFAULT_MAP_ZOOM}
+        minZoom={9}
+        maxZoom={18}
         mapId={GOOGLE_MAPS_MAP_ID}
         gestureHandling="greedy"
         disableDefaultUI={false}
