@@ -5,7 +5,6 @@ import {
   InfoWindow,
   Polyline,
   useMap,
-  useMapsLibrary,
 } from "@vis.gl/react-google-maps";
 import type { Vehicle } from "@/lib/types";
 import { Truck, Navigation, MapPin, AlertTriangle, Factory, Route as RouteIcon } from "lucide-react";
@@ -55,56 +54,9 @@ export function GoogleVehicleMap({
 }: GoogleVehicleMapProps) {
   const map = useMap();
 
-  // Google Maps Routes library for DirectionsService
-  const routesLib = useMapsLibrary("routes");
-  const [directionsConnectors, setDirectionsConnectors] = useState<Record<string, Array<{ lat: number; lng: number }>>>({});
-  const inFlightDirectionsRef = useRef<Set<string>>(new Set());
-
   const [active, setActive] = useState<Vehicle | null>(
     selectedId ? (vehicles.find((v) => v.id === selectedId) ?? null) : null,
   );
-
-  // Dynamically enhance plant connectors using Google Maps DirectionsService
-  useEffect(() => {
-    if (!routesLib || !plantConnectors) return;
-
-    const ds = new routesLib.DirectionsService();
-
-    Object.entries(plantConnectors).forEach(([key, segments]) => {
-      if (!segments || segments.length === 0) return;
-      const firstSeg = segments[0];
-      if (!firstSeg || firstSeg.length < 2) return;
-
-      // If connector already has >= 5 points (road-following) or is already fetched/in-flight, skip
-      if (firstSeg.length >= 5 || directionsConnectors[key] || inFlightDirectionsRef.current.has(key)) return;
-
-      const dest = firstSeg[firstSeg.length - 1];
-      if (!isFleetOperatingCoordinate(dest.lat, dest.lng)) return;
-
-      inFlightDirectionsRef.current.add(key);
-
-      ds.route(
-        {
-          origin: new google.maps.LatLng(NANJIL_DAIRY_DEPOT.lat, NANJIL_DAIRY_DEPOT.lng),
-          destination: new google.maps.LatLng(dest.lat, dest.lng),
-          travelMode: google.maps.TravelMode.DRIVING,
-        },
-        (result, status) => {
-          inFlightDirectionsRef.current.delete(key);
-          if (status === google.maps.DirectionsStatus.OK && result?.routes?.[0]?.overview_path) {
-            const roadPts = result.routes[0].overview_path.map((p) => ({
-              lat: p.lat(),
-              lng: p.lng(),
-            }));
-            setDirectionsConnectors((prev) => ({
-              ...prev,
-              [key]: roadPts,
-            }));
-          }
-        },
-      );
-    });
-  }, [routesLib, plantConnectors, directionsConnectors]);
 
   // Synchronize active vehicle selection whenever selectedId changes externally
   useEffect(() => {
@@ -233,9 +185,6 @@ export function GoogleVehicleMap({
       (cleanDev && KNOWN_NANJIL_DEVICE_MAP[cleanDev] ? todayRoutes?.[KNOWN_NANJIL_DEVICE_MAP[cleanDev].id] : undefined);
 
     const connPts =
-      directionsConnectors[match.id] ||
-      (match.deviceId ? directionsConnectors[match.deviceId] : undefined) ||
-      (cleanDev ? directionsConnectors[cleanDev] : undefined) ||
       plantConnectors?.[match.id]?.[0] ||
       (match.deviceId ? plantConnectors?.[match.deviceId]?.[0] : undefined) ||
       (cleanDev ? plantConnectors?.[cleanDev]?.[0] : undefined);
@@ -335,7 +284,7 @@ export function GoogleVehicleMap({
       map.setCenter(validPoints[0]);
       map.setZoom(14);
     }
-  }, [selectedId, vehicles, map, todayRoutes, plantConnectors, directionsConnectors]);
+  }, [selectedId, vehicles, map, todayRoutes, plantConnectors]);
 
   // Check whether the active / selected vehicle has a valid today route
   const activeHasRoute = useMemo(() => {
@@ -482,7 +431,7 @@ export function GoogleVehicleMap({
 
   // Prepare Estimated Plant Connectors (Dashed Orange Polyline, #F59E0B)
   const renderedConnectors = useMemo(() => {
-    if ((!plantConnectors || Object.keys(plantConnectors).length === 0) && Object.keys(directionsConnectors).length === 0) return [];
+    if (!plantConnectors || Object.keys(plantConnectors).length === 0) return [];
 
     const list: Array<{
       key: string;
@@ -493,25 +442,17 @@ export function GoogleVehicleMap({
     const renderedKeys = new Set<string>();
 
     const getConnectorForVehicle = (v: Vehicle): Array<Array<{ lat: number; lng: number }>> | undefined => {
-      // 1. Prefer enhanced Google Directions road-following route
-      if (directionsConnectors[v.id] && directionsConnectors[v.id].length >= 2) return [directionsConnectors[v.id]];
-      if (v.deviceId && directionsConnectors[v.deviceId] && directionsConnectors[v.deviceId].length >= 2) return [directionsConnectors[v.deviceId]];
+      if (plantConnectors[v.id] && plantConnectors[v.id].length > 0) return plantConnectors[v.id];
+      if (v.deviceId && plantConnectors[v.deviceId] && plantConnectors[v.deviceId].length > 0) return plantConnectors[v.deviceId];
       const cleanDev = v.deviceId ? v.deviceId.replace(/^device_/, "") : undefined;
-      if (cleanDev && directionsConnectors[cleanDev] && directionsConnectors[cleanDev].length >= 2) return [directionsConnectors[cleanDev]];
-      if (cleanDev && directionsConnectors[`device_${cleanDev}`] && directionsConnectors[`device_${cleanDev}`].length >= 2) return [directionsConnectors[`device_${cleanDev}`]];
-
-      // 2. Fallback to plantConnectors prop
-      if (plantConnectors && plantConnectors[v.id] && plantConnectors[v.id].length > 0) return plantConnectors[v.id];
-      if (v.deviceId && plantConnectors && plantConnectors[v.deviceId] && plantConnectors[v.deviceId].length > 0) return plantConnectors[v.deviceId];
-      if (cleanDev && plantConnectors && plantConnectors[cleanDev] && plantConnectors[cleanDev].length > 0) return plantConnectors[cleanDev];
-      if (cleanDev && plantConnectors && plantConnectors[`device_${cleanDev}`] && plantConnectors[`device_${cleanDev}`].length > 0) return plantConnectors[`device_${cleanDev}`];
+      if (cleanDev && plantConnectors[cleanDev] && plantConnectors[cleanDev].length > 0) return plantConnectors[cleanDev];
+      if (cleanDev && plantConnectors[`device_${cleanDev}`] && plantConnectors[`device_${cleanDev}`].length > 0) return plantConnectors[`device_${cleanDev}`];
 
       const knownEntry = Object.entries(KNOWN_NANJIL_DEVICE_MAP).find(([, meta]) => meta.id === v.id);
       if (knownEntry) {
         const [kDevId] = knownEntry;
-        if (directionsConnectors[kDevId] && directionsConnectors[kDevId].length >= 2) return [directionsConnectors[kDevId]];
-        if (plantConnectors && plantConnectors[kDevId] && plantConnectors[kDevId].length > 0) return plantConnectors[kDevId];
-        if (plantConnectors && plantConnectors[`device_${kDevId}`] && plantConnectors[`device_${kDevId}`].length > 0) return plantConnectors[`device_${kDevId}`];
+        if (plantConnectors[kDevId] && plantConnectors[kDevId].length > 0) return plantConnectors[kDevId];
+        if (plantConnectors[`device_${kDevId}`] && plantConnectors[`device_${kDevId}`].length > 0) return plantConnectors[`device_${kDevId}`];
       }
 
       return undefined;
@@ -539,14 +480,7 @@ export function GoogleVehicleMap({
       });
     });
 
-    const allConnectorsMap = { ...(plantConnectors || {}) };
-    Object.entries(directionsConnectors).forEach(([k, pts]) => {
-      if (pts && pts.length >= 2) {
-        allConnectorsMap[k] = [pts];
-      }
-    });
-
-    Object.entries(allConnectorsMap).forEach(([key, segments]) => {
+    Object.entries(plantConnectors).forEach(([key, segments]) => {
       if (renderedKeys.has(key)) return;
       renderedKeys.add(key);
 
@@ -571,7 +505,7 @@ export function GoogleVehicleMap({
     }
 
     return list;
-  }, [plantConnectors, directionsConnectors, vehicles, selectedId, active]);
+  }, [plantConnectors, vehicles, selectedId, active]);
 
   return (
     <div className="relative rounded-lg overflow-hidden border border-border" style={{ height }}>
