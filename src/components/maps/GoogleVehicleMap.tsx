@@ -272,11 +272,11 @@ export function GoogleVehicleMap({
 
       map.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
 
-      // Add one-time idle listener to clamp zoom within regional limits (10 to 15)
+      // Add one-time idle listener to prevent auto-fit over/under-zooming
       const listener = google.maps.event.addListenerOnce(map, "idle", () => {
         const currentZoom = map.getZoom();
         if (currentZoom !== undefined) {
-          if (currentZoom < 10) map.setZoom(10);
+          if (currentZoom < 8) map.setZoom(8);
           if (currentZoom > 16) map.setZoom(15);
         }
       });
@@ -512,7 +512,6 @@ export function GoogleVehicleMap({
       <Map
         defaultCenter={initialCenter}
         defaultZoom={DEFAULT_MAP_ZOOM}
-        minZoom={9}
         maxZoom={18}
         mapId={GOOGLE_MAPS_MAP_ID}
         gestureHandling="greedy"
