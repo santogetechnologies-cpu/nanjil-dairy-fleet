@@ -811,6 +811,7 @@ test("20. Hardware Odometer Protection & GPS Non-Double-Counting", () => {
 });
 
 test("21. State Recovery & Reclassification: Rescues spurious hardware states from baseline", () => {
+  const todayStr = getTodayIstDateString();
   // Existing state in localStorage was classified as hardware because baseline odometer was passed
   const spuriousState = {
     vehicleId: "v21",
@@ -820,15 +821,15 @@ test("21. State Recovery & Reclassification: Rescues spurious hardware states fr
     currentSpeedKmh: 0,
     readingSource: "hardware", // spuriously classified
     isMoving: false,
-    lastUpdated: "2026-11-12T04:00:00Z",
-    todayDate: "2026-11-12",
+    lastUpdated: `${todayStr}T04:00:00Z`,
+    todayDate: todayStr,
     baselineOdometerKm: 14398.0,
     previousLatitude: 8.2600,
     previousLongitude: 77.2880,
-    previousGpsTimestamp: "2026-11-12T04:00:00Z",
+    previousGpsTimestamp: `${todayStr}T04:00:00Z`,
   };
 
-  const recovered = reconcileOdometerState(spuriousState, 14398.0, "2026-11-12");
+  const recovered = reconcileOdometerState(spuriousState, 14398.0, todayStr);
   assert.equal(recovered.readingSource, "gps_estimated", "Spurious hardware baseline must be restored to gps_estimated");
   assert.equal(recovered.totalOdometerKm, 14398.0);
   assert.equal(recovered.previousLatitude, 8.2600);
@@ -840,13 +841,14 @@ test("21. State Recovery & Reclassification: Rescues spurious hardware states fr
     lat: 8.2690,
     lng: 77.2880,
     speed: 30,
-    recordedAt: "2026-11-12T04:02:00Z",
+    recordedAt: `${todayStr}T04:02:00Z`,
   });
   assert.ok(moved.updatedState.totalOdometerKm >= 14398.99 && moved.updatedState.totalOdometerKm <= 14399.01);
   assert.equal(moved.updatedState.readingSource, "gps_estimated");
 });
 
 test("22. Database Resilience: Persists integer to vehicles.odometer and never calls missing tables", async () => {
+  const todayStr = getTodayIstDateString();
   const state = {
     vehicleId: "v-persist-1",
     deviceId: "863110086146753",
@@ -856,7 +858,7 @@ test("22. Database Resilience: Persists integer to vehicles.odometer and never c
     currentSpeedKmh: 15,
     readingSource: "gps_estimated",
     baselineOdometerKm: 14378.0,
-    todayDate: "2026-11-12",
+    todayDate: todayStr,
     isMoving: true,
   };
 
@@ -888,6 +890,7 @@ test("22. Database Resilience: Persists integer to vehicles.odometer and never c
 });
 
 test("23. Test 1: Vehicle Directory Odometer Edit (14,398 -> 15,000 km) Reflects in Live Tracking", () => {
+  const todayStr = getTodayIstDateString();
   // Existing vehicle state in Live Tracking
   const existingCached = {
     vehicleId: "v-sync-1",
@@ -898,18 +901,18 @@ test("23. Test 1: Vehicle Directory Odometer Edit (14,398 -> 15,000 km) Reflects
     currentSpeedKmh: 0,
     readingSource: "gps_estimated",
     baselineOdometerKm: 14398.0,
-    todayDate: "2026-11-12",
+    todayDate: todayStr,
     isMoving: false,
     previousLatitude: 8.2600,
     previousLongitude: 77.2880,
-    previousGpsTimestamp: "2026-11-12T04:00:00Z",
+    previousGpsTimestamp: `${todayStr}T04:00:00Z`,
   };
 
   // Administrator edits odometer in Vehicle Directory to 15,000 km (stored in Supabase vehicles.odometer)
   const newDatabaseOdometer = 15000.0;
 
   // Live Tracking reconciles with the updated database baseline
-  const reconciled = reconcileOdometerState(existingCached, newDatabaseOdometer, "2026-11-12");
+  const reconciled = reconcileOdometerState(existingCached, newDatabaseOdometer, todayStr);
 
   // Expected Live Tracking Map reading: 15,000.00 km (NOT 14,398 km, NOT 15,027.4 km)
   assert.equal(reconciled.baselineOdometerKm, 15000.0, "Baseline must update to 15,000 km");
@@ -920,6 +923,7 @@ test("23. Test 1: Vehicle Directory Odometer Edit (14,398 -> 15,000 km) Reflects
 });
 
 test("24. Test 2: Live Tracking Updates Instantly on Cross-Page Manual Edit Without Refresh", () => {
+  const todayStr = getTodayIstDateString();
   const currentState = {
     vehicleId: "v-sync-2",
     deviceId: "863110086146985",
@@ -929,7 +933,7 @@ test("24. Test 2: Live Tracking Updates Instantly on Cross-Page Manual Edit With
     currentSpeedKmh: 16,
     readingSource: "gps_estimated",
     baselineOdometerKm: 14398.0,
-    todayDate: "2026-11-12",
+    todayDate: todayStr,
     isMoving: true,
   };
 
@@ -944,6 +948,7 @@ test("24. Test 2: Live Tracking Updates Instantly on Cross-Page Manual Edit With
 });
 
 test("25. Test 3: GPS Accumulation Continues After Manual Edit (15,000.00 -> 15,000.25 -> 15,000.50 km)", () => {
+  const todayStr = getTodayIstDateString();
   let state = syncManualOdometerBaseline(
     {
       vehicleId: "v-sync-3",
@@ -954,11 +959,11 @@ test("25. Test 3: GPS Accumulation Continues After Manual Edit (15,000.00 -> 15,
       currentSpeedKmh: 20,
       readingSource: "gps_estimated",
       baselineOdometerKm: 14398.0,
-      todayDate: "2026-11-12",
+      todayDate: todayStr,
       isMoving: true,
       previousLatitude: 8.2600,
       previousLongitude: 77.2880,
-      previousGpsTimestamp: "2026-11-12T05:00:00Z",
+      previousGpsTimestamp: `${todayStr}T05:00:00Z`,
     },
     15000.0,
   );
@@ -972,7 +977,7 @@ test("25. Test 3: GPS Accumulation Continues After Manual Edit (15,000.00 -> 15,
     lat: 8.26225,
     lng: 77.2880,
     speed: 30,
-    recordedAt: "2026-11-12T05:00:30Z",
+    recordedAt: `${todayStr}T05:00:30Z`,
   });
 
   state = ping1.updatedState;
@@ -987,7 +992,7 @@ test("25. Test 3: GPS Accumulation Continues After Manual Edit (15,000.00 -> 15,
     lat: 8.26450,
     lng: 77.2880,
     speed: 30,
-    recordedAt: "2026-11-12T05:01:00Z",
+    recordedAt: `${todayStr}T05:01:00Z`,
   });
 
   state = ping2.updatedState;
@@ -995,6 +1000,7 @@ test("25. Test 3: GPS Accumulation Continues After Manual Edit (15,000.00 -> 15,
 });
 
 test("26. Test 4: Browser Refresh Preserves 15,000.25 km Without Double Counting", () => {
+  const todayStr = getTodayIstDateString();
   // State saved in localStorage after 0.25 km movement
   const cachedAfterMove = {
     vehicleId: "v-sync-4",
@@ -1004,7 +1010,7 @@ test("26. Test 4: Browser Refresh Preserves 15,000.25 km Without Double Counting
     currentSpeedKmh: 30,
     readingSource: "gps_estimated",
     baselineOdometerKm: 15000.0,
-    todayDate: "2026-11-12",
+    todayDate: todayStr,
     isMoving: true,
   };
 
@@ -1012,7 +1018,7 @@ test("26. Test 4: Browser Refresh Preserves 15,000.25 km Without Double Counting
   const databaseBaseline = 15000;
 
   // On page refresh, reconcileOdometerState runs
-  const reconciled = reconcileOdometerState(cachedAfterMove, databaseBaseline, "2026-11-12");
+  const reconciled = reconcileOdometerState(cachedAfterMove, databaseBaseline, todayStr);
 
   // Must preserve 15,000.25 km (neither resets to 15,000 nor adds 27.65 km to make 15,027.65)
   assert.equal(reconciled.totalOdometerKm, 15000.25, "Total odometer must remain exactly 15,000.25 km on refresh");
@@ -1052,6 +1058,7 @@ test("27. Test 5: Multi-Vehicle Isolation (Editing 1 Vehicle Leaves Other 6 Vehi
 });
 
 test("28. Test 6: Concurrent Manual Edit While Live GPS Telemetry Is Streaming", () => {
+  const todayStr = getTodayIstDateString();
   let state = {
     vehicleId: "v-race-1",
     totalOdometerKm: 14398.0,
@@ -1060,11 +1067,11 @@ test("28. Test 6: Concurrent Manual Edit While Live GPS Telemetry Is Streaming",
     currentSpeedKmh: 35,
     readingSource: "gps_estimated",
     baselineOdometerKm: 14398.0,
-    todayDate: "2026-11-12",
+    todayDate: todayStr,
     isMoving: true,
     previousLatitude: 8.2600,
     previousLongitude: 77.2880,
-    previousGpsTimestamp: "2026-11-12T06:00:00Z",
+    previousGpsTimestamp: `${todayStr}T06:00:00Z`,
   };
 
   // Telemetry point 1 arrives
@@ -1074,7 +1081,7 @@ test("28. Test 6: Concurrent Manual Edit While Live GPS Telemetry Is Streaming",
     lat: 8.2610,
     lng: 77.2880,
     speed: 35,
-    recordedAt: "2026-11-12T06:00:10Z",
+    recordedAt: `${todayStr}T06:00:10Z`,
   }).updatedState;
 
   const preEditKm = state.totalOdometerKm;
@@ -1091,7 +1098,7 @@ test("28. Test 6: Concurrent Manual Edit While Live GPS Telemetry Is Streaming",
     lat: 8.2605,
     lng: 77.2880,
     speed: 35,
-    recordedAt: "2026-11-12T06:00:05Z", // timestamp before 06:00:10Z
+    recordedAt: `${todayStr}T06:00:05Z`, // timestamp before 06:00:10Z
   });
   assert.equal(staleAttempt.isDuplicate, true, "Out-of-order telemetry must be rejected");
   assert.equal(staleAttempt.updatedState.totalOdometerKm, 15000.0, "Stale packet cannot revert manual edit");
@@ -1103,7 +1110,7 @@ test("28. Test 6: Concurrent Manual Edit While Live GPS Telemetry Is Streaming",
     lat: 8.26325,
     lng: 77.2880, // ~0.25 km from 8.2610
     speed: 35,
-    recordedAt: "2026-11-12T06:00:30Z",
+    recordedAt: `${todayStr}T06:00:30Z`,
   });
 
   assert.equal(freshMove.isDuplicate, false);
