@@ -24,6 +24,7 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { type Vehicle, type VehicleStatus } from "@/lib/types";
 import { globalGpsSpeedTracker } from "@/lib/gpsAverageSpeed";
+import { toFleetCoord, NANJIL_DAIRY_DEPOT } from "@/components/maps/mapConstants";
 
 // Telemetry source flag (set VITE_TELEMETRY_SOURCE=supabase to enable this hook)
 // Default: "firebase" (keeps existing behaviour during migration period)
@@ -89,8 +90,15 @@ function mapRowToVehicle(row: Record<string, unknown>): Vehicle {
 
   const vehicleId = String(row.id ?? "");
   const deviceId = String(row.device_id ?? "");
-  const lat = Number(row.lat ?? 0);
-  const lng = Number(row.lng ?? 0);
+  const rawLat = Number(row.lat ?? 0);
+  const rawLng = Number(row.lng ?? 0);
+  const coord =
+    toFleetCoord({ lat: rawLat, lng: rawLng }) ||
+    (typeof row.location === "string" ? toFleetCoord(row.location) : null) ||
+    NANJIL_DAIRY_DEPOT;
+
+  const lat = coord.lat;
+  const lng = coord.lng;
 
   if (vehicleId && deviceId) {
     globalGpsSpeedTracker.registerAlias(vehicleId, deviceId);
