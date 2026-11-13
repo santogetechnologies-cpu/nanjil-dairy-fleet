@@ -4,7 +4,7 @@ import { type Vehicle, type VehicleStatus } from "@/lib/types";
 import { Card } from "@/components/ui-kit";
 import { PageHeader } from "@/components/AppLayout";
 import { VehicleMap } from "@/components/VehicleMap";
-import { Search, MapPin, Radio, AlertTriangle, AlertCircle, Gauge, Clock } from "lucide-react";
+import { Search, MapPin, Radio, AlertTriangle, AlertCircle, Gauge, Clock, Factory, Navigation, Route as RouteIcon } from "lucide-react";
 import { useVehicles, TELEMETRY_SOURCE, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
 import { getOverspeedStatus } from "@/lib/overspeed";
 import { useOverspeedMonitor } from "@/hooks/useOverspeed";
@@ -28,6 +28,22 @@ function formatLastUpdated(isoString?: string): string {
   }
 }
 
+function formatTripStartTime(isoString?: string): string {
+  if (!isoString) return "Early Morning";
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return "Early Morning";
+    return d.toLocaleTimeString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  } catch {
+    return "Early Morning";
+  }
+}
+
 function TrackingPage() {
   const [filter, setFilter] = useState<VehicleStatus | "All">("All");
   const [q, setQ] = useState("");
@@ -39,7 +55,7 @@ function TrackingPage() {
   const vehicles = useVehicles();
 
   // Load and stream today's actual GPS travelled route for each vehicle (Asia/Kolkata timezone)
-  const { routes: todayRoutes } = useTodayTravelledRoutes(vehicles);
+  const { routes: todayRoutes, tripStartTimes } = useTodayTravelledRoutes(vehicles);
 
   // Real-time overspeed detection, transition tracking, and alert persistence
   const { activeWarnings, activeCriticals } = useOverspeedMonitor(vehicles);
@@ -148,6 +164,100 @@ function TrackingPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_310px] xl:grid-cols-[minmax(0,1fr)_320px] gap-5">
         <div className="min-w-0 space-y-3">
+          {/* Selected Vehicle Route Intelligence Panel */}
+          {selectedVehicle && (
+            <Card className="p-3.5 bg-card/95 border-primary/30 shadow-xs">
+              <div className="flex items-center justify-between gap-3 mb-2.5 pb-2 border-b border-border flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-amber-400 text-black border border-black/80 font-mono font-black text-xs tracking-wider shadow-xs">
+                    <span className="text-[8px] font-sans font-bold bg-black text-amber-400 px-1 py-0.2 rounded-xs leading-none">
+                      IND
+                    </span>
+                    <span>{selectedVehicle.number}</span>
+                  </div>
+                  <span className="text-xs font-semibold text-foreground">
+                    {selectedVehicle.driver ? `Driver: ${selectedVehicle.driver}` : "Unassigned Driver"}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    · {selectedVehicle.model || selectedVehicle.type}
+                  </span>
+                  <span className="text-[10px] font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
+                    <RouteIcon className="h-3 w-3" />
+                    <span>Nanjil Plant Anchored Route</span>
+                  </span>
+                </div>
+                <button
+                  onClick={() => setSelectedId(undefined)}
+                  className="text-xs text-primary hover:underline font-medium shrink-0 cursor-pointer"
+                >
+                  Show All Routes
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 text-xs">
+                <div>
+                  <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    <Factory className="h-3 w-3 text-emerald-600" />
+                    <span>Starting Point</span>
+                  </div>
+                  <div className="font-semibold text-foreground truncate mt-0.5" title="Nanjil Central Processing Plant, Mulagumoodu">
+                    Nanjil Dairy Plant
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    <MapPin className="h-3 w-3 text-red-500" />
+                    <span>Current Location</span>
+                  </div>
+                  <div className="font-semibold text-foreground truncate mt-0.5" title={selectedVehicle.location || "Live Location"}>
+                    {selectedVehicle.location || "Live Location"}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    <Gauge className="h-3 w-3 text-blue-500" />
+                    <span>Total Distance</span>
+                  </div>
+                  <div className="font-mono font-bold text-foreground mt-0.5">
+                    {selectedOdo ? `${selectedOdo.todayDistanceKm.toFixed(1)} km` : "0.0 km"}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    <Navigation className="h-3 w-3 text-amber-500" />
+                    <span>Current Speed</span>
+                  </div>
+                  <div className="font-mono font-bold text-foreground mt-0.5">
+                    {selectedVehicle.speed} km/h
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    <Clock className="h-3 w-3 text-purple-500" />
+                    <span>Trip Start Time</span>
+                  </div>
+                  <div className="font-mono font-medium text-foreground mt-0.5">
+                    {formatTripStartTime(tripStartTimes[selectedVehicle.id] || tripStartTimes[selectedVehicle.deviceId || ""])}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    <Radio className="h-3 w-3 text-emerald-500 animate-pulse" />
+                    <span>Last GPS Update</span>
+                  </div>
+                  <div className="font-mono font-medium text-foreground mt-0.5">
+                    {formatLastUpdated(selectedVehicle.lastUpdate)}
+                  </div>
+                </div>
+              </div>
+            </Card>
+          )}
+
           <Card>
             <div className="p-3">
               <VehicleMap
@@ -157,6 +267,7 @@ function TrackingPage() {
                 onSelectVehicle={handleSelectVehicle}
                 routeHistory={routeHistory}
                 todayRoutes={todayRoutes}
+                tripStartTimes={tripStartTimes}
                 odometerStates={odometerStates}
                 getVehicleOdometer={getVehicleOdometer}
               />

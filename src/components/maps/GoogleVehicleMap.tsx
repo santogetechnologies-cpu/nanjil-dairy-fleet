@@ -1,17 +1,18 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   Map,
   AdvancedMarker,
   InfoWindow,
   Polyline,
   useMap,
+  useMapsLibrary,
 } from "@vis.gl/react-google-maps";
 import type { Vehicle } from "@/lib/types";
-import { Truck, Navigation, MapPin, AlertTriangle } from "lucide-react";
+import { Truck, Navigation, MapPin, AlertTriangle, Factory, Route as RouteIcon } from "lucide-react";
 import { Badge } from "@/components/ui-kit";
 import { Link } from "react-router-dom";
 import { getOverspeedStatus } from "@/lib/overspeed";
-import { isFleetOperatingCoordinate } from "@/lib/tripHistoryEngine";
+import { isFleetOperatingCoordinate, haversineDistanceKm } from "@/lib/tripHistoryEngine";
 import { KNOWN_NANJIL_DEVICE_MAP } from "@/lib/vehicle-stop-detection";
 import { type VehicleOdometerState, loadLocalOdometerStates } from "@/lib/odometerTrackingEngine";
 import {
@@ -31,6 +32,7 @@ export interface GoogleVehicleMapProps {
   onSelectVehicle?: (vehicle: Vehicle) => void;
   routeHistory?: Array<{ lat: number; lng: number }>;
   todayRoutes?: Record<string, Array<Array<{ lat: number; lng: number }>>>;
+  tripStartTimes?: Record<string, string>;
   odometerStates?: Record<string, VehicleOdometerState>;
   getVehicleOdometer?: (idOrDeviceId?: string) => VehicleOdometerState;
 }
@@ -42,6 +44,7 @@ export function GoogleVehicleMap({
   onSelectVehicle,
   routeHistory,
   todayRoutes,
+  tripStartTimes,
   odometerStates,
   getVehicleOdometer,
 }: GoogleVehicleMapProps) {
@@ -61,6 +64,16 @@ export function GoogleVehicleMap({
   const activeOdo = useMemo(() => {
     if (!currentActive) return null;
     if (getVehicleOdometer) {
+      if (currentActive.id) {
+        const byId = getVehicleOdometer(currentActive.id);
+        if (byId && byId.totalOdometerKm > 0) return byId;
+      }
+      if (currentActive.deviceId) {
+        const byDev = getVehicleOdometer(currentActive.deviceId);
+        if (byDev && byDev.totalOdometerKm > 0) return byDev;
+        const byClean = getVehicleOdometer(currentActive.deviceId.replace(/^device_/, ""));
+        if (byClean && byClean.totalOdometerKm > 0) return byClean;
+      }
       return getVehicleOdometer(currentActive.id || currentActive.deviceId);
     }
     if (odometerStates) {
@@ -302,26 +315,96 @@ export function GoogleVehicleMap({
         zoomControl={true}
         style={{ width: "100%", height: "100%" }}
       >
-        {/* Today's Travelled GPS Routes (Continuous RED Polylines) */}
-        {renderedRouteSegments.map(({ key, path, isSelected }) => (
-          <Polyline
-            key={key}
-            path={path}
-            strokeColor="#FF0000"
-            strokeOpacity={0.9}
-            strokeWeight={5}
-            geodesic={true}
-            zIndex={isSelected ? 50 : 20}
-          />
-        ))}
+        {/* Today's Travelled GPS Routes with Active Vehicle Highlighting */}
+        {renderedRouteSegments.map(({ key, path, isSelected }) => {
+          const hasSelection = Boolean(selectedId);
+          if (isSelected) {
+            return (
+              <div key={`group-${key}`}>
+                {/* High-contrast white halo underneath selected route */}
+                <Polyline
+                  key={`${key}-halo`}
+                  path={path}
+                  strokeColor="#FFFFFF"
+                  strokeOpacity={0.9}
+                  strokeWeight={8.5}
+                  geodesic={true}
+                  zIndex={90}
+                />
+                {/* Primary highlighted polyline */}
+                <Polyline
+                  key={key}
+                  path={path}
+                  strokeColor="#DC2626"
+                  strokeOpacity={1.0}
+                  strokeWeight={5.5}
+                  geodesic={true}
+                  zIndex={100}
+                />
+              </div>
+            );
+          }
 
-        {/* Nanjil Dairy Plant Base Point Pin Marker */}
-        <AdvancedMarker position={NANJIL_DAIRY_DEPOT}>
-          <div className="flex items-center gap-1.5 bg-amber-600 text-white px-2 py-1 rounded-md text-[11px] font-bold shadow-lg border-2 border-white ring-2 ring-amber-600/30">
-            <Truck className="h-3.5 w-3.5" />
-            <span>Nanjil Dairy Plant (Base Point)</span>
+          if (hasSelection) {
+            return (
+              <Polyline
+                key={key}
+                path={path}
+                strokeColor="#94A3B8"
+                strokeOpacity={0.22}
+                strokeWeight={2.5}
+                geodesic={true}
+                zIndex={10}
+              />
+            );
+          }
+
+          return (
+            <Polyline
+              key={key}
+              path={path}
+              strokeColor="#EF4444"
+              strokeOpacity={0.8}
+              strokeWeight={3.8}
+              geodesic={true}
+              zIndex={20}
+            />
+          );
+        })}
+
+        {/* Nanjil Dairy Plant Base Location Marker */}
+        <AdvancedMarker
+          position={NANJIL_DAIRY_DEPOT}
+          zIndex={160}
+          title="Nanjil Dairy Plant (Base Location) — Mulagumoodu"
+          onClick={() => {
+            if (map) {
+              map.panTo(NANJIL_DAIRY_DEPOT);
+              map.setZoom(15);
+            }
+          }}
+        >
+          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-full shadow-xl border-2 border-white text-xs font-bold cursor-pointer select-none pointer-events-auto transition-transform hover:scale-105 ring-2 ring-emerald-500/40">
+            <Factory className="h-4 w-4 text-emerald-200" />
+            <span className="whitespace-nowrap font-bold">Nanjil Dairy Plant</span>
+            <span className="text-[9px] bg-emerald-900/90 text-emerald-100 px-1.5 py-0.2 rounded-full uppercase tracking-wider font-semibold">
+              Base Location
+            </span>
           </div>
         </AdvancedMarker>
+
+        {/* Start Point Badge when a vehicle is selected */}
+        {selectedId && currentActive && (
+          <AdvancedMarker
+            position={{ lat: NANJIL_DAIRY_DEPOT.lat + 0.0018, lng: NANJIL_DAIRY_DEPOT.lng }}
+            zIndex={170}
+          >
+            <div className="flex items-center gap-1 px-2.5 py-1 bg-slate-900/95 backdrop-blur-xs text-white text-[10px] font-bold rounded-full shadow-lg border border-slate-700">
+              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Route Origin · Nanjil Dairy Plant</span>
+            </div>
+          </AdvancedMarker>
+        )}
 
         {/* Live Vehicle Markers */}
         {mappedVehicles.map((v) => {
@@ -563,6 +646,34 @@ export function GoogleVehicleMap({
                         </div>
                       </div>
                     )}
+                    {/* Origin & Timing Details */}
+                    <div className="col-span-2 pt-1.5 border-t border-slate-200 grid grid-cols-2 gap-1.5 text-[10px]">
+                      <div>
+                        <div className="text-[9px] text-slate-500 flex items-center gap-1">
+                          <Factory className="h-2.5 w-2.5 text-emerald-600" />
+                          <span>Origin Point</span>
+                        </div>
+                        <div className="font-semibold text-slate-800 truncate" title="Nanjil Central Processing Plant, Mulagumoodu">
+                          Nanjil Dairy Plant
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] text-slate-500 flex items-center gap-1">
+                          <RouteIcon className="h-2.5 w-2.5 text-blue-600" />
+                          <span>Trip Start</span>
+                        </div>
+                        <div className="font-semibold text-slate-800 truncate">
+                          {tripStartTimes?.[currentActive.id]
+                            ? new Date(tripStartTimes[currentActive.id]).toLocaleTimeString("en-IN", {
+                                timeZone: "Asia/Kolkata",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                hour12: true,
+                              })
+                            : "Early Morning"}
+                        </div>
+                      </div>
+                    </div>
                     <div className="col-span-2 text-[10px] text-slate-500 font-mono truncate border-t border-slate-200 pt-1 flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping" />
                       <span>Device ID: {currentActive.deviceId || "—"}</span>

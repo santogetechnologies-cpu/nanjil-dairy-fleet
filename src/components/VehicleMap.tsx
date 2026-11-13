@@ -10,6 +10,7 @@ interface Props {
   onSelectVehicle?: (vehicle: Vehicle) => void;
   routeHistory?: Array<{ lat: number; lng: number }>;
   todayRoutes?: Record<string, Array<Array<{ lat: number; lng: number }>>>;
+  tripStartTimes?: Record<string, string>;
   odometerStates?: Record<string, VehicleOdometerState>;
   getVehicleOdometer?: (idOrDeviceId?: string) => VehicleOdometerState;
 }
