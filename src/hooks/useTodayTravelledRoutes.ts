@@ -223,6 +223,41 @@ export async function buildPlantConnector(
     return plantConnectorCache.get(cacheKey)!;
   }
 
+  // 1. Try Google Maps DirectionsService if available in browser
+  if (typeof window !== "undefined" && (window as any).google?.maps?.DirectionsService) {
+    try {
+      const gMaps = (window as any).google.maps;
+      const service = new gMaps.DirectionsService();
+      const googleRes = await new Promise<LatLngPoint[] | null>((resolve) => {
+        service.route(
+          {
+            origin: new gMaps.LatLng(NANJIL_DAIRY_DEPOT.lat, NANJIL_DAIRY_DEPOT.lng),
+            destination: new gMaps.LatLng(firstPoint.lat, firstPoint.lng),
+            travelMode: gMaps.TravelMode.DRIVING,
+          },
+          (result: any, status: any) => {
+            if (status === gMaps.DirectionsStatus.OK && result?.routes?.[0]?.overview_path) {
+              const roadPath: LatLngPoint[] = result.routes[0].overview_path.map((p: any) => ({
+                lat: p.lat(),
+                lng: p.lng(),
+              }));
+              resolve(roadPath);
+            } else {
+              resolve(null);
+            }
+          },
+        );
+      });
+
+      if (googleRes && googleRes.length >= 2) {
+        plantConnectorCache.set(cacheKey, googleRes);
+        return googleRes;
+      }
+    } catch {
+      // Fall through to calculateRoadRoute
+    }
+  }
+
   try {
     const roadRes = await calculateRoadRoute([
       NANJIL_DAIRY_DEPOT,
@@ -247,12 +282,62 @@ export async function buildPlantConnector(
 }
 
 /**
+ * Filter isolated GPS spikes, multipath glitches, and teleports:
+ * - Discards coordinates outside the fleet operating geofence
+ * - Rejects single-ping teleport spikes (implied speed > 85 km/h for > 100m)
+ * - Rejects V-spikes (jumping away > 80m and jumping back to original area within next point)
+ */
+export function filterGpsSpikesAndNoise(points: GpsPoint[]): GpsPoint[] {
+  if (!points || points.length === 0) return [];
+  const valid = points.filter((p) => p && isFleetOperatingCoordinate(p.lat, p.lng));
+  if (valid.length < 3) return valid;
+
+  const filtered: GpsPoint[] = [];
+
+  for (let i = 0; i < valid.length; i++) {
+    const cur = valid[i];
+    const prev = filtered.length > 0 ? filtered[filtered.length - 1] : null;
+    const next = i < valid.length - 1 ? valid[i + 1] : null;
+
+    if (prev && next) {
+      const dPrev = haversineDistanceKm(prev.lat, prev.lng, cur.lat, cur.lng);
+      const dNext = haversineDistanceKm(cur.lat, cur.lng, next.lat, next.lng);
+      const dDirect = haversineDistanceKm(prev.lat, prev.lng, next.lat, next.lng);
+      const tPrev = Math.max(0.1, (new Date(cur.recorded_at).getTime() - new Date(prev.recorded_at).getTime()) / 1000);
+      const speedPrev = dPrev / (tPrev / 3600);
+
+      // V-spike: jump out >80m and jump back to within 40m of previous point
+      if (dPrev > 0.08 && dNext > 0.08 && dDirect < 0.04) {
+        continue;
+      }
+
+      // Implied speed > 85 km/h for significant distance jump (>100m)
+      if (speedPrev > 85 && dPrev > 0.1) {
+        continue;
+      }
+    } else if (prev && !next) {
+      const dPrev = haversineDistanceKm(prev.lat, prev.lng, cur.lat, cur.lng);
+      const tPrev = Math.max(0.1, (new Date(cur.recorded_at).getTime() - new Date(prev.recorded_at).getTime()) / 1000);
+      const speedPrev = dPrev / (tPrev / 3600);
+      if (speedPrev > 85 && dPrev > 0.1) {
+        continue;
+      }
+    }
+
+    filtered.push(cur);
+  }
+
+  return filtered;
+}
+
+/**
  * Filter and segment time-series GPS points for today:
  * 1. Filter out coordinates outside the fleet operating geofence or with corrupted longitudes.
  * 2. Chronologically sort by timestamp.
- * 3. Reject teleport jumps (>200 km or implied speed >160 km/h).
+ * 3. Filter out isolated spikes, multipath glitches, and teleport jumps.
  * 4. Filter consecutive stationary duplicate points (<2 meters apart).
- * 5. Break the polyline across signal gaps (>15 minutes) into separate segments.
+ * 5. Break the polyline across signal gaps (>15 minutes).
+ * 6. Exclude stationary yard jitter (<50 meters net movement for multi-point segments).
  *
  * NOTE: Never inserts artificial coordinates into authentic GPS history!
  */
@@ -270,7 +355,7 @@ export function processRawGpsPoints(
   );
   if (validFleetPoints.length === 0) return [];
 
-  // 1. Sort chronologically by actual GPS timestamp
+  // 1. Sort chronologically by actual GPS timestamp first
   const sorted = [...validFleetPoints].sort((a, b) => {
     const tA = new Date(a.recorded_at).getTime();
     const tB = new Date(b.recorded_at).getTime();
@@ -278,11 +363,15 @@ export function processRawGpsPoints(
     return String(a.id || "").localeCompare(String(b.id || ""));
   });
 
+  // 2. Filter isolated spikes and multipath glitches on chronologically ordered points
+  const cleanPoints = filterGpsSpikesAndNoise(sorted);
+  if (cleanPoints.length === 0) return [];
+
   const segments: VehicleRouteSegments = [];
   let currentSegment: LatLngPoint[] = [];
   let prevValid: GpsPoint | null = null;
 
-  for (const pt of sorted) {
+  for (const pt of cleanPoints) {
     const lat = Number(pt.lat);
     const lng = Number(pt.lng);
 
@@ -293,9 +382,9 @@ export function processRawGpsPoints(
         (new Date(pt.recorded_at).getTime() - new Date(prevValid.recorded_at).getTime()) / 1000,
       );
 
-      // Teleport rejection: discard impossible single-point GPS jumps
+      // Teleport rejection: discard impossible single-point GPS jumps (>200 km or speed >85 km/h for >100m)
       if (distKm > 200) continue;
-      if (timeDiffSec > 0 && distKm / (timeDiffSec / 3600) > 160) continue;
+      if (timeDiffSec > 0 && distKm / (timeDiffSec / 3600) > 85 && distKm > 0.1) continue;
 
       // Duplicate stationary filter: omit consecutive points within 2 meters
       if (distKm < 0.002) continue;
@@ -319,7 +408,22 @@ export function processRawGpsPoints(
     segments.push(currentSegment);
   }
 
-  return segments;
+  // Filter out stationary segments (yard jitter where multi-point segment bounding box < 50 meters)
+  return segments.filter((seg) => {
+    if (seg.length <= 1) return true; // keep single points for diagnostic or test assertion
+    let minLat = Infinity,
+      maxLat = -Infinity,
+      minLng = Infinity,
+      maxLng = -Infinity;
+    for (const p of seg) {
+      if (p.lat < minLat) minLat = p.lat;
+      if (p.lat > maxLat) maxLat = p.lat;
+      if (p.lng < minLng) minLng = p.lng;
+      if (p.lng > maxLng) maxLng = p.lng;
+    }
+    const spanKm = haversineDistanceKm(minLat, minLng, maxLat, maxLng);
+    return spanKm >= 0.05; // requires at least 50m of actual net movement
+  });
 }
 
 /**

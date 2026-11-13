@@ -52,9 +52,56 @@ export function GoogleVehicleMap({
 }: GoogleVehicleMapProps) {
   const map = useMap();
 
+  // Google Maps Routes library for DirectionsService
+  const routesLib = useMapsLibrary("routes");
+  const [directionsConnectors, setDirectionsConnectors] = useState<Record<string, Array<{ lat: number; lng: number }>>>({});
+  const inFlightDirectionsRef = useRef<Set<string>>(new Set());
+
   const [active, setActive] = useState<Vehicle | null>(
     selectedId ? (vehicles.find((v) => v.id === selectedId) ?? null) : null,
   );
+
+  // Dynamically enhance plant connectors using Google Maps DirectionsService
+  useEffect(() => {
+    if (!routesLib || !plantConnectors) return;
+
+    const ds = new routesLib.DirectionsService();
+
+    Object.entries(plantConnectors).forEach(([key, segments]) => {
+      if (!segments || segments.length === 0) return;
+      const firstSeg = segments[0];
+      if (!firstSeg || firstSeg.length < 2) return;
+
+      // If connector already has >= 5 points (road-following) or is already fetched/in-flight, skip
+      if (firstSeg.length >= 5 || directionsConnectors[key] || inFlightDirectionsRef.current.has(key)) return;
+
+      const dest = firstSeg[firstSeg.length - 1];
+      if (!isFleetOperatingCoordinate(dest.lat, dest.lng)) return;
+
+      inFlightDirectionsRef.current.add(key);
+
+      ds.route(
+        {
+          origin: new google.maps.LatLng(NANJIL_DAIRY_DEPOT.lat, NANJIL_DAIRY_DEPOT.lng),
+          destination: new google.maps.LatLng(dest.lat, dest.lng),
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          inFlightDirectionsRef.current.delete(key);
+          if (status === google.maps.DirectionsStatus.OK && result?.routes?.[0]?.overview_path) {
+            const roadPts = result.routes[0].overview_path.map((p) => ({
+              lat: p.lat(),
+              lng: p.lng(),
+            }));
+            setDirectionsConnectors((prev) => ({
+              ...prev,
+              [key]: roadPts,
+            }));
+          }
+        },
+      );
+    });
+  }, [routesLib, plantConnectors, directionsConnectors]);
 
   // Synchronize active vehicle selection whenever selectedId changes externally
   useEffect(() => {
@@ -145,35 +192,93 @@ export function GoogleVehicleMap({
     return DEFAULT_MAP_CENTER;
   }, [mappedVehicles, selectedId]);
 
-  // Handle selectedId camera pan
+  // Handle selectedId camera fitBounds & auto-centering
   useEffect(() => {
     if (selectedId && map) {
       const match = vehicles.find((v) => v.id === selectedId || v.deviceId === selectedId);
       if (match) {
         setActive(match);
-        if (match.lat != null && match.lng != null && isFleetOperatingCoordinate(match.lat, match.lng)) {
-          map.panTo({ lat: match.lat, lng: match.lng });
-          map.setZoom(14);
-        } else {
-          // If vehicle has no live GPS fix, pan to the last coordinate of today's route
-          const segs =
-            todayRoutes?.[match.id] ||
-            (match.deviceId ? todayRoutes?.[match.deviceId] : undefined) ||
-            (match.deviceId ? todayRoutes?.[match.deviceId.replace(/^device_/, "")] : undefined);
-          if (segs && segs.length > 0) {
-            const lastSeg = segs[segs.length - 1];
-            if (lastSeg && lastSeg.length > 0) {
-              const lastPt = lastSeg[lastSeg.length - 1];
-              if (isFleetOperatingCoordinate(lastPt.lat, lastPt.lng)) {
-                map.panTo({ lat: lastPt.lat, lng: lastPt.lng });
-                map.setZoom(14);
+
+        const cleanDev = match.deviceId ? match.deviceId.replace(/^device_/, "") : undefined;
+        const segs =
+          todayRoutes?.[match.id] ||
+          (match.deviceId ? todayRoutes?.[match.deviceId] : undefined) ||
+          (cleanDev ? todayRoutes?.[cleanDev] : undefined) ||
+          (cleanDev ? todayRoutes?.[`device_${cleanDev}`] : undefined) ||
+          (cleanDev && KNOWN_NANJIL_DEVICE_MAP[cleanDev] ? todayRoutes?.[KNOWN_NANJIL_DEVICE_MAP[cleanDev].id] : undefined);
+
+        const connPts =
+          directionsConnectors[match.id] ||
+          (match.deviceId ? directionsConnectors[match.deviceId] : undefined) ||
+          (cleanDev ? directionsConnectors[cleanDev] : undefined) ||
+          plantConnectors?.[match.id]?.[0] ||
+          (match.deviceId ? plantConnectors?.[match.deviceId]?.[0] : undefined) ||
+          (cleanDev ? plantConnectors?.[cleanDev]?.[0] : undefined);
+
+        // Build LatLngBounds to encompass Nanjil Plant, vehicle destination, and all road points
+        if (typeof google !== "undefined" && google.maps && google.maps.LatLngBounds) {
+          const bounds = new google.maps.LatLngBounds();
+          let pointCount = 0;
+
+          // 1. Nanjil Dairy Plant Base Location
+          bounds.extend(NANJIL_DAIRY_DEPOT);
+          pointCount++;
+
+          // 2. Vehicle destination / live coordinate
+          if (match.lat != null && match.lng != null && isFleetOperatingCoordinate(match.lat, match.lng)) {
+            bounds.extend({ lat: match.lat, lng: match.lng });
+            pointCount++;
+          }
+
+          // 3. Travelled GPS Route points
+          if (segs && Array.isArray(segs)) {
+            segs.forEach((seg) => {
+              if (Array.isArray(seg)) {
+                seg.forEach((pt) => {
+                  if (isFleetOperatingCoordinate(pt.lat, pt.lng)) {
+                    bounds.extend(pt);
+                    pointCount++;
+                  }
+                });
               }
+            });
+          }
+
+          // 4. Plant connector points
+          if (connPts && Array.isArray(connPts)) {
+            connPts.forEach((pt) => {
+              if (isFleetOperatingCoordinate(pt.lat, pt.lng)) {
+                bounds.extend(pt);
+                pointCount++;
+              }
+            });
+          }
+
+          if (pointCount > 0) {
+            const ne = bounds.getNorthEast();
+            const sw = bounds.getSouthWest();
+            const spanLat = Math.abs(ne.lat() - sw.lat());
+            const spanLng = Math.abs(ne.lng() - sw.lng());
+
+            // If bounds is tiny (e.g. vehicle parked at the plant depot), center with zoom 15
+            if (spanLat < 0.005 && spanLng < 0.005) {
+              const centerPt =
+                match.lat != null && isFleetOperatingCoordinate(match.lat, match.lng)
+                  ? { lat: match.lat, lng: match.lng }
+                  : NANJIL_DAIRY_DEPOT;
+              map.panTo(centerPt);
+              map.setZoom(15);
+            } else {
+              map.fitBounds(bounds, { top: 70, right: 70, bottom: 70, left: 70 });
             }
           }
+        } else if (match.lat != null && match.lng != null && isFleetOperatingCoordinate(match.lat, match.lng)) {
+          map.panTo({ lat: match.lat, lng: match.lng });
+          map.setZoom(14);
         }
       }
     }
-  }, [selectedId, vehicles, map, todayRoutes]);
+  }, [selectedId, vehicles, map, todayRoutes, plantConnectors, directionsConnectors]);
 
   // Check whether the active / selected vehicle has a valid today route
   const activeHasRoute = useMemo(() => {
@@ -310,12 +415,17 @@ export function GoogleVehicleMap({
       }
     }
 
+    // When a vehicle is selected, highlight and display ONLY that vehicle's route
+    if (selectedId) {
+      return list.filter((item) => item.isSelected);
+    }
+
     return list;
   }, [todayRoutes, vehicles, selectedId, active, routeHistory]);
 
   // Prepare Estimated Plant Connectors (Dashed Orange Polyline, #F59E0B)
   const renderedConnectors = useMemo(() => {
-    if (!plantConnectors || Object.keys(plantConnectors).length === 0) return [];
+    if ((!plantConnectors || Object.keys(plantConnectors).length === 0) && Object.keys(directionsConnectors).length === 0) return [];
 
     const list: Array<{
       key: string;
@@ -326,17 +436,25 @@ export function GoogleVehicleMap({
     const renderedKeys = new Set<string>();
 
     const getConnectorForVehicle = (v: Vehicle): Array<Array<{ lat: number; lng: number }>> | undefined => {
-      if (plantConnectors[v.id] && plantConnectors[v.id].length > 0) return plantConnectors[v.id];
-      if (v.deviceId && plantConnectors[v.deviceId] && plantConnectors[v.deviceId].length > 0) return plantConnectors[v.deviceId];
+      // 1. Prefer enhanced Google Directions road-following route
+      if (directionsConnectors[v.id] && directionsConnectors[v.id].length >= 2) return [directionsConnectors[v.id]];
+      if (v.deviceId && directionsConnectors[v.deviceId] && directionsConnectors[v.deviceId].length >= 2) return [directionsConnectors[v.deviceId]];
       const cleanDev = v.deviceId ? v.deviceId.replace(/^device_/, "") : undefined;
-      if (cleanDev && plantConnectors[cleanDev] && plantConnectors[cleanDev].length > 0) return plantConnectors[cleanDev];
-      if (cleanDev && plantConnectors[`device_${cleanDev}`] && plantConnectors[`device_${cleanDev}`].length > 0) return plantConnectors[`device_${cleanDev}`];
+      if (cleanDev && directionsConnectors[cleanDev] && directionsConnectors[cleanDev].length >= 2) return [directionsConnectors[cleanDev]];
+      if (cleanDev && directionsConnectors[`device_${cleanDev}`] && directionsConnectors[`device_${cleanDev}`].length >= 2) return [directionsConnectors[`device_${cleanDev}`]];
+
+      // 2. Fallback to plantConnectors prop
+      if (plantConnectors && plantConnectors[v.id] && plantConnectors[v.id].length > 0) return plantConnectors[v.id];
+      if (v.deviceId && plantConnectors && plantConnectors[v.deviceId] && plantConnectors[v.deviceId].length > 0) return plantConnectors[v.deviceId];
+      if (cleanDev && plantConnectors && plantConnectors[cleanDev] && plantConnectors[cleanDev].length > 0) return plantConnectors[cleanDev];
+      if (cleanDev && plantConnectors && plantConnectors[`device_${cleanDev}`] && plantConnectors[`device_${cleanDev}`].length > 0) return plantConnectors[`device_${cleanDev}`];
 
       const knownEntry = Object.entries(KNOWN_NANJIL_DEVICE_MAP).find(([, meta]) => meta.id === v.id);
       if (knownEntry) {
         const [kDevId] = knownEntry;
-        if (plantConnectors[kDevId] && plantConnectors[kDevId].length > 0) return plantConnectors[kDevId];
-        if (plantConnectors[`device_${kDevId}`] && plantConnectors[`device_${kDevId}`].length > 0) return plantConnectors[`device_${kDevId}`];
+        if (directionsConnectors[kDevId] && directionsConnectors[kDevId].length >= 2) return [directionsConnectors[kDevId]];
+        if (plantConnectors && plantConnectors[kDevId] && plantConnectors[kDevId].length > 0) return plantConnectors[kDevId];
+        if (plantConnectors && plantConnectors[`device_${kDevId}`] && plantConnectors[`device_${kDevId}`].length > 0) return plantConnectors[`device_${kDevId}`];
       }
 
       return undefined;
@@ -361,7 +479,14 @@ export function GoogleVehicleMap({
       });
     });
 
-    Object.entries(plantConnectors).forEach(([key, segments]) => {
+    const allConnectorsMap = { ...(plantConnectors || {}) };
+    Object.entries(directionsConnectors).forEach(([k, pts]) => {
+      if (pts && pts.length >= 2) {
+        allConnectorsMap[k] = [pts];
+      }
+    });
+
+    Object.entries(allConnectorsMap).forEach(([key, segments]) => {
       if (renderedKeys.has(key)) return;
       renderedKeys.add(key);
 
@@ -377,8 +502,13 @@ export function GoogleVehicleMap({
       });
     });
 
+    // When a vehicle is selected, display ONLY that vehicle's connector
+    if (selectedId) {
+      return list.filter((item) => item.isSelected);
+    }
+
     return list;
-  }, [plantConnectors, vehicles, selectedId, active]);
+  }, [plantConnectors, directionsConnectors, vehicles, selectedId, active]);
 
   return (
     <div className="relative rounded-lg overflow-hidden border border-border" style={{ height }}>
@@ -569,6 +699,19 @@ export function GoogleVehicleMap({
             <div className="flex items-center gap-1 px-2.5 py-1 bg-slate-900/95 backdrop-blur-xs text-white text-[10px] font-bold rounded-full shadow-lg border border-slate-700">
               <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
               <span>Route Origin · Nanjil Dairy Plant</span>
+            </div>
+          </AdvancedMarker>
+        )}
+
+        {/* Destination Badge when a vehicle is selected and away from plant */}
+        {selectedId && currentActive && currentActive.lat != null && currentActive.lng != null && isFleetOperatingCoordinate(currentActive.lat, currentActive.lng) && (
+          <AdvancedMarker
+            position={{ lat: currentActive.lat + 0.0018, lng: currentActive.lng }}
+            zIndex={175}
+          >
+            <div className="flex items-center gap-1 px-2.5 py-1 bg-red-600 text-white text-[10px] font-bold rounded-full shadow-lg border border-white">
+              <span className="h-1.5 w-1.5 rounded-full bg-white animate-ping" />
+              <span>Destination · {getVehicleRegistrationNumber(currentActive)}</span>
             </div>
           </AdvancedMarker>
         )}
