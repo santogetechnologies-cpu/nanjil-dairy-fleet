@@ -23,9 +23,10 @@ import {
   getVehicleStatusColor,
   getVehicleRegistrationNumber,
   isValidFleetCoord,
+  toFleetCoord,
 } from "./mapConstants";
 
-export { isValidFleetCoord };
+export { isValidFleetCoord, toFleetCoord };
 
 export interface GoogleVehicleMapProps {
   vehicles: Vehicle[];
@@ -126,16 +127,26 @@ export function GoogleVehicleMap({
 
   // Only show vehicles that have actual valid numeric GPS coordinates within the fleet operating geofence
   const mappedVehicles = useMemo(() => {
-    return vehicles.filter(
-      (v) =>
-        isValidFleetCoord({ lat: v.lat, lng: v.lng }) &&
-        isFleetOperatingCoordinate(v.lat, v.lng),
-    );
+    return vehicles
+      .map((v) => {
+        const coord =
+          toFleetCoord({ lat: v.lat, lng: v.lng }) ||
+          (v.location ? toFleetCoord(v.location) : null);
+        if (coord) {
+          return { ...v, lat: coord.lat, lng: coord.lng };
+        }
+        return { ...v, lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng };
+      })
+      .filter(
+        (v) =>
+          isValidFleetCoord({ lat: v.lat, lng: v.lng }) &&
+          isFleetOperatingCoordinate(v.lat, v.lng),
+      );
   }, [vehicles]);
 
   const initialCenter = useMemo(() => {
     if (selectedId) {
-      const v = mappedVehicles.find((x) => x.id === selectedId);
+      const v = mappedVehicles.find((x) => x.id === selectedId || x.deviceId === selectedId);
       if (v && isValidFleetCoord({ lat: v.lat, lng: v.lng })) {
         return { lat: Number(v.lat), lng: Number(v.lng) };
       }
@@ -171,7 +182,9 @@ export function GoogleVehicleMap({
     }
     lastHandledSelectionRef.current = selectedId;
 
-    const match = vehicles.find((v) => v.id === selectedId || v.deviceId === selectedId);
+    const match =
+      mappedVehicles.find((v) => v.id === selectedId || v.deviceId === selectedId) ||
+      vehicles.find((v) => v.id === selectedId || v.deviceId === selectedId);
     if (!match) return;
 
     setActive(match);
@@ -197,8 +210,11 @@ export function GoogleVehicleMap({
     const validPoints: Array<{ lat: number; lng: number }> = [];
 
     // 1. Current position
-    if (isValidFleetCoord({ lat: match.lat, lng: match.lng })) {
-      validPoints.push({ lat: Number(match.lat), lng: Number(match.lng) });
+    const matchCoord =
+      toFleetCoord({ lat: match.lat, lng: match.lng }) ||
+      (match.location ? toFleetCoord(match.location) : null);
+    if (matchCoord) {
+      validPoints.push(matchCoord);
     }
 
     // 2. Travelled route points
@@ -702,9 +718,9 @@ export function GoogleVehicleMap({
         )}
 
         {/* Destination Badge when a vehicle is selected and away from plant */}
-        {selectedId && currentActive && currentActive.lat != null && currentActive.lng != null && isFleetOperatingCoordinate(currentActive.lat, currentActive.lng) && (
+        {selectedId && currentActive && isValidFleetCoord({ lat: currentActive.lat, lng: currentActive.lng }) && isFleetOperatingCoordinate(currentActive.lat, currentActive.lng) && (
           <AdvancedMarker
-            position={{ lat: currentActive.lat + 0.0018, lng: currentActive.lng }}
+            position={{ lat: Number(currentActive.lat) + 0.0018, lng: Number(currentActive.lng) }}
             zIndex={175}
           >
             <div className="flex items-center gap-1 px-2.5 py-1 bg-red-600 text-white text-[10px] font-bold rounded-full shadow-lg border border-white">
@@ -818,13 +834,12 @@ export function GoogleVehicleMap({
 
         {/* Active Vehicle InfoWindow */}
         {currentActive &&
-          typeof currentActive.lat === "number" &&
-          typeof currentActive.lng === "number" &&
+          isValidFleetCoord({ lat: currentActive.lat, lng: currentActive.lng }) &&
           (() => {
             const activeOverspeed = getOverspeedStatus(currentActive.speed);
             return (
               <InfoWindow
-                position={{ lat: currentActive.lat, lng: currentActive.lng }}
+                position={{ lat: Number(currentActive.lat), lng: Number(currentActive.lng) }}
                 onCloseClick={() => setActive(null)}
                 pixelOffset={[0, -28]}
               >

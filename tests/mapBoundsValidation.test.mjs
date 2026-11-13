@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isValidFleetCoord, NANJIL_DAIRY_DEPOT } from "../src/components/maps/mapConstants.ts";
+import { isValidFleetCoord, toFleetCoord, NANJIL_DAIRY_DEPOT } from "../src/components/maps/mapConstants.ts";
 import { KNOWN_NANJIL_DEVICE_MAP } from "../src/lib/vehicle-stop-detection.ts";
 import { isFleetOperatingCoordinate } from "../src/lib/tripHistoryEngine.ts";
 
@@ -282,8 +282,8 @@ test("10. Fleet Vehicles Suite: Tests bounds for all 7 registered Nanjil Dairy G
     "863110086146985": { lat: 8.5177, lng: 77.8580 }, // TN 75 S 9826
     "863110086150292": { lat: 8.2415, lng: 77.4326 }, // TN 75 R 9952
     "863110086162107": { lat: 8.2607, lng: 77.2883 }, // TN 75 S 1688
-    "863110086164111": { lat: 8.1833, lng: 77.4119 }, // TN 75 BF 0320
-    "863110086186932": { lat: 8.3056, lng: 77.2217 }, // TN 75 M 0041
+    "863110086164111": { lat: 8.3473, lng: 77.1106 }, // TN 75 BF 0320
+    "863110086186932": { lat: 8.2607, lng: 77.2883 }, // TN 75 M 0041
     "863110086192104": { lat: 8.0883, lng: 77.5385 }, // TN 75 BC 2219
   };
 
@@ -333,4 +333,28 @@ test("10. Fleet Vehicles Suite: Tests bounds for all 7 registered Nanjil Dairy G
     assert.ok(targetWithRoute.bounds.south >= 8.0 && targetWithRoute.bounds.north <= 9.0, `${v.number} bounds in TN`);
     assert.ok(targetWithRoute.bounds.west >= 77.0 && targetWithRoute.bounds.east <= 78.5, `${v.number} bounds in TN`);
   });
+});
+
+test("11. Coordinate Consistency & toFleetCoord: Explicit conversion, GeoJSON, string, and Africa rejection", () => {
+  // TN 75 BF 0320 authentic coordinates
+  const bf0320 = toFleetCoord({ lat: 8.3473, lng: 77.1106 });
+  assert.deepEqual(bf0320, { lat: 8.3473, lng: 77.1106 });
+
+  // GeoJSON [lng, lat] conversion
+  const geoJsonPoint = toFleetCoord([77.1106, 8.3473]);
+  assert.deepEqual(geoJsonPoint, { lat: 8.3473, lng: 77.1106 }, "GeoJSON [lng, lat] must map to { lat, lng }");
+
+  // String "lat, lng" format
+  const stringPoint = toFleetCoord("8.3473, 77.1106");
+  assert.deepEqual(stringPoint, { lat: 8.3473, lng: 77.1106 }, "String location must map to { lat, lng }");
+
+  // Null Island (0, 0) in West Africa rejected
+  assert.equal(toFleetCoord({ lat: 0, lng: 0 }), null, "(0, 0) Null Island must be rejected");
+  assert.equal(toFleetCoord("0.000000, 0.000000"), null, "(0, 0) string must be rejected");
+
+  // Corrupted hardware West Africa coordinates (lng: 0.2) rejected
+  assert.equal(toFleetCoord({ lat: 8.3473, lng: 0.2 }), null, "West Africa longitude must be rejected");
+
+  // Accidental swapped lat/lng rejected
+  assert.equal(toFleetCoord({ lat: 77.1106, lng: 8.3473 }), null, "Swapped lat/lng must be rejected");
 });

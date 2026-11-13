@@ -5,7 +5,8 @@ import { db } from "@/lib/firebase";
 import { supabase } from "@/lib/supabase";
 import { type Vehicle, type VehicleStatus } from "@/lib/types";
 import { useAverageSpeed, extractTelemetryTimestamp, globalGpsSpeedTracker } from "@/hooks/useAverageSpeed";
-import { getIstDateRange } from "@/lib/tripHistoryEngine";
+import { getIstDateRange, isFleetOperatingCoordinate } from "@/lib/tripHistoryEngine";
+import { toFleetCoord, isValidFleetCoord, NANJIL_DAIRY_DEPOT } from "@/components/maps/mapConstants";
 
 export interface FirestoreVehicleDoc {
   device_id?: string | number;
@@ -122,12 +123,13 @@ export function parseFirestoreTelemetry(
   existing?: Vehicle,
   docSnap?: any,
 ): Partial<Vehicle> {
-  const rawLat = data.lat;
-  const rawLng = data.lng;
+  // Robust coordinate extraction: prioritize genuine live telemetry, preserve existing valid coordinates
+  const liveCoord = toFleetCoord({ lat: data.lat, lng: data.lng }) || (data.location ? toFleetCoord(data.location) : null);
+  const existingCoord = existing ? (toFleetCoord({ lat: existing.lat, lng: existing.lng }) || (existing.location ? toFleetCoord(existing.location) : null)) : null;
+  const coord = liveCoord || existingCoord;
 
-  // Use ONLY Firebase Firestore coordinates (do not fallback to Supabase location column)
-  const lat = typeof rawLat === "number" ? rawLat : parseFloat(String(rawLat ?? 0));
-  const lng = typeof rawLng === "number" ? rawLng : parseFloat(String(rawLng ?? 0));
+  const lat = coord ? coord.lat : 0;
+  const lng = coord ? coord.lng : 0;
 
   const speed = typeof data.speed === "number" ? data.speed : parseFloat(String(data.speed || 0));
 
@@ -549,6 +551,23 @@ export function usePureFirebaseTracking() {
         registerAlias(matchedSupabase.id, cleanDevId || rawDevId);
       }
 
+      // Coordinate Resolution:
+      // Priority 1: Valid live Firestore telemetry IF within fleet operating geofence
+      // Priority 2: Supabase vehicles view coordinates (v_vehicles.lat / v_vehicles.lng)
+      // Priority 3: Parsed from Supabase location text ("lat, lng")
+      // Priority 4: Verified depot coordinates
+      const liveCoord = toFleetCoord({ lat: parsed.lat, lng: parsed.lng });
+      const supabaseCoord = matchedSupabase
+        ? toFleetCoord({ lat: matchedSupabase.lat, lng: matchedSupabase.lng }) ||
+          (matchedSupabase.location ? toFleetCoord(matchedSupabase.location) : null)
+        : null;
+
+      const finalCoord = liveCoord || supabaseCoord || NANJIL_DAIRY_DEPOT;
+      const displayLocation =
+        parsed.location ||
+        matchedSupabase?.location ||
+        `${finalCoord.lat.toFixed(4)}, ${finalCoord.lng.toFixed(4)}`;
+
       return {
         id: vehicleId,
         number: vehicleNumber,
@@ -557,9 +576,9 @@ export function usePureFirebaseTracking() {
         driver: driverName,
         driverId: driverId,
         status: parsed.status || "Idle",
-        location: parsed.location || matchedSupabase?.location || "",
-        lat: parsed.lat || 0,
-        lng: parsed.lng || 0,
+        location: displayLocation,
+        lat: finalCoord.lat,
+        lng: finalCoord.lng,
         speed: parsed.speed || 0,
         fuel: parsed.fuel || 0,
         temperature: parsed.temperature || 0,

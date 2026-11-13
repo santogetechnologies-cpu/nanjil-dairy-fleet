@@ -63,6 +63,64 @@ export function isValidFleetCoord(
 }
 
 /**
+ * Safely parses any coordinate representation into a verified { lat: number, lng: number } object.
+ * Accepts:
+ * - { lat, lng } or { latitude, longitude }
+ * - GeoJSON coordinate array [lng, lat] (explicitly converted)
+ * - String format "lat, lng"
+ * Strictly rejects coordinates outside the Indian fleet operational geofence (e.g. Africa / Null Island).
+ */
+export function toFleetCoord(
+  input: unknown,
+): { lat: number; lng: number } | null {
+  if (!input) return null;
+
+  // 1. Array representation: [lng, lat] (GeoJSON standard) or [lat, lng]
+  if (Array.isArray(input) && input.length >= 2) {
+    const a = Number(input[0]);
+    const b = Number(input[1]);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+
+    // GeoJSON [lng, lat] where lng ~ 77, lat ~ 8
+    if (a >= 50 && a <= 105 && b >= 4 && b <= 38) {
+      return { lat: b, lng: a };
+    }
+    // [lat, lng] where lat ~ 8, lng ~ 77
+    if (a >= 4 && a <= 38 && b >= 50 && b <= 105) {
+      return { lat: a, lng: b };
+    }
+    return null;
+  }
+
+  // 2. String representation "lat, lng"
+  if (typeof input === "string") {
+    const parts = input.split(",").map((s) => parseFloat(s.trim()));
+    if (parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1])) {
+      if (isValidFleetCoord({ lat: parts[0], lng: parts[1] })) {
+        return { lat: parts[0], lng: parts[1] };
+      }
+    }
+    return null;
+  }
+
+  // 3. Object representation: { lat, lng } or { latitude, longitude }
+  if (typeof input === "object") {
+    const obj = input as any;
+    const rawLat = obj.lat ?? obj.latitude ?? obj.Lat ?? obj.Latitude;
+    const rawLng = obj.lng ?? obj.longitude ?? obj.lon ?? obj.Lng ?? obj.Longitude;
+    if (rawLat != null && rawLng != null) {
+      const lat = Number(rawLat);
+      const lng = Number(rawLng);
+      if (isValidFleetCoord({ lat, lng })) {
+        return { lat, lng };
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Returns brand colors for vehicle status badges and markers.
  * Moving: Green (#10B981)
  * Idle: Amber (#F59E0B)
