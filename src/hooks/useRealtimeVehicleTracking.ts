@@ -175,6 +175,17 @@ export function useRealtimeAllVehicles(enabled: boolean = true): Vehicle[] {
 
     load();
 
+    // Reload vehicle data when network connectivity is restored.
+    // Supabase Realtime WebSocket reconnects automatically via the SDK,
+    // but the initial REST fetch (load()) is not retried — wire it here.
+    const handleOnline = () => {
+      console.log("[Network] Connection restored — refreshing EMQX/Supabase vehicle positions");
+      if (isMountedRef.current) load();
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", handleOnline);
+    }
+
     // Subscribe to vehicle_telemetry changes (EMQX upserts trigger these)
     const channelId = `emqx-realtime-all-vehicles-${Math.random().toString(36).substring(2, 9)}`;
     const channel = supabase
@@ -222,6 +233,9 @@ export function useRealtimeAllVehicles(enabled: boolean = true): Vehicle[] {
     return () => {
       isMountedRef.current = false;
       supabase.removeChannel(channel);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("online", handleOnline);
+      }
     };
   }, [enabled]);
 
