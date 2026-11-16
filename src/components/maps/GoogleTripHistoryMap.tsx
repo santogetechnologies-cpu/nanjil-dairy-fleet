@@ -13,6 +13,7 @@ import {
   DEFAULT_MAP_ZOOM,
   GOOGLE_MAPS_MAP_ID,
   GOOGLE_MAPS_API_KEY,
+  isValidFleetCoord,
 } from "./mapConstants";
 
 export interface GoogleTripHistoryMapProps {
@@ -51,10 +52,10 @@ export function GoogleTripHistoryMap({
   }
 
   const defaultCenter = useMemo(() => {
-    if (currentPoint && typeof currentPoint.lat === "number" && typeof currentPoint.lng === "number") {
+    if (isValidFleetCoord(currentPoint)) {
       return { lat: currentPoint.lat, lng: currentPoint.lng };
     }
-    if (vehicleCurrentPosition && typeof vehicleCurrentPosition.lat === "number" && typeof vehicleCurrentPosition.lng === "number") {
+    if (isValidFleetCoord(vehicleCurrentPosition)) {
       return { lat: vehicleCurrentPosition.lat, lng: vehicleCurrentPosition.lng };
     }
     return DEFAULT_MAP_CENTER;
@@ -70,7 +71,7 @@ export function GoogleTripHistoryMap({
     let maxLng = -Infinity;
 
     activeGpsPoints.forEach((p) => {
-      if (typeof p.lat === "number" && typeof p.lng === "number" && !isNaN(p.lat) && !isNaN(p.lng)) {
+      if (isValidFleetCoord(p)) {
         if (p.lat < minLat) minLat = p.lat;
         if (p.lat > maxLat) maxLat = p.lat;
         if (p.lng < minLng) minLng = p.lng;
@@ -100,7 +101,7 @@ export function GoogleTripHistoryMap({
 
   // Auto-pan camera as playback progresses
   useEffect(() => {
-    if (map && isPlaying && currentPoint && typeof currentPoint.lat === "number" && typeof currentPoint.lng === "number") {
+    if (map && isPlaying && isValidFleetCoord(currentPoint)) {
       map.panTo({ lat: currentPoint.lat, lng: currentPoint.lng });
     }
   }, [map, isPlaying, currentPoint]);
@@ -110,14 +111,7 @@ export function GoogleTripHistoryMap({
     return activeSegments
       .map((segment) =>
         segment.points
-          .filter(
-            (p) =>
-              p &&
-              typeof p.lat === "number" &&
-              typeof p.lng === "number" &&
-              !isNaN(p.lat) &&
-              !isNaN(p.lng)
-          )
+          .filter((p) => isValidFleetCoord(p))
           .map((p) => ({ lat: p.lat, lng: p.lng }))
       )
       .filter((coords) => coords.length >= 2);
@@ -160,10 +154,7 @@ export function GoogleTripHistoryMap({
 
       {/* Start Marker A (Emerald) */}
       {activeGpsPoints.length > 0 &&
-        typeof activeGpsPoints[0]?.lng === "number" &&
-        typeof activeGpsPoints[0]?.lat === "number" &&
-        !isNaN(activeGpsPoints[0].lng) &&
-        !isNaN(activeGpsPoints[0].lat) && (
+        isValidFleetCoord(activeGpsPoints[0]) && (
           <AdvancedMarker
             position={{ lat: activeGpsPoints[0].lat, lng: activeGpsPoints[0].lng }}
             title={`Journey Departure: ${formatIstTime(activeGpsPoints[0].recorded_at)}`}
@@ -176,10 +167,7 @@ export function GoogleTripHistoryMap({
 
       {/* End Marker B (Slate) */}
       {activeGpsPoints.length > 1 &&
-        typeof activeGpsPoints[activeGpsPoints.length - 1]?.lng === "number" &&
-        typeof activeGpsPoints[activeGpsPoints.length - 1]?.lat === "number" &&
-        !isNaN(activeGpsPoints[activeGpsPoints.length - 1].lng) &&
-        !isNaN(activeGpsPoints[activeGpsPoints.length - 1].lat) && (
+        isValidFleetCoord(activeGpsPoints[activeGpsPoints.length - 1]) && (
           <AdvancedMarker
             position={{
               lat: activeGpsPoints[activeGpsPoints.length - 1].lat,
@@ -197,14 +185,7 @@ export function GoogleTripHistoryMap({
 
       {/* Stop Markers (P, Amber) */}
       {timelineEvents
-        .filter(
-          (e) =>
-            e.type === "stop" &&
-            typeof e.lng === "number" &&
-            typeof e.lat === "number" &&
-            !isNaN(e.lng) &&
-            !isNaN(e.lat)
-        )
+        .filter((e) => e.type === "stop" && isValidFleetCoord(e))
         .map((e) => (
           <AdvancedMarker
             key={e.id}
@@ -220,14 +201,7 @@ export function GoogleTripHistoryMap({
 
       {/* Signal Gap Markers (!, Red) */}
       {timelineEvents
-        .filter(
-          (e) =>
-            e.type === "gap" &&
-            typeof e.lng === "number" &&
-            typeof e.lat === "number" &&
-            !isNaN(e.lng) &&
-            !isNaN(e.lat)
-        )
+        .filter((e) => e.type === "gap" && isValidFleetCoord(e))
         .map((e) => (
           <AdvancedMarker
             key={e.id}
@@ -243,11 +217,7 @@ export function GoogleTripHistoryMap({
 
       {/* Vehicle Current Position Marker (when no playback points or stationary) */}
       {activeGpsPoints.length === 0 &&
-        vehicleCurrentPosition &&
-        typeof vehicleCurrentPosition.lng === "number" &&
-        typeof vehicleCurrentPosition.lat === "number" &&
-        !isNaN(vehicleCurrentPosition.lng) &&
-        !isNaN(vehicleCurrentPosition.lat) && (
+        isValidFleetCoord(vehicleCurrentPosition) && (
           <AdvancedMarker
             position={{ lat: vehicleCurrentPosition.lat, lng: vehicleCurrentPosition.lng }}
           >
@@ -263,11 +233,7 @@ export function GoogleTripHistoryMap({
         )}
 
       {/* ACTIVE PLAYBACK VEHICLE MARKER */}
-      {currentPoint &&
-        typeof currentPoint.lng === "number" &&
-        typeof currentPoint.lat === "number" &&
-        !isNaN(currentPoint.lng) &&
-        !isNaN(currentPoint.lat) && (
+      {isValidFleetCoord(currentPoint) && (
           <AdvancedMarker position={{ lat: currentPoint.lat, lng: currentPoint.lng }}>
             <div className="relative flex items-center justify-center">
               <div className="h-9 w-9 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-2xl border-2 border-white ring-4 ring-indigo-300 animate-pulse">

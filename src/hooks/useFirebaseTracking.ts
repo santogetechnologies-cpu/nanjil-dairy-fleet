@@ -484,7 +484,7 @@ export function usePureFirebaseTracking() {
             updateGpsPoint(cleanDevId, lat, lng, speed, timestamp);
 
             // Continuously persist live telemetry into Supabase telemetry_history (throttled)
-            if (/^\d{15}$/.test(cleanDevId) && lat !== 0 && lng !== 0) {
+            if (/^\d{15}$/.test(cleanDevId) && isFleetOperatingCoordinate(lat, lng)) {
               const now = Date.now();
               const last = lastIngestTimesRef.current.get(cleanDevId);
               const elapsed = last ? now - last.time : 999999;
@@ -497,7 +497,7 @@ export function usePureFirebaseTracking() {
                 Promise.resolve(
                   supabase.rpc("ingest_emqx_telemetry", {
                     p_device_id: cleanDevId,
-                    p_timestamp: new Date().toISOString(),
+                    p_timestamp: validTimestampIso,
                     p_lat: lat,
                     p_lng: lng,
                     p_speed: speed,
