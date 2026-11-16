@@ -79,6 +79,36 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [quickActionOpen, setQuickActionOpen] = useState(false);
+  const notificationsRef = useRef<HTMLDivElement>(null);
+
+  // Outside-click & Escape dismissal for Operational Alerts notification dropdown
+  useEffect(() => {
+    if (!notificationsOpen) return;
+
+    function handleOutsideClick(event: Event) {
+      if (
+        notificationsRef.current &&
+        !notificationsRef.current.contains(event.target as Node)
+      ) {
+        setNotificationsOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setNotificationsOpen(false);
+      }
+    }
+
+    const eventName = typeof window !== "undefined" && "PointerEvent" in window ? "pointerdown" : "mousedown";
+    document.addEventListener(eventName, handleOutsideClick);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener(eventName, handleOutsideClick);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [notificationsOpen]);
 
   // Command Palette (Ctrl+K / Cmd+K)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -756,10 +786,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </div>
 
           {/* Notifications Center Bell */}
-          <div className="relative">
+          <div ref={notificationsRef} className="relative">
             <button
               onClick={() => {
-                setNotificationsOpen(!notificationsOpen);
+                setNotificationsOpen((prev) => !prev);
                 setProfileOpen(false);
                 setQuickActionOpen(false);
               }}
@@ -776,9 +806,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
             {/* Notifications Dropdown Drawer */}
             {notificationsOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setNotificationsOpen(false)} />
-                <div className="absolute right-0 top-full mt-2 w-84 z-50 rounded-2xl bg-white border border-slate-200 shadow-2xl overflow-hidden text-xs animate-in fade-in zoom-in-95">
+              <div className="absolute right-0 top-full mt-2 w-84 z-50 rounded-2xl bg-white border border-slate-200 shadow-2xl overflow-hidden text-xs animate-in fade-in zoom-in-95">
                   <div className="p-3.5 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between">
                     <div>
                       <div className="font-bold text-slate-900 flex items-center gap-1.5">
@@ -863,7 +891,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
                     </Link>
                   </div>
                 </div>
-              </>
             )}
           </div>
 
