@@ -8,6 +8,36 @@ import { useAverageSpeed, extractTelemetryTimestamp, globalGpsSpeedTracker } fro
 import { getIstDateRange, isFleetOperatingCoordinate } from "@/lib/tripHistoryEngine";
 import { toFleetCoord, isValidFleetCoord, NANJIL_DAIRY_DEPOT } from "@/components/maps/mapConstants";
 
+// ---------------------------------------------------------------------------
+// Last-Known-Good (LKG) coordinate cache
+// Persists the most recent verified Tamil Nadu GPS fix per vehicle / device
+// so that (0,0) / Africa coordinates from Firestore or Supabase are never
+// shown after the vehicle has been seen at least once at a valid position.
+// ---------------------------------------------------------------------------
+const LKG_PREFIX = "nanjil_lkg_coord_";
+
+function saveLkgCoord(key: string, coord: { lat: number; lng: number }): void {
+  if (!key) return;
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(LKG_PREFIX + key, JSON.stringify(coord));
+    }
+  } catch {}
+}
+
+function loadLkgCoord(key: string): { lat: number; lng: number } | null {
+  if (!key) return null;
+  try {
+    if (typeof localStorage === "undefined") return null;
+    const raw = localStorage.getItem(LKG_PREFIX + key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return isValidFleetCoord(parsed) ? (parsed as { lat: number; lng: number }) : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface FirestoreVehicleDoc {
   device_id?: string | number;
   vehicle_number?: string;
@@ -188,8 +218,10 @@ export function parseFirestoreTelemetry(
   }
 
   return {
-    lat: isNaN(lat) ? existing?.lat || 0 : lat,
-    lng: isNaN(lng) ? existing?.lng || 0 : lng,
+    // Belt-and-suspenders: also reject lat/lng === 0 (Null Island / Africa) and fall back to
+    // the existing vehicle's last-known coordinate rather than storing 0 into state.
+    lat: (lat !== 0 && !isNaN(lat)) ? lat : (existing?.lat || 0),
+    lng: (lng !== 0 && !isNaN(lng)) ? lng : (existing?.lng || 0),
     speed: isNaN(speed) ? existing?.speed || 0 : speed,
     temperature: isNaN(temperature) ? existing?.temperature || 0 : temperature,
     fuel: isNaN(fuel) ? existing?.fuel || 0 : fuel,
@@ -311,7 +343,16 @@ export function usePureFirebaseTracking() {
           setSupabaseVehicles(combined);
           if (typeof localStorage !== "undefined" && combined.length > 0) {
             try {
-              localStorage.setItem("nanjil_cached_supabase_vehicles", JSON.stringify(combined));
+              // Strip (0,0) / Africa coordinates before caching so cold-start never
+              // replays invalid GPS coordinates into the map.
+              const safeToCache = combined.map((v: any) => {
+                const coord =
+                  toFleetCoord({ lat: v.lat, lng: v.lng }) ||
+                  (v.location ? toFleetCoord(v.location) : null);
+                if (!coord) return { ...v, lat: null, lng: null };
+                return { ...v, lat: coord.lat, lng: coord.lng };
+              });
+              localStorage.setItem("nanjil_cached_supabase_vehicles", JSON.stringify(safeToCache));
             } catch {}
           }
         }
@@ -321,6 +362,17 @@ export function usePureFirebaseTracking() {
     }
 
     loadSupabaseVehicles();
+
+    // Reload Supabase vehicle data when network connectivity is restored.
+    // Firebase onSnapshot and Supabase Realtime reconnect automatically via their SDKs,
+    // but the initial REST fetch (loadSupabaseVehicles) is not retried automatically.
+    const handleOnline = () => {
+      console.log("[Network] Connection restored — refreshing Supabase vehicle coordinates");
+      loadSupabaseVehicles();
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", handleOnline);
+    }
 
     const channelId = `pure-tracking-vehicles-${Math.random().toString(36).substring(2, 9)}`;
     const channel = supabase
@@ -340,6 +392,9 @@ export function usePureFirebaseTracking() {
     return () => {
       cancelled = true;
       supabase.removeChannel(channel);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("online", handleOnline);
+      }
     };
   }, []);
 
@@ -555,14 +610,27 @@ export function usePureFirebaseTracking() {
       // Priority 1: Valid live Firestore telemetry IF within fleet operating geofence
       // Priority 2: Supabase vehicles view coordinates (v_vehicles.lat / v_vehicles.lng)
       // Priority 3: Parsed from Supabase location text ("lat, lng")
-      // Priority 4: Verified depot coordinates
+      // Priority 4: Last-known-good Tamil Nadu coordinate from localStorage (survives network cuts)
+      // Priority 5: Verified depot coordinates (never Africa / (0,0))
       const liveCoord = toFleetCoord({ lat: parsed.lat, lng: parsed.lng });
       const supabaseCoord = matchedSupabase
         ? toFleetCoord({ lat: matchedSupabase.lat, lng: matchedSupabase.lng }) ||
           (matchedSupabase.location ? toFleetCoord(matchedSupabase.location) : null)
         : null;
 
-      const finalCoord = liveCoord || supabaseCoord || NANJIL_DAIRY_DEPOT;
+      // Load last-known-good coordinate by vehicle UUID then by device ID
+      const lkgCoord =
+        loadLkgCoord(matchedSupabase?.id || vehicleId) ||
+        loadLkgCoord(cleanDevId);
+
+      const finalCoord = liveCoord || supabaseCoord || lkgCoord || NANJIL_DAIRY_DEPOT;
+
+      // Persist this fix as the new last-known-good if it is a real GPS position (not the depot fallback)
+      if (finalCoord !== NANJIL_DAIRY_DEPOT) {
+        if (vehicleId) saveLkgCoord(vehicleId, finalCoord);
+        if (cleanDevId) saveLkgCoord(cleanDevId, finalCoord);
+        if (matchedSupabase?.id) saveLkgCoord(matchedSupabase.id, finalCoord);
+      }
       const displayLocation =
         parsed.location ||
         matchedSupabase?.location ||

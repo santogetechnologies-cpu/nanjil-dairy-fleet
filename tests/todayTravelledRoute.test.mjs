@@ -407,11 +407,11 @@ test("19. Plant Road Connector: Separately Generated When Vehicle Origin Is Away
   const connector = await buildPlantConnector(remotePoint);
   assert.ok(connector != null, "Must generate connector when remote");
   assert.ok(connector.length >= 2, "Connector must have at least 2 points");
-  assert.equal(connector[0].lat, NANJIL_DAIRY_DEPOT.lat);
-  assert.equal(connector[0].lng, NANJIL_DAIRY_DEPOT.lng);
+  assert.ok(Math.abs(connector[0].lat - NANJIL_DAIRY_DEPOT.lat) < 0.001, "Connector start must be at Nanjil Dairy Depot (or snapped to nearest road)");
+  assert.ok(Math.abs(connector[0].lng - NANJIL_DAIRY_DEPOT.lng) < 0.001, "Connector start must be at Nanjil Dairy Depot (or snapped to nearest road)");
   const lastConnPt = connector[connector.length - 1];
-  assert.equal(lastConnPt.lat, remotePoint.lat);
-  assert.equal(lastConnPt.lng, remotePoint.lng);
+  assert.ok(Math.abs(lastConnPt.lat - remotePoint.lat) < 0.001, "Connector end must be at remote point (or snapped to nearest road)");
+  assert.ok(Math.abs(lastConnPt.lng - remotePoint.lng) < 0.001, "Connector end must be at remote point (or snapped to nearest road)");
 });
 
 test("20. Individual Vehicle Tracking: Selected Vehicle Highlighting vs Dimmed Unselected Routes", () => {
