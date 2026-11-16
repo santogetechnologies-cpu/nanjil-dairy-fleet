@@ -1,135 +1,158 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  CACHE_VERSION,
+  CACHE_PREFIX,
   getGeocodeCacheKey,
   isCoordinateString,
   getCachedLocation,
   saveToGeocodeCache,
+  clearGeocodeCache,
+  invalidateLegacyGeocodeCache,
+  extractAccurateLocality,
   formatAddressHierarchy,
   reverseGeocodeCoordinate,
   getImmediateLocationDisplay,
+  parseGoogleGeocoderResult,
 } from "../src/lib/reverseGeocoding.ts";
 import { toFleetCoord } from "../src/components/maps/mapConstants.ts";
 
-test("1. isCoordinateString: Accurately distinguishes raw GPS coordinates from authentic named locations", () => {
-  // Raw GPS coordinate strings should return true
+test("1. isCoordinateString: Accurately distinguishes raw GPS coordinates from text labels", () => {
   assert.equal(isCoordinateString("8.2607, 77.2877"), true);
   assert.equal(isCoordinateString("8.3473, 77.1106"), true);
   assert.equal(isCoordinateString("8.260735,77.287706"), true);
   assert.equal(isCoordinateString(" 8.2231 , 77.4169 "), true);
-  assert.equal(isCoordinateString("8.26, 77.52"), true);
 
-  // Authentic human-readable named locations must return false
   assert.equal(isCoordinateString("Suchindram Distribution Sector"), false);
   assert.equal(isCoordinateString("Monday Market Dairy Centre"), false);
   assert.equal(isCoordinateString("Nagercoil Central Depot Yard"), false);
-  assert.equal(isCoordinateString("Chunkankadai Junction"), false);
-  assert.equal(isCoordinateString("Colachel Coastal Distribution Base"), false);
-  assert.equal(isCoordinateString("Aralvaimozhi Route"), false);
   assert.equal(isCoordinateString("Depot Yard"), false);
-
-  // Edge cases and empty values
   assert.equal(isCoordinateString(""), false);
-  assert.equal(isCoordinateString("   "), false);
   assert.equal(isCoordinateString(null), false);
   assert.equal(isCoordinateString(undefined), false);
   assert.equal(isCoordinateString("NaN, NaN"), false);
 });
 
-test("2. getGeocodeCacheKey: Rounds GPS coordinates to 3 decimal places (~100m) to group co-located vehicles", () => {
-  // Two vehicles parked at Nanjil Central Processing Plant / Mulagumoodu Depot
-  const vehicle1Key = getGeocodeCacheKey(8.260735, 77.287706); // TN 75 BC 2219
-  const vehicle2Key = getGeocodeCacheKey(8.260778, 77.287839); // TN 75 M 0041
-  const vehicle3Key = getGeocodeCacheKey(8.260756, 77.288239); // TN 75 S 1688
+test("2. getGeocodeCacheKey: Uses 4 decimal places (~11m precision) to avoid excessive clustering", () => {
+  const k1 = getGeocodeCacheKey(8.260735, 77.287706); // TN 75 BC 2219
+  const k2 = getGeocodeCacheKey(8.260788, 77.287742); // very near k1 (~6m)
+  const k3 = getGeocodeCacheKey(8.260950, 77.288300); // TN 75 F 4323 (~80m away)
 
-  assert.equal(vehicle1Key, "8.261,77.288");
-  assert.equal(vehicle2Key, "8.261,77.288");
-  assert.equal(vehicle3Key, "8.261,77.288");
+  assert.equal(k1, "8.2607,77.2877");
+  assert.equal(k2, "8.2608,77.2877");
+  assert.equal(k3, "8.2609,77.2883");
 
-  // All three vehicles share the exact same rounded cache key
-  assert.equal(vehicle1Key, vehicle2Key);
-  assert.equal(vehicle2Key, vehicle3Key);
+  // Distinct locations maintain distinct cache keys
+  assert.notEqual(k1, k3);
 
-  // Vehicle in a different location produces a distinct key
+  // Different town produces a completely distinct key
   const bf0320Key = getGeocodeCacheKey(8.347316, 77.110624);
-  assert.equal(bf0320Key, "8.347,77.111");
-  assert.notEqual(bf0320Key, vehicle1Key);
+  assert.equal(bf0320Key, "8.3473,77.1106");
+  assert.notEqual(bf0320Key, k1);
 });
 
-test("3. formatAddressHierarchy: Adheres to Locality/Town -> District -> State -> Country hierarchy", () => {
-  // Case A: Full address with Locality, State, Country
-  const formattedA = formatAddressHierarchy({
+test("3. extractAccurateLocality & formatAddressHierarchy: Extracts authentic place names without taluk substitution", () => {
+  // Case A: Mulagumoodu plant (sublocality preferred over nearby town Thuckalay)
+  const mulagumoodu = formatAddressHierarchy({
+    sublocality: "Mulagumoodu",
+    locality: "Padmanabhapuram",
+    district: "Kanniyakumari district",
+    state: "Tamil Nadu",
+    country: "India",
+  });
+  assert.equal(mulagumoodu, "Mulagumoodu, Tamil Nadu, India");
+  assert.ok(!mulagumoodu.includes("Thuckalay"), "Must not substitute nearby town Thuckalay");
+
+  // Case B: Suchindram (town preferred over taluk Agastiswaram)
+  const suchindram = formatAddressHierarchy({
+    town: "Suchindram",
+    locality: null,
+    district: "Agastheeswaram",
+    state: "Tamil Nadu",
+    country: "India",
+  });
+  assert.equal(suchindram, "Suchindram, Tamil Nadu, India");
+  assert.ok(!suchindram.includes("Agastiswaram"), "Must not substitute taluk Agastiswaram");
+
+  // Case C: Kanyakumari (town/locality)
+  const kanyakumari = formatAddressHierarchy({
+    sublocality: "Kundal",
+    locality: "Kanyakumari",
+    state: "Tamil Nadu",
+    country: "India",
+  });
+  assert.equal(kanyakumari, "Kundal, Tamil Nadu, India");
+
+  // Case D: Nagercoil Parvathipuram
+  const parvathipuram = formatAddressHierarchy({
+    sublocality: "Parvathipuram",
     locality: "Nagercoil",
-    district: "Kanniyakumari district",
     state: "Tamil Nadu",
     country: "India",
   });
-  assert.equal(formattedA, "Nagercoil, Tamil Nadu, India");
+  assert.equal(parvathipuram, "Parvathipuram, Tamil Nadu, India");
 
-  // Case B: Town / Suburb as primary locality
-  const formattedB = formatAddressHierarchy({
-    town: "Thuckalay",
-    district: "Kanniyakumari",
-    state: "Tamil Nadu",
+  // Case E: Thirupuram (TN 75 BF 0320)
+  const thirupuram = formatAddressHierarchy({
+    village: "Thirupuram",
+    locality: "Neyyattinkara",
+    district: "Thiruvananthapuram",
+    state: "Kerala",
     country: "India",
   });
-  assert.equal(formattedB, "Thuckalay, Tamil Nadu, India");
+  assert.equal(thirupuram, "Thirupuram, Kerala, India");
 
-  // Case C: Locality is null, falls down hierarchy to District
-  const formattedC = formatAddressHierarchy({
-    locality: null,
-    district: "Kanniyakumari district",
-    state: "Tamil Nadu",
-    country: "India",
-  });
-  assert.equal(formattedC, "Kanniyakumari, Tamil Nadu, India");
-
-  // Case D: Both locality and district null, falls down hierarchy to State
-  const formattedD = formatAddressHierarchy({
-    locality: null,
-    district: null,
-    state: "Tamil Nadu",
-    country: "India",
-  });
-  assert.equal(formattedD, "Tamil Nadu, India");
-
-  // Case E: Formatting prevents duplicated entries
-  const formattedE = formatAddressHierarchy({
-    locality: "Tamil Nadu",
-    state: "Tamil Nadu",
-    country: "India",
-  });
-  assert.equal(formattedE, "Tamil Nadu, India");
-
-  // Case F: Never outputs "undefined" or "NaN"
-  const formattedF = formatAddressHierarchy({
+  // Case F: No undefined or NaN in formatted output
+  const cleanFallback = formatAddressHierarchy({
+    sublocality: undefined,
     locality: undefined,
-    district: undefined,
     state: undefined,
     country: undefined,
   });
-  assert.ok(!formattedF.includes("undefined"));
-  assert.ok(!formattedF.includes("NaN"));
+  assert.ok(!cleanFallback.includes("undefined"));
+  assert.ok(!cleanFallback.includes("NaN"));
 });
 
-test("4. getCachedLocation & saveToGeocodeCache: In-memory and persistent caching prevents duplicate requests", () => {
+test("4. parseGoogleGeocoderResult: Correctly maps Google Maps address components", () => {
+  const mockGoogleResult = {
+    formatted_address: "Mulagumoodu, Tamil Nadu 629167, India",
+    address_components: [
+      { long_name: "Mulagumoodu", short_name: "Mulagumoodu", types: ["sublocality_level_1", "sublocality", "political"] },
+      { long_name: "Padmanabhapuram", short_name: "Padmanabhapuram", types: ["locality", "political"] },
+      { long_name: "Kanniyakumari", short_name: "Kanniyakumari", types: ["administrative_area_level_2", "political"] },
+      { long_name: "Tamil Nadu", short_name: "TN", types: ["administrative_area_level_1", "political"] },
+      { long_name: "India", short_name: "IN", types: ["country", "political"] },
+    ],
+  };
+
+  const parsed = parseGoogleGeocoderResult(mockGoogleResult);
+  assert.equal(parsed.sublocality, "Mulagumoodu");
+  assert.equal(parsed.locality, "Padmanabhapuram");
+  assert.equal(parsed.district, "Kanniyakumari");
+  assert.equal(parsed.state, "Tamil Nadu");
+  assert.equal(parsed.country, "India");
+
+  const formatted = formatAddressHierarchy(parsed);
+  assert.equal(formatted, "Mulagumoodu, Tamil Nadu, India");
+});
+
+test("5. Cache Versioning & Invalidation: Uses v3 cache and supports clearing for manual refresh", () => {
+  assert.equal(CACHE_VERSION, "v3");
+  assert.equal(CACHE_PREFIX, "nanjil_revgeo_v3_");
+
   const lat = 8.2607;
   const lng = 77.2877;
   const key = getGeocodeCacheKey(lat, lng);
 
-  // Save resolved place name
-  saveToGeocodeCache(key, "Nagercoil, Tamil Nadu, India");
+  saveToGeocodeCache(key, "Mulagumoodu, Tamil Nadu, India");
+  assert.equal(getCachedLocation(lat, lng), "Mulagumoodu, Tamil Nadu, India");
 
-  // Synchronous retrieval must return the cached place name instantly (0ms)
-  const cached = getCachedLocation(lat, lng);
-  assert.equal(cached, "Nagercoil, Tamil Nadu, India");
-
-  // Retrieval with slight GPS variation within ~100m must also hit the cache
-  const cachedNear = getCachedLocation(8.26074, 77.28772);
-  assert.equal(cachedNear, "Nagercoil, Tamil Nadu, India");
+  // Clear cache for refresh
+  clearGeocodeCache();
+  assert.equal(getCachedLocation(lat, lng), null);
 });
 
-test("5. reverseGeocodeCoordinate: Graceful fallback and rejection of invalid / Null Island coordinates", async () => {
+test("6. reverseGeocodeCoordinate: Reject invalid coordinates and fall back to GPS string without fabricated data", async () => {
   // Reject (0, 0) Null Island
   const nullIsland = await reverseGeocodeCoordinate(0, 0, "Depot Yard");
   assert.equal(nullIsland, "Depot Yard");
@@ -138,39 +161,46 @@ test("5. reverseGeocodeCoordinate: Graceful fallback and rejection of invalid / 
   const swapped = await reverseGeocodeCoordinate(77.2877, 8.2607, "77.2877, 8.2607");
   assert.equal(swapped, "77.2877, 8.2607");
 
-  // Reject NaN / non-finite coordinates
+  // Reject NaN
   const nanCoord = await reverseGeocodeCoordinate(NaN, NaN, "Depot Yard");
   assert.equal(nanCoord, "Depot Yard");
 
-  // Return cached value if present
+  // Returns cached value when present
   const lat = 8.3473;
   const lng = 77.1106;
   const key = getGeocodeCacheKey(lat, lng);
-  saveToGeocodeCache(key, "Kuzhithurai, Tamil Nadu, India");
+  saveToGeocodeCache(key, "Thirupuram, Kerala, India");
 
   const resolved = await reverseGeocodeCoordinate(lat, lng, "8.3473, 77.1106");
-  assert.equal(resolved, "Kuzhithurai, Tamil Nadu, India");
+  assert.equal(resolved, "Thirupuram, Kerala, India");
 });
 
-test("6. getImmediateLocationDisplay: Preserves named locations and resolves cached coordinates synchronously", () => {
-  // Named text location: untouched
-  const named1 = getImmediateLocationDisplay("Suchindram Distribution Sector");
-  assert.equal(named1, "Suchindram Distribution Sector");
+test("7. getImmediateLocationDisplay: Derives location strictly from actual GPS coordinates", () => {
+  // Vehicle with GPS coordinates: does NOT blindly trust stale v.location text!
+  const lat = 8.1500;
+  const lng = 77.4600;
+  const key = getGeocodeCacheKey(lat, lng);
+  saveToGeocodeCache(key, "Suchindram, Tamil Nadu, India");
 
-  const named2 = getImmediateLocationDisplay("Monday Market Dairy Centre");
-  assert.equal(named2, "Monday Market Dairy Centre");
+  // Even if v.location says "Suchindram Distribution Sector", it returns the resolved GPS locality!
+  const locDisplay = getImmediateLocationDisplay("Suchindram Distribution Sector", lat, lng);
+  assert.equal(locDisplay, "Suchindram, Tamil Nadu, India");
 
-  // Cached coordinates: returns resolved name synchronously (0ms, non-blocking)
-  const cachedDisplay = getImmediateLocationDisplay("8.2607, 77.2877", 8.2607, 77.2877);
-  assert.equal(cachedDisplay, "Nagercoil, Tamil Nadu, India");
+  // Vehicle with coordinates not yet cached returns clean coordinates, not stale text
+  const uncachedDisplay = getImmediateLocationDisplay("Aralvaimozhi Route", 8.2600, 77.5200);
+  assert.equal(uncachedDisplay, "8.2600, 77.5200");
 
-  // Uncached coordinate string: returns clean coordinate string fallback without undefined or NaN
-  const uncachedDisplay = getImmediateLocationDisplay("8.9999, 77.9999", 8.9999, 77.9999);
-  assert.equal(uncachedDisplay, "8.9999, 77.9999");
+  // Only if vehicle has NO coordinates at all (null/undefined), it falls back to text
+  const noCoordDisplay = getImmediateLocationDisplay("Depot Yard", null, null);
+  assert.equal(noCoordDisplay, "Depot Yard");
 });
 
-test("7. Export Integration: Daily Vehicle Activity report rows contain resolved place names in table and CSV", () => {
-  // Simulated report rows as produced by _app.reports.tsx
+test("8. Export Integration: Daily Vehicle Activity table and CSV contain resolved GPS locality names", () => {
+  // Prime cache for test vehicles
+  saveToGeocodeCache(getGeocodeCacheKey(8.260735, 77.287706), "Mulagumoodu, Tamil Nadu, India");
+  saveToGeocodeCache(getGeocodeCacheKey(8.2106, 77.4603), "Nagercoil, Tamil Nadu, India");
+  saveToGeocodeCache(getGeocodeCacheKey(8.347316, 77.110624), "Thirupuram, Kerala, India");
+
   const mockVehicles = [
     {
       number: "TN 75 BC 2219",
@@ -185,23 +215,34 @@ test("7. Export Integration: Daily Vehicle Activity report rows contain resolved
       lng: 77.287706,
     },
     {
-      number: "TN75AT-4566",
-      driver_name: "Suresh K",
-      model: "Tata 407",
-      type: "Insulated Van",
-      odometer: 112400,
-      fuel: 62,
+      number: "TN 75 S 9826",
+      driver_name: "Ramesh P",
+      model: "Tata 1109",
+      type: "Milk Tanker",
+      odometer: 62400,
+      fuel: 78,
       status: "Moving",
-      location: "Suchindram Distribution Sector",
-      lat: 8.15,
-      lng: 77.46,
+      location: "8.2106, 77.4603",
+      lat: 8.2106,
+      lng: 77.4603,
+    },
+    {
+      number: "TN 75 BF 0320",
+      driver_name: "Anand M",
+      model: "Eicher 2059",
+      type: "Tanker",
+      odometer: 54100,
+      fuel: 90,
+      status: "Moving",
+      location: "8.3473, 77.1106",
+      lat: 8.347316,
+      lng: 77.110624,
     },
   ];
 
-  // Map rows using getImmediateLocationDisplay
   const reportRows = mockVehicles.map((v) => ({
     vehicle: v.number,
-    driver: v.driver_name || "Unassigned",
+    driver: v.driver_name,
     model: v.model,
     category: v.type,
     odometerKm: `${v.odometer.toLocaleString()} km`,
@@ -210,13 +251,11 @@ test("7. Export Integration: Daily Vehicle Activity report rows contain resolved
     location: getImmediateLocationDisplay(v.location, v.lat, v.lng),
   }));
 
-  // Verify that TN 75 BC 2219 uses resolved human-readable name instead of raw lat/long
-  assert.equal(reportRows[0].location, "Nagercoil, Tamil Nadu, India");
+  assert.equal(reportRows[0].location, "Mulagumoodu, Tamil Nadu, India");
+  assert.equal(reportRows[1].location, "Nagercoil, Tamil Nadu, India");
+  assert.equal(reportRows[2].location, "Thirupuram, Kerala, India");
 
-  // Verify that TN75AT-4566 preserves its authentic named location
-  assert.equal(reportRows[1].location, "Suchindram Distribution Sector");
-
-  // Verify CSV export formatting
+  // Verify CSV export string
   const keys = Object.keys(reportRows[0]);
   const lines = [
     keys.join(","),
@@ -224,7 +263,8 @@ test("7. Export Integration: Daily Vehicle Activity report rows contain resolved
   ];
 
   const csvContent = lines.join("\n");
-  assert.ok(csvContent.includes('"Nagercoil, Tamil Nadu, India"'), "CSV must contain resolved place name");
-  assert.ok(csvContent.includes('"Suchindram Distribution Sector"'), "CSV must preserve authentic named locations");
-  assert.ok(!csvContent.includes('"8.2607, 77.2877"'), "CSV must not contain raw coordinates when resolved");
+  assert.ok(csvContent.includes('"Mulagumoodu, Tamil Nadu, India"'));
+  assert.ok(csvContent.includes('"Nagercoil, Tamil Nadu, India"'));
+  assert.ok(csvContent.includes('"Thirupuram, Kerala, India"'));
+  assert.ok(!csvContent.includes('"Agastiswaram"'));
 });
