@@ -23,6 +23,13 @@ import {
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { globalOverspeedManager } from "@/lib/overspeed";
+import {
+  getImmediateLocationDisplay,
+  reverseGeocodeCoordinate,
+  isCoordinateString,
+  getCachedLocation,
+} from "@/lib/reverseGeocoding";
+import { toFleetCoord } from "@/components/maps/mapConstants";
 
 type ReportType =
   | "daily_activity"
@@ -89,7 +96,7 @@ export default function ReportsPage() {
           // Authentic vehicle fleet status from v_vehicles view
           let query = supabase
             .from("v_vehicles")
-            .select("id, number, driver_name, type, model, odometer, fuel, status, location, last_update")
+            .select("id, number, driver_name, type, model, odometer, fuel, status, location, lat, lng, last_update")
             .order("number");
 
           if (selectedVehicle !== "All") {
@@ -107,26 +114,71 @@ export default function ReportsPage() {
             );
           }
 
-          setReportRows(
-            filtered.map((v) => ({
-              vehicle: v.number,
-              driver: v.driver_name || "Unassigned",
-              model: v.model || v.type || "Fleet Asset",
-              category: v.type || "Tanker",
-              odometerKm: v.odometer ? `${Number(v.odometer).toLocaleString()} km` : "-",
-              fuelLevel: typeof v.fuel === "number" ? `${v.fuel}%` : "100%",
-              status: v.status || "Offline",
-              location: v.location || "Depot Yard",
-              lastReported: v.last_update
-                ? new Date(v.last_update).toLocaleDateString([], {
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })
-                : "Active",
-            }))
-          );
+          // Render initial rows immediately without blocking (using cached place names where available)
+          const initialRows = filtered.map((v) => ({
+            vehicle: v.number,
+            driver: v.driver_name || "Unassigned",
+            model: v.model || v.type || "Fleet Asset",
+            category: v.type || "Tanker",
+            odometerKm: v.odometer ? `${Number(v.odometer).toLocaleString()} km` : "-",
+            fuelLevel: typeof v.fuel === "number" ? `${v.fuel}%` : "100%",
+            status: v.status || "Offline",
+            location: getImmediateLocationDisplay(v.location, v.lat, v.lng),
+            lastReported: v.last_update
+              ? new Date(v.last_update).toLocaleDateString([], {
+                  month: "short",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })
+              : "Active",
+          }));
+
+          setReportRows(initialRows);
+
+          // Asynchronously resolve coordinates into human-readable geographical names in the background
+          const pendingVehicles = filtered.filter((v) => {
+            // Already an authentic named text location
+            if (v.location && !isCoordinateString(v.location)) return false;
+            const coord =
+              toFleetCoord({ lat: v.lat, lng: v.lng }) ||
+              (v.location ? toFleetCoord(v.location) : null);
+            if (!coord) return false;
+            // Check if already in cache (already resolved in initialRows)
+            return !getCachedLocation(coord.lat, coord.lng);
+          });
+
+          if (pendingVehicles.length > 0) {
+            Promise.all(
+              pendingVehicles.map(async (v) => {
+                const coord =
+                  toFleetCoord({ lat: v.lat, lng: v.lng }) ||
+                  (v.location ? toFleetCoord(v.location) : null);
+                if (!coord) return null;
+                const fallback = v.location || `${coord.lat.toFixed(4)}, ${coord.lng.toFixed(4)}`;
+                const placeName = await reverseGeocodeCoordinate(coord.lat, coord.lng, fallback);
+                return { number: v.number, placeName };
+              })
+            )
+              .then((results) => {
+                if (cancelled) return;
+                const updates = new Map<string, string>();
+                for (const r of results) {
+                  if (r?.placeName) updates.set(r.number, r.placeName);
+                }
+                if (updates.size > 0) {
+                  setReportRows((prev) =>
+                    prev.map((row) => {
+                      const resolved = updates.get(row.vehicle);
+                      return resolved ? { ...row, location: resolved } : row;
+                    })
+                  );
+                }
+              })
+              .catch((err) => {
+                console.warn("[Reports] Asynchronous reverse-geocoding notice:", err);
+              });
+          }
         } else if (selectedReport === "route_completion") {
           // Authentic milk collection routes from collection_routes
           let query = supabase
