@@ -28,6 +28,7 @@ import {
   reverseGeocodeCoordinate,
   isCoordinateString,
   getCachedLocation,
+  clearGeocodeCache,
 } from "@/lib/reverseGeocoding";
 import { toFleetCoord } from "@/components/maps/mapConstants";
 
@@ -50,6 +51,7 @@ export default function ReportsPage() {
   const [vehicles, setVehicles] = useState<any[]>([]);
   const [reportRows, setReportRows] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // Load registered vehicles for dropdown filter
   useEffect(() => {
@@ -138,8 +140,6 @@ export default function ReportsPage() {
 
           // Asynchronously resolve coordinates into human-readable geographical names in the background
           const pendingVehicles = filtered.filter((v) => {
-            // Already an authentic named text location
-            if (v.location && !isCoordinateString(v.location)) return false;
             const coord =
               toFleetCoord({ lat: v.lat, lng: v.lng }) ||
               (v.location ? toFleetCoord(v.location) : null);
@@ -155,7 +155,7 @@ export default function ReportsPage() {
                   toFleetCoord({ lat: v.lat, lng: v.lng }) ||
                   (v.location ? toFleetCoord(v.location) : null);
                 if (!coord) return null;
-                const fallback = v.location || `${coord.lat.toFixed(4)}, ${coord.lng.toFixed(4)}`;
+                const fallback = `${coord.lat.toFixed(4)}, ${coord.lng.toFixed(4)}`;
                 const placeName = await reverseGeocodeCoordinate(coord.lat, coord.lng, fallback);
                 return { number: v.number, placeName };
               })
@@ -355,7 +355,7 @@ export default function ReportsPage() {
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [selectedReport, dateRange, selectedVehicle]);
+  }, [selectedReport, dateRange, selectedVehicle, refreshKey]);
 
   function exportCsv() {
     if (!reportRows.length) return;
@@ -407,6 +407,19 @@ export default function ReportsPage() {
         subtitle="Operational Performance Audits · Exports in CSV & Printable PDF"
         actions={
           <div className="flex items-center gap-2">
+            {selectedReport === "daily_activity" && (
+              <Button
+                onClick={() => {
+                  clearGeocodeCache();
+                  setRefreshKey((k) => k + 1);
+                }}
+                className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs cursor-pointer"
+                title="Force re-resolve vehicle geographical locations from live GPS coordinates"
+              >
+                <RotateCcw className="h-3.5 w-3.5 text-slate-500" />
+                Refresh Locations
+              </Button>
+            )}
             <Button
               onClick={exportCsv}
               disabled={reportRows.length === 0}
