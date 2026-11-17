@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useCallback } from "react";
+import { useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import {
   Map,
   AdvancedMarker,
@@ -99,10 +99,34 @@ export function GoogleTripHistoryMap({
     }
   }, [onRegisterFitBounds, fitRouteBounds]);
 
-  // Auto-pan camera as playback progresses
+  const isInitialMountRef = useRef(true);
+  const prevPointRef = useRef<{ lat: number; lng: number } | null>(null);
+
+  // Reset initial mount flag whenever active route/points change
   useEffect(() => {
-    if (map && isPlaying && isValidFleetCoord(currentPoint)) {
+    isInitialMountRef.current = true;
+    prevPointRef.current = null;
+  }, [activeGpsPoints]);
+
+  // Pan camera as playback progresses or when user seeks/clicks points
+  useEffect(() => {
+    if (!map || !isValidFleetCoord(currentPoint)) return;
+
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      prevPointRef.current = { lat: currentPoint.lat, lng: currentPoint.lng };
+      return;
+    }
+
+    // Pan when playing or when the point coordinate changed (user seek/click)
+    const hasCoordChanged =
+      !prevPointRef.current ||
+      prevPointRef.current.lat !== currentPoint.lat ||
+      prevPointRef.current.lng !== currentPoint.lng;
+
+    if (isPlaying || hasCoordChanged) {
       map.panTo({ lat: currentPoint.lat, lng: currentPoint.lng });
+      prevPointRef.current = { lat: currentPoint.lat, lng: currentPoint.lng };
     }
   }, [map, isPlaying, currentPoint]);
 
@@ -132,7 +156,7 @@ export function GoogleTripHistoryMap({
     >
       {/* Segmented Historical GPS Trails (Breaks polyline at signal gaps!) */}
       {segmentPaths.map((coords, idx) => (
-        <div key={`seg-wrapper-${idx}`}>
+        <Fragment key={`seg-wrapper-${idx}`}>
           {/* Casing / Shadow */}
           <Polyline
             key={`casing-${idx}`}
@@ -149,7 +173,7 @@ export function GoogleTripHistoryMap({
             strokeOpacity={0.95}
             strokeWeight={3.8}
           />
-        </div>
+        </Fragment>
       ))}
 
       {/* Start Marker A (Emerald) */}

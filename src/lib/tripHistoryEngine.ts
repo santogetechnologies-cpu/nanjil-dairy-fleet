@@ -603,37 +603,62 @@ export function resolveDriverForJourney(
   journeyStartIso: string,
   journeyEndIso: string,
   assignments: any[],
-  drivers: any[]
+  drivers: any[],
+  vehicleFallback?: { driver_id?: string | null; driver_name?: string | null; driver?: string | null }
 ): { driverId: string | null; driverName: string } {
-  if (!assignments || assignments.length === 0) {
-    return { driverId: null, driverName: "Driver information unavailable" };
-  }
-
   const jStart = new Date(journeyStartIso).getTime();
 
-  // Find assignment active at journey start
-  const matched = assignments.find((a) => {
-    if (a.vehicle_id !== vehicleId) return false;
-    const aStart = new Date(a.assigned_at).getTime();
-    if (isNaN(aStart) || aStart > jStart) return false;
-    if (a.unassigned_at) {
-      const aEnd = new Date(a.unassigned_at).getTime();
-      if (!isNaN(aEnd) && aEnd < jStart) return false;
-    }
-    return true;
-  });
+  // 1. Find assignment active during journey start window
+  if (assignments && assignments.length > 0) {
+    const matched = assignments.find((a) => {
+      if (a.vehicle_id !== vehicleId) return false;
+      const aStart = new Date(a.assigned_at).getTime();
+      if (isNaN(aStart) || aStart > jStart) return false;
+      if (a.unassigned_at) {
+        const aEnd = new Date(a.unassigned_at).getTime();
+        if (!isNaN(aEnd) && aEnd < jStart) return false;
+      }
+      return true;
+    });
 
-  if (matched) {
-    const driverId = matched.driver_id;
-    let dName = matched.drivers?.name;
-    if (!dName && drivers) {
-      const dObj = drivers.find((d) => d.id === driverId);
-      if (dObj) dName = dObj.name;
+    if (matched) {
+      const driverId = matched.driver_id;
+      let dName = matched.drivers?.name;
+      if (!dName && drivers) {
+        const dObj = drivers.find((d) => d.id === driverId);
+        if (dObj) dName = dObj.name;
+      }
+      return {
+        driverId: driverId || null,
+        driverName: dName || "Assigned Driver",
+      };
     }
-    return {
-      driverId: driverId || null,
-      driverName: dName || "Assigned Driver",
-    };
+
+    // 2. Fall back to current active assignment on vehicle
+    const activeAssigned = assignments.find((a) => a.vehicle_id === vehicleId && a.is_active);
+    if (activeAssigned) {
+      const driverId = activeAssigned.driver_id;
+      let dName = activeAssigned.drivers?.name;
+      if (!dName && drivers) {
+        const dObj = drivers.find((d) => d.id === driverId);
+        if (dObj) dName = dObj.name;
+      }
+      return {
+        driverId: driverId || null,
+        driverName: dName || "Assigned Driver",
+      };
+    }
+  }
+
+  // 3. Fall back to vehicle metadata (from v_vehicles or vehicles table)
+  if (vehicleFallback) {
+    const dName = vehicleFallback.driver_name || vehicleFallback.driver;
+    if (dName && typeof dName === "string" && dName.trim().length > 0) {
+      return {
+        driverId: vehicleFallback.driver_id || null,
+        driverName: dName.trim(),
+      };
+    }
   }
 
   return { driverId: null, driverName: "Driver information unavailable" };
@@ -675,7 +700,8 @@ export function deriveJourneysFromTelemetry(
               tripPoints[0].recorded_at,
               tripPoints[tripPoints.length - 1].recorded_at,
               assignments,
-              drivers
+              drivers,
+              vehicle
             );
 
         journeysFromTrips.push({
@@ -749,7 +775,8 @@ export function deriveJourneysFromTelemetry(
       firstPt.recorded_at,
       lastPt.recorded_at,
       assignments,
-      drivers
+      drivers,
+      vehicle
     );
 
     const isMovingNow = lastPt.speed > 3;
@@ -832,8 +859,31 @@ export function generateJourneyTimelineEvents(
       inSpeeding = false;
     }
 
-    // Signal Gap check
+    // Signal Gap check: complete any pre-gap stop and emit gap event
     if (p.isGap) {
+      if (stationaryStartIndex !== -1 && i > 0) {
+        const prevP = points[i - 1];
+        const startMs = new Date(points[stationaryStartIndex].recorded_at).getTime();
+        const endMs = new Date(prevP.recorded_at).getTime();
+        const stopDurationMin = Math.round((endMs - startMs) / (60 * 1000));
+
+        if (stopDurationMin >= 2) {
+          events.push({
+            id: `ev-stop-${stationaryStartIndex}`,
+            type: "stop",
+            timestamp: points[stationaryStartIndex].recorded_at,
+            title: `Recorded Stop (${stopDurationMin}m)`,
+            description: `Stationary from ${formatIstTime(points[stationaryStartIndex].recorded_at)} to ${formatIstTime(prevP.recorded_at)}`,
+            pointIndex: stationaryStartIndex,
+            lat: points[stationaryStartIndex].lat,
+            lng: points[stationaryStartIndex].lng,
+            durationMins: stopDurationMin,
+            source: points[stationaryStartIndex].source,
+          });
+        }
+        stationaryStartIndex = -1;
+      }
+
       events.push({
         id: `ev-gap-${i}`,
         type: "gap",
@@ -846,6 +896,12 @@ export function generateJourneyTimelineEvents(
         durationMins: p.gapMinutes || 15,
         source: p.source,
       });
+
+      // If point after gap is stationary, initialize new stationary block
+      if (p.speed <= 3) {
+        stationaryStartIndex = i;
+      }
+      continue;
     }
 
     // Stop detection (stationary >= 2 min)
@@ -870,7 +926,7 @@ export function generateJourneyTimelineEvents(
             lat: points[stationaryStartIndex].lat,
             lng: points[stationaryStartIndex].lng,
             durationMins: stopDurationMin,
-            source: p.source,
+            source: points[stationaryStartIndex].source,
           });
 
           events.push({
@@ -891,6 +947,28 @@ export function generateJourneyTimelineEvents(
     }
   }
 
+  // End of points check: close any final stationary period
+  if (stationaryStartIndex !== -1 && points.length > 1) {
+    const lastPt = points[points.length - 1];
+    const startMs = new Date(points[stationaryStartIndex].recorded_at).getTime();
+    const endMs = new Date(lastPt.recorded_at).getTime();
+    const stopDurationMin = Math.round((endMs - startMs) / (60 * 1000));
+    if (stopDurationMin >= 2) {
+      events.push({
+        id: `ev-stop-${stationaryStartIndex}`,
+        type: "stop",
+        timestamp: points[stationaryStartIndex].recorded_at,
+        title: `Recorded Stop (${stopDurationMin}m)`,
+        description: `Stationary from ${formatIstTime(points[stationaryStartIndex].recorded_at)} to ${formatIstTime(lastPt.recorded_at)}`,
+        pointIndex: stationaryStartIndex,
+        lat: points[stationaryStartIndex].lat,
+        lng: points[stationaryStartIndex].lng,
+        durationMins: stopDurationMin,
+        source: points[stationaryStartIndex].source,
+      });
+    }
+  }
+
   // Arrival Event (only if genuine trip end or completed status)
   const lastIndex = points.length - 1;
   const isTripEnded = journey ? journey.status === "Completed" : false;
@@ -908,6 +986,14 @@ export function generateJourneyTimelineEvents(
       source: points[lastIndex].source,
     });
   }
+
+  // Guarantee strict chronological ordering by timestamp, then pointIndex
+  events.sort((a, b) => {
+    const timeA = new Date(a.timestamp).getTime();
+    const timeB = new Date(b.timestamp).getTime();
+    if (timeA !== timeB) return timeA - timeB;
+    return a.pointIndex - b.pointIndex;
+  });
 
   return events;
 }
