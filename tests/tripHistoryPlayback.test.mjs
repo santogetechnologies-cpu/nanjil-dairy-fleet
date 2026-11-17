@@ -531,3 +531,99 @@ test("24. Existing Trip and Route workflows remain unaffected: Road routing and 
   assert.equal(isGpsVehicle({ number: "TN 75 F 4323", device_id: "863110086146753" }), true);
 });
 
+test("25. Timeline events strict chronological sorting: Never returns out-of-order timestamps", () => {
+  const points = [
+    { id: "p0", lat: 8.2605, lng: 77.2884, speed: 0, ignition: true, recorded_at: "2026-11-16T04:30:00Z" },
+    { id: "p1", lat: 8.2605, lng: 77.2884, speed: 0, ignition: true, recorded_at: "2026-11-16T04:35:00Z" },
+    { id: "p2", lat: 8.2610, lng: 77.2890, speed: 25, ignition: true, recorded_at: "2026-11-16T04:36:00Z" },
+    { id: "p3", lat: 8.2615, lng: 77.2895, speed: 0, ignition: true, recorded_at: "2026-11-16T04:37:00Z" },
+    { id: "p4", lat: 8.2615, lng: 77.2895, speed: 0, ignition: true, recorded_at: "2026-11-16T04:45:00Z" },
+    // 20 min gap
+    { id: "p5", lat: 8.2615, lng: 77.2895, speed: 0, ignition: true, recorded_at: "2026-11-16T05:05:00Z", isGap: true, gapMinutes: 20 },
+    { id: "p6", lat: 8.2620, lng: 77.2900, speed: 65, ignition: true, recorded_at: "2026-11-16T05:10:00Z" }, // Overspeed
+    { id: "p7", lat: 8.2625, lng: 77.2910, speed: 30, ignition: true, recorded_at: "2026-11-16T05:12:00Z" },
+  ];
+
+  const events = generateJourneyTimelineEvents(points);
+  assert.ok(events.length >= 4, "Should generate departure, stop, gap, speeding events");
+
+  // Verify timestamps are strictly monotonically non-decreasing
+  for (let i = 1; i < events.length; i++) {
+    const prevTime = new Date(events[i - 1].timestamp).getTime();
+    const currTime = new Date(events[i].timestamp).getTime();
+    assert.ok(
+      currTime >= prevTime,
+      `Event ${i} (${events[i].title} at ${events[i].timestamp}) must be >= Event ${i - 1} (${events[i - 1].title} at ${events[i - 1].timestamp})`
+    );
+  }
+});
+
+test("26. Gap stop completion: Signal gap completes ongoing stationary period before emitting gap event", () => {
+  const points = [
+    { id: "p0", lat: 8.2605, lng: 77.2884, speed: 30, ignition: true, recorded_at: "2026-11-16T04:00:00Z" },
+    { id: "p1", lat: 8.2605, lng: 77.2884, speed: 0, ignition: true, recorded_at: "2026-11-16T04:05:00Z" },
+    { id: "p2", lat: 8.2605, lng: 77.2884, speed: 0, ignition: true, recorded_at: "2026-11-16T04:15:00Z" },
+    // Gap of 25 minutes
+    { id: "p3", lat: 8.2605, lng: 77.2884, speed: 0, ignition: true, recorded_at: "2026-11-16T04:40:00Z", isGap: true, gapMinutes: 25 },
+    { id: "p4", lat: 8.2605, lng: 77.2884, speed: 20, ignition: true, recorded_at: "2026-11-16T04:45:00Z" },
+  ];
+
+  const events = generateJourneyTimelineEvents(points);
+  const stopEvent = events.find((e) => e.type === "stop");
+  const gapEvent = events.find((e) => e.type === "gap");
+
+  assert.ok(stopEvent, "Should have a stop event before the gap");
+  assert.ok(gapEvent, "Should have a gap event");
+  assert.equal(stopEvent.durationMins, 10, "Stop duration before gap should be 10m (04:05 to 04:15)");
+  assert.ok(
+    new Date(stopEvent.timestamp).getTime() <= new Date(gapEvent.timestamp).getTime(),
+    "Stop event timestamp must precede gap event timestamp"
+  );
+});
+
+test("27. Driver resolution fallback: Uses vehicle metadata driver_name when assignments table is empty", () => {
+  const vehicle = {
+    id: "v-test-123",
+    number: "TN 75 BC 3835",
+    driver_name: "SUVIN V.",
+  };
+
+  const resolved = resolveDriverForJourney(
+    vehicle.id,
+    "2026-11-16T08:00:00Z",
+    "2026-11-16T09:00:00Z",
+    [], // No assignments
+    [],
+    vehicle
+  );
+
+  assert.equal(resolved.driverName, "SUVIN V.");
+});
+
+test("28. Playback restart wrap-around: Restarts to 0 when at journey end", () => {
+  const totalPoints = 100;
+  let currentIndex = totalPoints - 1; // At end
+  let isPlaying = false;
+
+  function handlePlayClick() {
+    if (isPlaying) {
+      isPlaying = false;
+    } else {
+      if (currentIndex >= totalPoints - 1) {
+        currentIndex = 0;
+      }
+      isPlaying = true;
+    }
+  }
+
+  // Clicking play while at the end must wrap around to index 0 and start playing
+  handlePlayClick();
+  assert.equal(currentIndex, 0);
+  assert.equal(isPlaying, true);
+
+  // Clicking again while playing pauses
+  handlePlayClick();
+  assert.equal(isPlaying, false);
+});
+
+

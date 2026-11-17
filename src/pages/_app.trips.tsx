@@ -351,6 +351,23 @@ export default function TripHistoryPage() {
     });
   }, [derivedJourneys, selectedDriverId, journeyStatusFilter, minDistanceKm]);
 
+  // Combined metrics across all journeys for the day
+  const fullDayMetrics = useMemo(() => {
+    let dist = 0;
+    let driveSec = 0;
+    let stops = 0;
+    derivedJourneys.forEach((j) => {
+      dist += j.metrics.totalDistanceKm;
+      driveSec += j.metrics.drivingDurationSeconds;
+      stops += j.metrics.stopsCount;
+    });
+    return {
+      totalKm: Math.round(dist * 10) / 10,
+      drivingMin: Math.round(driveSec / 60),
+      stopsCount: stops,
+    };
+  }, [derivedJourneys]);
+
   // 9. Selected Vehicle Authentic Position (No Fake Fallback Location!)
   const vehicleCurrentPosition = useMemo(() => {
     // Check if liveVehicles has authentic non-zero coordinates
@@ -981,7 +998,7 @@ export default function TripHistoryPage() {
             {tripStats.totalDistanceKm} <span className="text-xs font-normal text-slate-500">km</span>
           </div>
           <div className="text-[10px] text-slate-400 mt-0.5">
-            Odometer: {tripStats.odometerDistanceKm != null ? `${tripStats.odometerDistanceKm} km` : "N/A"}
+            Odometer: {tripStats.odometerDistanceKm != null ? `${tripStats.odometerDistanceKm} km` : selectedVehicle?.odometer != null ? `${Number(selectedVehicle.odometer).toLocaleString()} km` : "N/A"}
           </div>
         </div>
 
@@ -1072,13 +1089,17 @@ export default function TripHistoryPage() {
                   <Badge
                     variant="outline"
                     className={`text-[9px] font-bold ${
-                      currentPoint && currentPoint.speed > 0
+                      currentPoint?.isGap
+                        ? "bg-amber-50 text-amber-700 border-amber-300"
+                        : currentPoint && currentPoint.speed > 0
                         ? "bg-emerald-50 text-emerald-700 border-emerald-300"
                         : "bg-slate-100 text-slate-600"
                     }`}
                   >
                     {currentPoint
-                      ? currentPoint.speed > 0
+                      ? currentPoint.isGap
+                        ? `Signal Gap (${currentPoint.gapMinutes || 15}m)`
+                        : currentPoint.speed > 0
                         ? "Moving"
                         : "Stationary"
                       : vehicleCurrentPosition
@@ -1211,7 +1232,16 @@ export default function TripHistoryPage() {
                   </button>
 
                   <button
-                    onClick={() => setIsPlaying(!isPlaying)}
+                    onClick={() => {
+                      if (isPlaying) {
+                        setIsPlaying(false);
+                      } else {
+                        if (currentIndex >= activeGpsPoints.length - 1) {
+                          setCurrentIndex(0);
+                        }
+                        setIsPlaying(true);
+                      }
+                    }}
                     disabled={activeGpsPoints.length === 0}
                     className={`px-4 py-2 rounded-xl font-semibold text-xs flex items-center gap-1.5 shadow-xs transition-colors ${
                       activeGpsPoints.length === 0
@@ -1315,58 +1345,94 @@ export default function TripHistoryPage() {
                   No journeys recorded for this filter selection.
                 </div>
               ) : (
-                filteredJourneys.map((j) => {
-                  const isSelected = selectedJourneyId === j.id;
-                  return (
+                <>
+                  {filteredJourneys.length > 1 && (
                     <div
-                      key={j.id}
-                      onClick={() => handleSelectJourney(j.id)}
+                      onClick={() => handleSelectJourney("all")}
                       className={`p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
-                        isSelected
+                        selectedJourneyId === "all"
                           ? "border-indigo-500 bg-indigo-50/80 ring-1 ring-indigo-300"
                           : "border-slate-200 bg-white hover:bg-slate-50"
                       }`}
                     >
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-slate-900">
-                          {formatIstTime(j.start_time)} → {formatIstTime(j.end_time)}
+                          All Journeys (Full Day)
                         </span>
                         <Badge
                           variant="outline"
-                          className={`text-[9px] ${
-                            j.status === "Completed"
-                              ? "bg-emerald-50 text-emerald-700 border-emerald-300"
-                              : j.status === "Ongoing"
-                              ? "bg-blue-50 text-blue-700 border-blue-300"
-                              : "bg-slate-50 text-slate-600"
-                          }`}
+                          className="text-[9px] bg-indigo-50 text-indigo-700 border-indigo-200"
                         >
-                          {j.status}
+                          {filteredJourneys.length} Journeys
                         </Badge>
                       </div>
-
                       <div className="grid grid-cols-3 gap-1 mt-1 text-[11px] text-slate-600">
                         <div>
-                          <strong>{j.metrics.totalDistanceKm}</strong> km
+                          <strong>{fullDayMetrics.totalKm}</strong> km
                         </div>
                         <div>
-                          <strong>{Math.round(j.metrics.drivingDurationSeconds / 60)}</strong>m driving
+                          <strong>{fullDayMetrics.drivingMin}</strong>m driving
                         </div>
                         <div>
-                          <strong>{j.metrics.stopsCount}</strong> stops
+                          <strong>{fullDayMetrics.stopsCount}</strong> stops
                         </div>
-                      </div>
-
-                      <div className="flex items-center justify-between mt-1 text-[10px] text-slate-400">
-                        <span className="truncate max-w-[140px] flex items-center gap-1">
-                          <User className="h-2.5 w-2.5" />
-                          {j.driver_name}
-                        </span>
-                        <span>Avg: {j.metrics.avgSpeedKmh} km/h</span>
                       </div>
                     </div>
-                  );
-                })
+                  )}
+
+                  {filteredJourneys.map((j) => {
+                    const isSelected = selectedJourneyId === j.id;
+                    return (
+                      <div
+                        key={j.id}
+                        onClick={() => handleSelectJourney(j.id)}
+                        className={`p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
+                          isSelected
+                            ? "border-indigo-500 bg-indigo-50/80 ring-1 ring-indigo-300"
+                            : "border-slate-200 bg-white hover:bg-slate-50"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900">
+                            {formatIstTime(j.start_time)} → {formatIstTime(j.end_time)}
+                          </span>
+                          <Badge
+                            variant="outline"
+                            className={`text-[9px] ${
+                              j.status === "Completed"
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-300"
+                                : j.status === "Ongoing"
+                                ? "bg-blue-50 text-blue-700 border-blue-300"
+                                : "bg-slate-50 text-slate-600"
+                            }`}
+                          >
+                            {j.status}
+                          </Badge>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-1 mt-1 text-[11px] text-slate-600">
+                          <div>
+                            <strong>{j.metrics.totalDistanceKm}</strong> km
+                          </div>
+                          <div>
+                            <strong>{Math.round(j.metrics.drivingDurationSeconds / 60)}</strong>m driving
+                          </div>
+                          <div>
+                            <strong>{j.metrics.stopsCount}</strong> stops
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between mt-1 text-[10px] text-slate-400">
+                          <span className="truncate max-w-[140px] flex items-center gap-1">
+                            <User className="h-2.5 w-2.5" />
+                            {j.driver_name}
+                          </span>
+                          <span>Avg: {j.metrics.avgSpeedKmh} km/h</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
               )}
             </div>
           </Card>
