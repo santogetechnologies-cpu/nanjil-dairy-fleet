@@ -15,6 +15,10 @@ import {
   buildPlantConnector,
   NANJIL_DAIRY_DEPOT,
 } from "../src/hooks/useTodayTravelledRoutes.ts";
+import {
+  getFleetVehicleRouteColor,
+  FLEET_VEHICLE_COLORS,
+} from "../src/lib/vehicle-stop-detection.ts";
 
 test("1. Today's Date Range in Asia/Kolkata: Exactly 00:00:00 to 23:59:59 IST", () => {
   const refDate = new Date("2026-11-11T12:00:00.000Z");
@@ -494,6 +498,45 @@ test("22. Strict Odometer Integrity: Zero Artificial Connector Distance in Odome
   // The actual GPS distance must be < 1.0 km, NOT 60+ km from depot!
   assert.ok(actualGpsDistance < 1.0, `Actual distance should be <1km, got ${actualGpsDistance}`);
   assert.ok(buggyJumpDist > 50.0, "Depot distance jump is huge and must NEVER be in route distance");
+});
+
+test("23. Per-Vehicle Color Distinction: Each vehicle has a distinct, high-contrast polyline color", () => {
+  const c1688 = getFleetVehicleRouteColor("7b9543e8-bcdd-4fb6-ad83-a78d92be4176"); // TN 75 S 1688
+  const c9952 = getFleetVehicleRouteColor("325081e0-a535-4269-8239-582de0f2ba66"); // TN 75 R 9952
+  const c4323 = getFleetVehicleRouteColor("09b85a4a-1d9f-43f0-8343-ace9d27a1670"); // TN 75 F 4323
+  const c2219 = getFleetVehicleRouteColor("d0fea864-64a4-4148-b3b2-600f68459583"); // TN 75 BC 2219
+  const c9826 = getFleetVehicleRouteColor("1b115b9d-6357-4a9e-8e76-1d59497695af"); // TN 75 S 9826
+
+  assert.equal(c1688, "#2563EB", "TN 75 S 1688 must be Royal Blue");
+  assert.equal(c9952, "#DC2626", "TN 75 R 9952 must be Crimson Red");
+  assert.equal(c4323, "#D97706", "TN 75 F 4323 must be Amber/Gold");
+  assert.equal(c2219, "#16A34A", "TN 75 BC 2219 must be Emerald Green");
+  assert.equal(c9826, "#9333EA", "TN 75 S 9826 must be Purple");
+
+  // Every vehicle route color must be unique so polylines never look like a single vehicle
+  const colorSet = new Set([c1688, c9952, c4323, c2219, c9826]);
+  assert.equal(colorSet.size, 5, "All vehicle colors must be completely distinct");
+
+  // Device ID lookup works identically
+  assert.equal(getFleetVehicleRouteColor("863110086162107"), "#2563EB");
+  assert.equal(getFleetVehicleRouteColor("device_863110086162107"), "#2563EB");
+});
+
+test("24. Distance Jump Segment Splitting: Points > 15 km apart split into separate segments", () => {
+  const pointsWithBigJump = [
+    { id: "1", lat: 8.2415, lng: 77.4326, speed: 40, recorded_at: "2026-11-20T05:00:00Z" },
+    { id: "2", lat: 8.2480, lng: 77.4380, speed: 40, recorded_at: "2026-11-20T05:02:00Z" },
+    // 35 km jump in 10 minutes (would be straight line across country if not split)
+    { id: "3", lat: 8.5500, lng: 77.7000, speed: 45, recorded_at: "2026-11-20T05:12:00Z" },
+    { id: "4", lat: 8.5600, lng: 77.7100, speed: 45, recorded_at: "2026-11-20T05:14:00Z" },
+  ];
+
+  const segments = processRawGpsPoints(pointsWithBigJump, 15);
+  assert.equal(segments.length, 2, "Must split into 2 separate segments across the 35 km jump");
+  assert.equal(segments[0].length, 2);
+  assert.equal(segments[1].length, 2);
+  assert.equal(segments[0][1].lat, 8.2480);
+  assert.equal(segments[1][0].lat, 8.5500);
 });
 
 

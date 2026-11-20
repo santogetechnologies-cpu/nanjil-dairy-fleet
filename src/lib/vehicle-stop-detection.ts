@@ -73,6 +73,42 @@ export const NANJIL_7_GPS_DEVICE_IDS = Object.keys(KNOWN_NANJIL_DEVICE_MAP);
 /** Set of valid Supabase vehicle UUIDs for the 7 physical GPS vehicles */
 export const NANJIL_7_GPS_VEHICLE_IDS = new Set(Object.values(KNOWN_NANJIL_DEVICE_MAP).map((v) => v.id));
 
+/** Distinct, vibrant route colors for each vehicle in the 7-vehicle Nanjil fleet */
+export const FLEET_VEHICLE_COLORS: Record<string, string> = {
+  "7b9543e8-bcdd-4fb6-ad83-a78d92be4176": "#2563EB", // TN 75 S 1688 - Royal Blue
+  "325081e0-a535-4269-8239-582de0f2ba66": "#DC2626", // TN 75 R 9952 - Crimson Red
+  "09b85a4a-1d9f-43f0-8343-ace9d27a1670": "#D97706", // TN 75 F 4323 - Amber / Gold
+  "d0fea864-64a4-4148-b3b2-600f68459583": "#16A34A", // TN 75 BC 2219 - Emerald Green
+  "1b115b9d-6357-4a9e-8e76-1d59497695af": "#9333EA", // TN 75 S 9826 - Purple / Violet
+  "f30c9dcd-56a2-4b6c-bb93-d1f4c458682c": "#0891B2", // TN 75 BF 0320 - Cyan / Teal
+  "d3887a78-ac32-4b63-b3c0-61563ad9f3d7": "#EA580C", // TN 75 M 0041 - Tangerine / Orange
+};
+
+/**
+ * Returns the dedicated, high-contrast route color for any fleet vehicle or tracker ID.
+ */
+export function getFleetVehicleRouteColor(vehicleIdOrDeviceId?: string | null): string {
+  if (!vehicleIdOrDeviceId) return "#2563EB";
+  const idStr = String(vehicleIdOrDeviceId).replace(/^device_/, "");
+  if (FLEET_VEHICLE_COLORS[idStr]) return FLEET_VEHICLE_COLORS[idStr];
+  if (KNOWN_NANJIL_DEVICE_MAP[idStr]) {
+    const uuid = KNOWN_NANJIL_DEVICE_MAP[idStr].id;
+    if (FLEET_VEHICLE_COLORS[uuid]) return FLEET_VEHICLE_COLORS[uuid];
+  }
+  for (const [devId, meta] of Object.entries(KNOWN_NANJIL_DEVICE_MAP)) {
+    if (meta.id === idStr || devId === idStr) {
+      return FLEET_VEHICLE_COLORS[meta.id] || "#2563EB";
+    }
+  }
+  const PALETTE = ["#2563EB", "#DC2626", "#16A34A", "#D97706", "#9333EA", "#0891B2", "#EA580C", "#4F46E5"];
+  let hash = 0;
+  for (let i = 0; i < idStr.length; i++) {
+    hash = (hash << 5) - hash + idStr.charCodeAt(i);
+    hash |= 0;
+  }
+  return PALETTE[Math.abs(hash) % PALETTE.length];
+}
+
 /** Extended map for resolving historical records from older decommissioned trackers */
 export const HISTORICAL_LEGACY_DEVICE_MAP: Record<string, { id: string; number: string; model: string }> = {
   ...KNOWN_NANJIL_DEVICE_MAP,

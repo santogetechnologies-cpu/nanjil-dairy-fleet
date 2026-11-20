@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui-kit";
 import { Link } from "react-router-dom";
 import { getOverspeedStatus } from "@/lib/overspeed";
 import { isFleetOperatingCoordinate, haversineDistanceKm } from "@/lib/tripHistoryEngine";
-import { KNOWN_NANJIL_DEVICE_MAP } from "@/lib/vehicle-stop-detection";
+import { KNOWN_NANJIL_DEVICE_MAP, getFleetVehicleRouteColor } from "@/lib/vehicle-stop-detection";
 import { type VehicleOdometerState, loadLocalOdometerStates } from "@/lib/odometerTrackingEngine";
 import {
   NANJIL_DAIRY_DEPOT,
@@ -316,12 +316,14 @@ export function GoogleVehicleMap({
     return segs.some((s) => s && s.length >= 2);
   }, [active, todayRoutes]);
 
-  // Prepare Today's Travelled GPS Route Segments (Red Polyline, 5px, 0.9 opacity)
+  // Prepare Today's Travelled GPS Route Segments (Per-vehicle distinct colors, 4px)
   const renderedRouteSegments = useMemo(() => {
     const list: Array<{
       key: string;
       path: Array<{ lat: number; lng: number }>;
       isSelected: boolean;
+      color: string;
+      vehicleNumber?: string;
     }> = [];
 
     // 1. If todayRoutes map is provided, render all vehicle routes
@@ -391,6 +393,8 @@ export function GoogleVehicleMap({
           renderedVehicleKeys.add(`device_${knownEntry[0]}`);
         }
 
+        const vColor = getFleetVehicleRouteColor(v.id || v.deviceId);
+
         segments.forEach((seg, sIdx) => {
           if (seg && seg.length >= 2) {
             const cleanSeg = seg.filter((p) => isValidFleetCoord(p) && isFleetOperatingCoordinate(p.lat, p.lng));
@@ -399,6 +403,8 @@ export function GoogleVehicleMap({
                 key: `today-route-${v.id}-${sIdx}`,
                 path: cleanSeg,
                 isSelected: Boolean(isSelected),
+                color: vColor,
+                vehicleNumber: v.number,
               });
             }
           }
@@ -411,6 +417,7 @@ export function GoogleVehicleMap({
         renderedVehicleKeys.add(key);
 
         const isSelected = key === selectedId || (active && (active.id === key || active.deviceId === key));
+        const orphanColor = getFleetVehicleRouteColor(key);
 
         segments.forEach((seg, sIdx) => {
           if (seg && seg.length >= 2) {
@@ -420,6 +427,7 @@ export function GoogleVehicleMap({
                 key: `today-route-unmatched-${key}-${sIdx}`,
                 path: cleanSeg,
                 isSelected: Boolean(isSelected),
+                color: orphanColor,
               });
             }
           }
@@ -433,6 +441,7 @@ export function GoogleVehicleMap({
           key: "legacy-route-history",
           path: cleanHistory,
           isSelected: Boolean(selectedId),
+          color: "#2563EB",
         });
       }
     }
@@ -447,7 +456,11 @@ export function GoogleVehicleMap({
 
   // Prepare Estimated Plant Connectors (Dashed Orange Polyline, #F59E0B)
   const renderedConnectors = useMemo(() => {
-    if (!plantConnectors || Object.keys(plantConnectors).length === 0) return [];
+    // Only render synthetic plant connector when a specific vehicle is selected
+    // In fleet-wide "All" view, never draw synthetic plant connectors across the map
+    if (!selectedId || !plantConnectors || Object.keys(plantConnectors).length === 0) {
+      return [];
+    }
 
     const list: Array<{
       key: string;
@@ -515,12 +528,8 @@ export function GoogleVehicleMap({
       });
     });
 
-    // When a vehicle is selected, display ONLY that vehicle's connector
-    if (selectedId) {
-      return list.filter((item) => item.isSelected);
-    }
-
-    return list;
+    // Display ONLY the selected vehicle's connector
+    return list.filter((item) => item.isSelected);
   }, [plantConnectors, vehicles, selectedId, active]);
 
   return (
@@ -538,8 +547,8 @@ export function GoogleVehicleMap({
         zoomControl={true}
         style={{ width: "100%", height: "100%" }}
       >
-        {/* Today's Travelled GPS Routes with Active Vehicle Highlighting */}
-        {renderedRouteSegments.map(({ key, path, isSelected }) => {
+        {/* Today's Travelled GPS Routes with Active Vehicle Highlighting & Distinct Fleet Colors */}
+        {renderedRouteSegments.map(({ key, path, isSelected, color }) => {
           const hasSelection = Boolean(selectedId);
           if (isSelected) {
             return (
@@ -554,11 +563,11 @@ export function GoogleVehicleMap({
                   geodesic={true}
                   zIndex={90}
                 />
-                {/* Primary highlighted polyline */}
+                {/* Primary highlighted polyline in dedicated vehicle color */}
                 <Polyline
                   key={key}
                   path={path}
-                  strokeColor="#DC2626"
+                  strokeColor={color || "#DC2626"}
                   strokeOpacity={1.0}
                   strokeWeight={5.5}
                   geodesic={true}
@@ -574,8 +583,8 @@ export function GoogleVehicleMap({
                 key={key}
                 path={path}
                 strokeColor="#94A3B8"
-                strokeOpacity={0.22}
-                strokeWeight={2.5}
+                strokeOpacity={0.15}
+                strokeWeight={2.0}
                 geodesic={true}
                 zIndex={10}
               />
@@ -586,9 +595,9 @@ export function GoogleVehicleMap({
             <Polyline
               key={key}
               path={path}
-              strokeColor="#EF4444"
-              strokeOpacity={0.8}
-              strokeWeight={3.8}
+              strokeColor={color || "#2563EB"}
+              strokeOpacity={0.85}
+              strokeWeight={4.0}
               geodesic={true}
               zIndex={20}
             />
@@ -1033,14 +1042,30 @@ export function GoogleVehicleMap({
           </div>
         ))}
         <div className="pl-2 border-l border-border flex items-center gap-3">
-          <div className="flex items-center gap-1.5" title="Actual GPS travelled route">
-            <span className="h-1 w-4 bg-red-600 rounded-full inline-block" />
-            <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300">GPS Route</span>
-          </div>
-          <div className="flex items-center gap-1.5" title="Estimated road connector from Nanjil Dairy Plant (not added to odometer)">
-            <span className="h-0.5 w-4 border-b-2 border-dashed border-amber-500 inline-block" />
-            <span className="text-[11px] font-medium text-amber-600 dark:text-amber-400">Plant Connector</span>
-          </div>
+          {selectedId && currentActive ? (
+            <div className="flex items-center gap-1.5" title="Actual GPS travelled route for selected vehicle">
+              <span
+                className="h-2 w-4 rounded-full inline-block"
+                style={{ backgroundColor: getFleetVehicleRouteColor(currentActive.id || currentActive.deviceId) }}
+              />
+              <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                {getVehicleRegistrationNumber(currentActive)} GPS Route
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5" title="Individual vehicle travelled routes (color-coded per vehicle)">
+              <span className="h-2 w-6 rounded-full inline-block bg-gradient-to-r from-blue-600 via-red-600 via-emerald-600 to-amber-500" />
+              <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
+                GPS Routes (Fleet Colors)
+              </span>
+            </div>
+          )}
+          {selectedId && renderedConnectors.length > 0 && (
+            <div className="flex items-center gap-1.5" title="Estimated road connector from Nanjil Dairy Plant (not added to odometer)">
+              <span className="h-0.5 w-4 border-b-2 border-dashed border-amber-500 inline-block" />
+              <span className="text-[11px] font-medium text-amber-600 dark:text-amber-400">Plant Connector</span>
+            </div>
+          )}
         </div>
         {currentActive && (
           <div className="pl-2 border-l border-border text-primary font-semibold flex items-center gap-2">

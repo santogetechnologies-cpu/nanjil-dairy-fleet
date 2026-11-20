@@ -10,6 +10,7 @@ import { getOverspeedStatus } from "@/lib/overspeed";
 import { useOverspeedMonitor } from "@/hooks/useOverspeed";
 import { useTodayTravelledRoutes } from "@/hooks/useTodayTravelledRoutes";
 import { useOdometerTracking } from "@/hooks/useOdometerTracking";
+import { getFleetVehicleRouteColor } from "@/lib/vehicle-stop-detection";
 
 function formatLastUpdated(isoString?: string): string {
   if (!isoString) return "Just now";
@@ -344,6 +345,11 @@ function TrackingPage() {
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5">
+                        <span
+                          className="h-2.5 w-2.5 rounded-full shrink-0 shadow-xs border border-white dark:border-slate-800"
+                          style={{ backgroundColor: getFleetVehicleRouteColor(v.id || v.deviceId) }}
+                          title="Vehicle Route Polyline Color"
+                        />
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-400 text-black border border-black/80 font-mono font-black text-xs tracking-wide shadow-xs">
                           <span className="text-[8px] bg-black text-amber-400 px-0.5 rounded-xs font-sans">
                             IND
