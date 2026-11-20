@@ -277,15 +277,15 @@ export function filterGpsSpikesAndNoise(points: GpsPoint[]): GpsPoint[] {
         continue;
       }
 
-      // Implied speed > 85 km/h for significant distance jump (>100m)
-      if (speedPrev > 85 && dPrev > 0.1) {
+      // Single-point teleport spike: jumps far away (>200m) at impossible speed (>140 km/h) and returns back near prev
+      if (speedPrev > 140 && dPrev > 0.2 && dDirect < dPrev * 0.5) {
         continue;
       }
     } else if (prev && !next) {
       const dPrev = haversineDistanceKm(prev.lat, prev.lng, cur.lat, cur.lng);
       const tPrev = Math.max(0.1, (new Date(cur.recorded_at).getTime() - new Date(prev.recorded_at).getTime()) / 1000);
       const speedPrev = dPrev / (tPrev / 3600);
-      if (speedPrev > 85 && dPrev > 0.1) {
+      if (speedPrev > 140 && dPrev > 0.5) {
         continue;
       }
     }
@@ -348,15 +348,12 @@ export function processRawGpsPoints(
         (new Date(pt.recorded_at).getTime() - new Date(prevValid.recorded_at).getTime()) / 1000,
       );
 
-      // Teleport rejection: discard impossible single-point GPS jumps (>200 km or speed >85 km/h for >100m)
+      // 1. Extreme teleport rejection: discard impossible single-point GPS jumps (>200 km)
       if (distKm > 200) continue;
-      if (timeDiffSec > 0 && distKm / (timeDiffSec / 3600) > 85 && distKm > 0.1) continue;
 
-      // Duplicate stationary filter: omit consecutive points within 2 meters
-      if (distKm < 0.002) continue;
-
-      // Signal gap splitting: if gap > 15 minutes, break into separate segment
-      if (timeDiffSec > maxGapMinutes * 60) {
+      // 2. Distance jump & signal gap splitting:
+      // If gap > 15 minutes OR distance jump > 15 km, break into separate segment
+      if (timeDiffSec > maxGapMinutes * 60 || distKm > 15) {
         if (currentSegment.length > 0) {
           segments.push(currentSegment);
         }
@@ -364,6 +361,12 @@ export function processRawGpsPoints(
         prevValid = pt;
         continue;
       }
+
+      // 3. Teleport rejection within continuous driving: discard impossible jumps (>85 km/h for >100m)
+      if (timeDiffSec > 0 && distKm / (timeDiffSec / 3600) > 85 && distKm > 0.1) continue;
+
+      // 4. Duplicate stationary filter: omit consecutive points within 2 meters
+      if (distKm < 0.002) continue;
     }
 
     currentSegment.push({ lat, lng, recorded_at: pt.recorded_at });
