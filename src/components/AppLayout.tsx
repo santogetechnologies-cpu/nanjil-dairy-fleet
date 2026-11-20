@@ -40,8 +40,10 @@ import {
   ShieldCheck,
   Calendar,
   Filter,
+  WifiOff,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { useVehicles, TELEMETRY_LABEL } from "@/hooks/useVehicleTracking";
 
@@ -80,6 +82,33 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [quickActionOpen, setQuickActionOpen] = useState(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
+
+  // Network connection monitor (detects Wi-Fi / data cuts and reconnects)
+  const [isOnline, setIsOnline] = useState<boolean>(() => {
+    return typeof navigator !== "undefined" ? navigator.onLine : true;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    function handleOnline() {
+      setIsOnline(true);
+      toast.success("Internet connection restored. Live GPS reconnected.");
+    }
+
+    function handleOffline() {
+      setIsOnline(false);
+      toast.warning("Internet connection interrupted. Operating in offline cache mode.");
+    }
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
 
   // Outside-click & Escape dismissal for Operational Alerts notification dropdown
   useEffect(() => {
@@ -688,11 +717,25 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
           {/* Live Telemetry Indicator Pill */}
           <div
-            className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/70 shadow-2xs"
-            title={`Streaming via ${TELEMETRY_LABEL}`}
+            className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold shadow-2xs transition-colors ${
+              isOnline
+                ? "bg-emerald-50 text-emerald-700 border border-emerald-200/70"
+                : "bg-amber-50 text-amber-800 border border-amber-300"
+            }`}
+            title={
+              isOnline
+                ? `Streaming via ${TELEMETRY_LABEL}`
+                : "Internet disconnected — operating in cached mode, re-attempting connection"
+            }
           >
-            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse ring-2 ring-emerald-200" />
-            <span>GPS Live</span>
+            <span
+              className={`h-2 w-2 rounded-full ${
+                isOnline
+                  ? "bg-emerald-500 animate-pulse ring-2 ring-emerald-200"
+                  : "bg-amber-500 ring-2 ring-amber-200"
+              }`}
+            />
+            <span>{isOnline ? "GPS Live" : "Offline / Reconnecting"}</span>
           </div>
 
           {/* Quick Action Dropdown */}
@@ -972,6 +1015,16 @@ export function AppLayout({ children }: { children: ReactNode }) {
             )}
           </div>
         </header>
+
+        {/* Offline Warning Banner */}
+        {!isOnline && (
+          <div className="bg-amber-600 text-white text-xs px-4 py-2 font-medium flex items-center justify-center gap-2 shadow-sm animate-in slide-in-from-top-2">
+            <WifiOff className="h-4 w-4 shrink-0 text-white animate-pulse" />
+            <span>
+              Internet connection interrupted (offline mode). Showing cached fleet telemetry — live tracking will automatically reconnect once internet returns.
+            </span>
+          </div>
+        )}
 
         {/* ── MAIN CONTENT AREA ─────────────────────────────────── */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1680px] w-full mx-auto space-y-6 pb-24 lg:pb-8">
