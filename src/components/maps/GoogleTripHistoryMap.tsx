@@ -5,7 +5,13 @@ import {
   Polyline,
   useMap,
 } from "@vis.gl/react-google-maps";
-import type { GpsPoint, RouteSegment, TimelineEvent } from "@/lib/tripHistoryEngine";
+import {
+  type GpsPoint,
+  type RouteSegment,
+  type TimelineEvent,
+  haversineDistanceKm,
+  splitPointsIntoSegments,
+} from "@/lib/tripHistoryEngine";
 import type { Vehicle } from "@/lib/types";
 import { Truck, Navigation } from "lucide-react";
 import {
@@ -18,6 +24,8 @@ import {
 
 export interface GoogleTripHistoryMapProps {
   currentPoint?: GpsPoint | null;
+  currentIndex?: number;
+  selectedJourneyId?: string;
   vehicleCurrentPosition?: { lat: number; lng: number; status: string } | null;
   selectedVehicle?: Vehicle | null;
   activeGpsPoints: GpsPoint[];
@@ -31,6 +39,8 @@ export interface GoogleTripHistoryMapProps {
 
 export function GoogleTripHistoryMap({
   currentPoint,
+  currentIndex = 0,
+  selectedJourneyId = "all",
   vehicleCurrentPosition,
   selectedVehicle,
   activeGpsPoints,
@@ -63,15 +73,28 @@ export function GoogleTripHistoryMap({
 
   // Fit bounds function for the entire route
   const fitRouteBounds = useCallback(() => {
-    if (!map || activeGpsPoints.length === 0) return;
+    if (!map) return;
+
+    if (activeGpsPoints.length === 0) {
+      if (isValidFleetCoord(vehicleCurrentPosition)) {
+        map.setCenter({ lat: vehicleCurrentPosition.lat, lng: vehicleCurrentPosition.lng });
+        map.setZoom(15);
+      } else {
+        map.setCenter(DEFAULT_MAP_CENTER);
+        map.setZoom(DEFAULT_MAP_ZOOM);
+      }
+      return;
+    }
 
     let minLat = Infinity;
     let maxLat = -Infinity;
     let minLng = Infinity;
     let maxLng = -Infinity;
+    let validCount = 0;
 
     activeGpsPoints.forEach((p) => {
       if (isValidFleetCoord(p)) {
+        validCount++;
         if (p.lat < minLat) minLat = p.lat;
         if (p.lat > maxLat) maxLat = p.lat;
         if (p.lng < minLng) minLng = p.lng;
@@ -79,7 +102,20 @@ export function GoogleTripHistoryMap({
       }
     });
 
-    if (minLat !== Infinity && maxLat !== -Infinity && minLng !== Infinity && maxLng !== -Infinity) {
+    if (validCount === 0) {
+      map.setCenter(DEFAULT_MAP_CENTER);
+      map.setZoom(DEFAULT_MAP_ZOOM);
+      return;
+    }
+
+    const latSpan = maxLat - minLat;
+    const lngSpan = maxLng - minLng;
+    const isClustered = latSpan < 0.002 && lngSpan < 0.002; // < ~200m (e.g. parked at depot)
+
+    if (isClustered) {
+      map.setCenter({ lat: (minLat + maxLat) / 2, lng: (minLng + maxLng) / 2 });
+      map.setZoom(15);
+    } else {
       map.fitBounds(
         {
           north: maxLat,
@@ -90,7 +126,7 @@ export function GoogleTripHistoryMap({
         50 // padding
       );
     }
-  }, [map, activeGpsPoints]);
+  }, [map, activeGpsPoints, vehicleCurrentPosition]);
 
   // Register fit bounds with parent if requested
   useEffect(() => {
@@ -130,16 +166,69 @@ export function GoogleTripHistoryMap({
     }
   }, [map, isPlaying, currentPoint]);
 
-  // Convert RouteSegments into Polyline coordinate arrays
+  // Convert RouteSegments into clean Polyline coordinate arrays (filtering stationary jitter < 50m)
   const segmentPaths = useMemo(() => {
     return activeSegments
-      .map((segment) =>
-        segment.points
+      .map((segment) => {
+        const validCoords = segment.points
+          .filter((p) => isValidFleetCoord(p))
+          .map((p) => ({ lat: p.lat, lng: p.lng }));
+
+        // Deduplicate consecutive identical or sub-pixel points (< 5m)
+        const deduped: { lat: number; lng: number }[] = [];
+        for (const pt of validCoords) {
+          if (deduped.length === 0) {
+            deduped.push(pt);
+          } else {
+            const last = deduped[deduped.length - 1];
+            const dist = haversineDistanceKm(last.lat, last.lng, pt.lat, pt.lng);
+            if (dist >= 0.005) {
+              deduped.push(pt);
+            }
+          }
+        }
+        if (validCoords.length > 1) {
+          const lastValid = validCoords[validCoords.length - 1];
+          const lastDedup = deduped[deduped.length - 1];
+          if (lastValid && lastDedup && (lastValid.lat !== lastDedup.lat || lastValid.lng !== lastDedup.lng)) {
+            deduped.push(lastValid);
+          }
+        }
+        return deduped;
+      })
+      .filter((coords) => {
+        if (coords.length < 2) return false;
+        // Bounding box span check: reject stationary yard jitter (< 50m total span)
+        let minLat = coords[0].lat, maxLat = coords[0].lat;
+        let minLng = coords[0].lng, maxLng = coords[0].lng;
+        for (const c of coords) {
+          if (c.lat < minLat) minLat = c.lat;
+          if (c.lat > maxLat) maxLat = c.lat;
+          if (c.lng < minLng) minLng = c.lng;
+          if (c.lng > maxLng) maxLng = c.lng;
+        }
+        const spanDist = haversineDistanceKm(minLat, minLng, maxLat, maxLng);
+        return spanDist >= 0.05; // At least 50m of actual road travel
+      });
+  }, [activeSegments]);
+
+  // Compute traversed polyline path up to currentIndex for dynamic playback progress
+  const traversedPaths = useMemo(() => {
+    if (!currentIndex || currentIndex <= 0 || activeGpsPoints.length < 2) {
+      return [];
+    }
+    const traversedSlice = activeGpsPoints.slice(0, currentIndex + 1);
+    const { segments } = splitPointsIntoSegments(traversedSlice, 15);
+    return segments
+      .map((seg) =>
+        seg.points
           .filter((p) => isValidFleetCoord(p))
           .map((p) => ({ lat: p.lat, lng: p.lng }))
       )
       .filter((coords) => coords.length >= 2);
-  }, [activeSegments]);
+  }, [activeGpsPoints, currentIndex]);
+
+  const vehicleKeyPrefix = selectedVehicle?.id || "v";
 
   return (
     <Map
@@ -154,24 +243,52 @@ export function GoogleTripHistoryMap({
       zoomControl={true}
       style={{ width: "100%", height: "100%" }}
     >
-      {/* Segmented Historical GPS Trails (Breaks polyline at signal gaps!) */}
+      {/* Base Segmented Historical GPS Trails */}
       {segmentPaths.map((coords, idx) => (
-        <Fragment key={`seg-wrapper-${idx}`}>
-          {/* Casing / Shadow */}
+        <Fragment key={`base-seg-${vehicleKeyPrefix}-${selectedJourneyId}-${idx}`}>
+          {/* Casing / Halo */}
           <Polyline
-            key={`casing-${idx}`}
+            key={`casing-${vehicleKeyPrefix}-${selectedJourneyId}-${idx}`}
             path={coords}
             strokeColor="#1E293B"
             strokeOpacity={0.35}
             strokeWeight={5.5}
+            geodesic={true}
+            zIndex={40}
           />
           {/* Primary GPS Line */}
           <Polyline
-            key={`line-${idx}`}
+            key={`line-${vehicleKeyPrefix}-${selectedJourneyId}-${idx}`}
             path={coords}
             strokeColor="#2563EB"
-            strokeOpacity={0.95}
+            strokeOpacity={0.75}
             strokeWeight={3.8}
+            geodesic={true}
+            zIndex={50}
+          />
+        </Fragment>
+      ))}
+
+      {/* Traversed Playback Progress Polyline (Traces behind moving vehicle) */}
+      {traversedPaths.map((coords, idx) => (
+        <Fragment key={`trav-seg-${vehicleKeyPrefix}-${selectedJourneyId}-${idx}`}>
+          <Polyline
+            key={`trav-casing-${vehicleKeyPrefix}-${selectedJourneyId}-${idx}`}
+            path={coords}
+            strokeColor="#0F172A"
+            strokeOpacity={0.6}
+            strokeWeight={6.5}
+            geodesic={true}
+            zIndex={60}
+          />
+          <Polyline
+            key={`trav-line-${vehicleKeyPrefix}-${selectedJourneyId}-${idx}`}
+            path={coords}
+            strokeColor="#1D4ED8"
+            strokeOpacity={1.0}
+            strokeWeight={4.5}
+            geodesic={true}
+            zIndex={70}
           />
         </Fragment>
       ))}
@@ -258,15 +375,14 @@ export function GoogleTripHistoryMap({
 
       {/* ACTIVE PLAYBACK VEHICLE MARKER */}
       {isValidFleetCoord(currentPoint) && (
-          <AdvancedMarker position={{ lat: currentPoint.lat, lng: currentPoint.lng }}>
-            <div className="relative flex items-center justify-center">
-              <div className="h-9 w-9 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-2xl border-2 border-white ring-4 ring-indigo-300 animate-pulse">
-                <Navigation className="h-5 w-5" />
-              </div>
+        <AdvancedMarker position={{ lat: currentPoint.lat, lng: currentPoint.lng }}>
+          <div className="relative flex items-center justify-center">
+            <div className="h-9 w-9 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-2xl border-2 border-white ring-4 ring-indigo-300 animate-pulse">
+              <Navigation className="h-5 w-5" />
             </div>
-          </AdvancedMarker>
-        )}
+          </div>
+        </AdvancedMarker>
+      )}
     </Map>
   );
 }
-

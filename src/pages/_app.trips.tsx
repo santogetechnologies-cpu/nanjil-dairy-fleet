@@ -1067,6 +1067,8 @@ export default function TripHistoryPage() {
             <div className="relative h-[500px] w-full bg-slate-100">
               <GoogleTripHistoryMap
                 currentPoint={currentPoint}
+                currentIndex={currentIndex}
+                selectedJourneyId={selectedJourneyId}
                 vehicleCurrentPosition={vehicleCurrentPosition}
                 selectedVehicle={selectedVehicle}
                 activeGpsPoints={activeGpsPoints}

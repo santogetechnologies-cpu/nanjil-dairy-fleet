@@ -311,7 +311,7 @@ export async function fetchPaginatedTelemetryHistory(
         seenIds.add(idStr);
         const lat = Number(row.lat);
         const lng = Number(row.lng);
-        if (isValidGpsCoord(lat, lng)) {
+        if (isValidGpsCoord(lat, lng) && isFleetOperatingCoordinate(lat, lng)) {
           allPoints.push({
             id: idStr,
             lat,
@@ -347,7 +347,9 @@ export async function fetchPaginatedTelemetryHistory(
 
 export function splitPointsIntoSegments(
   points: GpsPoint[],
-  maxGapMinutes = 15
+  maxGapMinutes = 15,
+  maxJumpKm = 20,
+  maxJumpSpeedKmh = 150
 ): {
   segments: RouteSegment[];
   gapIndices: number[];
@@ -370,7 +372,16 @@ export function splitPointsIntoSegments(
     const diffSec = Math.max(0, (currTime - prevTime) / 1000);
     const diffMins = diffSec / 60;
 
-    if (diffMins > maxGapMinutes) {
+    const distKm = haversineDistanceKm(
+      points[i - 1].lat,
+      points[i - 1].lng,
+      points[i].lat,
+      points[i].lng
+    );
+    const impliedSpeedKmh = diffSec > 0 ? distKm / (diffSec / 3600) : 0;
+    const isDistanceJump = distKm > maxJumpKm || impliedSpeedKmh > maxJumpSpeedKmh;
+
+    if (diffMins > maxGapMinutes || isDistanceJump) {
       points[i].isGap = true;
       points[i].gapMinutes = Math.round(diffMins);
       gapIndices.push(i);
@@ -415,7 +426,8 @@ export function buildSegmentedGeoJson(segments: RouteSegment[]): any {
             typeof p.lng === "number" &&
             typeof p.lat === "number" &&
             !isNaN(p.lng) &&
-            !isNaN(p.lat)
+            !isNaN(p.lat) &&
+            isFleetOperatingCoordinate(p.lat, p.lng)
         )
         .map((p) => [p.lng, p.lat])
     )
@@ -743,9 +755,17 @@ export function deriveJourneysFromTelemetry(
     const prevTime = new Date(points[i - 1].recorded_at).getTime();
     const currTime = new Date(points[i].recorded_at).getTime();
     const diffMins = (currTime - prevTime) / (60 * 1000);
+    const distKm = haversineDistanceKm(
+      points[i - 1].lat,
+      points[i - 1].lng,
+      points[i].lat,
+      points[i].lng
+    );
+    const impliedSpeedKmh = diffMins > 0 ? distKm / (diffMins / 60) : 0;
+    const isDistanceJump = distKm > 20 || impliedSpeedKmh > 150;
 
-    // If gap between consecutive points > journeySplitSilenceMins, treat as new journey
-    if (diffMins > journeySplitSilenceMins) {
+    // If gap between consecutive points > journeySplitSilenceMins or distance jump > 20km, treat as new journey
+    if (diffMins > journeySplitSilenceMins || isDistanceJump) {
       if (currentGroup.length > 0) {
         journeyPointGroups.push(currentGroup);
       }

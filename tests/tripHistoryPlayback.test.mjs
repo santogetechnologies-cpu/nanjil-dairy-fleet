@@ -626,4 +626,78 @@ test("28. Playback restart wrap-around: Restarts to 0 when at journey end", () =
   assert.equal(isPlaying, false);
 });
 
+test("29. Africa & Prime Meridian corruption rejection: Ingestion filters out corrupted hardware truncation packets", async () => {
+  const fakeDb = [
+    // Authentic point near Nagercoil
+    { id: 1, lat: 8.2505, lng: 77.2884, speed: 20, recorded_at: "2026-11-16T10:00:00Z" },
+    // Corrupted Africa point (e.g. truncated 77.x -> 0.33)
+    { id: 2, lat: 0.3312, lng: 3.1504, speed: 0, recorded_at: "2026-11-16T10:01:00Z" },
+    // Corrupted Togo point
+    { id: 3, lat: 9.1120, lng: 0.2611, speed: 0, recorded_at: "2026-11-16T10:02:00Z" },
+    // Another authentic point near Nagercoil
+    { id: 4, lat: 8.2510, lng: 77.2890, speed: 25, recorded_at: "2026-11-16T10:03:00Z" },
+  ];
+
+  const fakeSupabase = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          gte: () => ({
+            lte: () => ({
+              order: () => ({
+                order: () => ({
+                  range: () => Promise.resolve({ data: fakeDb, error: null }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    }),
+  };
+
+  const res = await fetchPaginatedTelemetryHistory(
+    fakeSupabase,
+    "09b85a4a-1d9f-43f0-8343-ace9d27a1670",
+    "2026-11-16T00:00:00Z",
+    "2026-11-16T23:59:59Z"
+  );
+
+  assert.equal(res.data.length, 2, "Must reject the 2 corrupted Africa coordinates");
+  assert.deepEqual(res.data.map(p => p.id), ["1", "4"]);
+});
+
+test("30. Distance jump segment breaking: Teleports > 20 km break polyline even when time gap < 15 mins", () => {
+  const points = [
+    // Moving in Kovilpatti
+    { id: "1", lat: 9.1513, lng: 77.6799, speed: 45, ignition: true, recorded_at: "2026-11-16T08:00:00Z" },
+    { id: "2", lat: 9.1600, lng: 77.6059, speed: 45, ignition: true, recorded_at: "2026-11-16T08:05:00Z" },
+    // 105 km jump to Nagercoil within 10 minutes (implied speed > 600 km/h)
+    { id: "3", lat: 8.2604, lng: 77.2890, speed: 30, ignition: true, recorded_at: "2026-11-16T08:15:00Z" },
+    { id: "4", lat: 8.2610, lng: 77.2895, speed: 30, ignition: true, recorded_at: "2026-11-16T08:18:00Z" },
+  ];
+
+  const { segments, gapIndices } = splitPointsIntoSegments(points, 15);
+  assert.equal(segments.length, 2, "Must split into 2 separate road segments across 105 km jump");
+  assert.equal(gapIndices.length, 1);
+  assert.equal(gapIndices[0], 2);
+  assert.equal(segments[0].points.length, 2);
+  assert.equal(segments[1].points.length, 2);
+});
+
+test("31. Journey grouping breaks on distance jumps: Prevents false single journey with straight connector", () => {
+  const points = [
+    { id: "1", lat: 9.1513, lng: 77.6799, speed: 45, ignition: true, recorded_at: "2026-11-16T08:00:00Z" },
+    { id: "2", lat: 9.1600, lng: 77.6059, speed: 45, ignition: true, recorded_at: "2026-11-16T08:05:00Z" },
+    // 105 km jump
+    { id: "3", lat: 8.2604, lng: 77.2890, speed: 30, ignition: true, recorded_at: "2026-11-16T08:15:00Z" },
+    { id: "4", lat: 8.2610, lng: 77.2895, speed: 30, ignition: true, recorded_at: "2026-11-16T08:18:00Z" },
+  ];
+
+  const vehicle = { id: "09b85a4a-1d9f-43f0-8343-ace9d27a1670", number: "TN 75 S 9826" };
+  const journeys = deriveJourneysFromTelemetry(points, vehicle, [], [], []);
+  assert.equal(journeys.length, 2, "Must create 2 separate journeys instead of 1 connected journey");
+});
+
+
 
