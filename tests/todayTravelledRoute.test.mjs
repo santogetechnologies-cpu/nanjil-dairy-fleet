@@ -13,6 +13,7 @@ import {
   printFleetRouteDiagnostics,
   anchorPointsToNanjilPlant,
   buildPlantConnector,
+  assembleVehicleRoute,
   NANJIL_DAIRY_DEPOT,
 } from "../src/hooks/useTodayTravelledRoutes.ts";
 import {
@@ -538,6 +539,65 @@ test("24. Distance Jump Segment Splitting: Points > 15 km apart split into separ
   assert.equal(segments[0][1].lat, 8.2480);
   assert.equal(segments[1][0].lat, 8.5500);
 });
+
+test("25. Continuous Route Assembly: Bridges Plant Origin & Telemetry Gaps along Road Network", () => {
+  // Raw segments: Segment 1 (Nagercoil to Panagudi), Segment 2 (Panagudi to Valliyur)
+  const rawSegments = [
+    [
+      { lat: 8.1989, lng: 77.4482, recorded_at: "2026-11-23T08:02:55Z" },
+      { lat: 8.2649, lng: 77.5530, recorded_at: "2026-11-23T08:22:45Z" },
+    ],
+    [
+      { lat: 8.2655, lng: 77.5535, recorded_at: "2026-11-23T08:39:48Z" },
+      { lat: 8.3894, lng: 77.6055, recorded_at: "2026-11-23T08:59:19Z" },
+    ],
+  ];
+
+  const assembled = assembleVehicleRoute({
+    rawSegments,
+    liveCoord: { lat: 8.5188, lng: 77.9216 }, // Srivaikuntam live vehicle location
+  });
+
+  // Must include:
+  // 1. Plant connection from NANJIL_DAIRY_DEPOT to Nagercoil (first GPS point)
+  // 2. Segment 1 (Nagercoil to Panagudi)
+  // 3. Segment 2 (Panagudi to Valliyur)
+  // 4. Live location connection from Valliyur to Srivaikuntam
+  assert.ok(assembled.length >= 4, `Assembled route must have at least 4 segments, got ${assembled.length}`);
+
+  // Origin begins at Nanjil Dairy Depot
+  assert.equal(assembled[0][0].lat, NANJIL_DAIRY_DEPOT.lat);
+  assert.equal(assembled[0][0].lng, NANJIL_DAIRY_DEPOT.lng);
+
+  // Destination reaches the live vehicle marker at Srivaikuntam
+  const lastSeg = assembled[assembled.length - 1];
+  const lastCoord = lastSeg[lastSeg.length - 1];
+  assert.equal(lastCoord.lat, 8.5188);
+  assert.equal(lastCoord.lng, 77.9216);
+});
+
+test("26. Real-Time Vehicle Tip Extension: Polyline Tip Always Connects to Live Marker", () => {
+  const rawSegments = [
+    [
+      { lat: 8.2603, lng: 77.2880, recorded_at: "2026-11-23T08:00:00Z" },
+      { lat: 8.2700, lng: 77.3000, recorded_at: "2026-11-23T08:05:00Z" },
+    ],
+  ];
+
+  // Moving truck has updated live location 400m down the road
+  const movingLiveCoord = { lat: 8.2735, lng: 77.3035 };
+
+  const assembled = assembleVehicleRoute({
+    rawSegments,
+    liveCoord: movingLiveCoord,
+  });
+
+  const lastSeg = assembled[assembled.length - 1];
+  const lastCoord = lastSeg[lastSeg.length - 1];
+  assert.equal(lastCoord.lat, movingLiveCoord.lat);
+  assert.equal(lastCoord.lng, movingLiveCoord.lng);
+});
+
 
 
 

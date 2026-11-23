@@ -248,6 +248,223 @@ export async function buildPlantConnector(
 }
 
 /**
+ * In-memory cache for road route bridges between coordinate pairs.
+ * Key: `${fromLat.toFixed(4)},${fromLng.toFixed(4)}->${toLat.toFixed(4)},${toLng.toFixed(4)}`
+ */
+export const roadBridgeCache = new Map<string, LatLngPoint[]>();
+
+export function getCachedRoadBridge(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+): LatLngPoint[] | null {
+  const key = `${from.lat.toFixed(4)},${from.lng.toFixed(4)}->${to.lat.toFixed(4)},${to.lng.toFixed(4)}`;
+  return roadBridgeCache.get(key) || null;
+}
+
+export async function fetchRoadBridge(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+): Promise<LatLngPoint[]> {
+  const distKm = haversineDistanceKm(from.lat, from.lng, to.lat, to.lng);
+  if (distKm < 0.05) {
+    return [{ lat: from.lat, lng: from.lng }, { lat: to.lat, lng: to.lng }];
+  }
+  const key = `${from.lat.toFixed(4)},${from.lng.toFixed(4)}->${to.lat.toFixed(4)},${to.lng.toFixed(4)}`;
+  if (roadBridgeCache.has(key)) return roadBridgeCache.get(key)!;
+
+  try {
+    const res = await calculateRoadRoute([from, to]);
+    if (res.coordinates && res.coordinates.length >= 2) {
+      const roadPts: LatLngPoint[] = res.coordinates.map(([lng, lat]) => ({ lat, lng }));
+      roadBridgeCache.set(key, roadPts);
+      return roadPts;
+    }
+  } catch {
+    // Graceful fallback on network/API failure
+  }
+
+  const fallback: LatLngPoint[] = [{ lat: from.lat, lng: from.lng }, { lat: to.lat, lng: to.lng }];
+  roadBridgeCache.set(key, fallback);
+  return fallback;
+}
+
+export interface AssembleRouteOptions {
+  rawSegments: VehicleRouteSegments;
+  liveCoord?: { lat: number; lng: number } | null;
+  onBridgesResolved?: (enhancedSegments: VehicleRouteSegments) => void;
+}
+
+/**
+ * Assembles a continuous, road-following display route for a fleet vehicle:
+ * 1. Connects from Nanjil Dairy Depot (base plant) to the vehicle's first route point.
+ * 2. Includes authentic GPS segments, bridging signal gaps along the real road network.
+ * 3. Connects seamlessly up to the vehicle's current live location (v.lat, v.lng).
+ * 4. Yields synchronous fallback segments immediately, then enriches with OSRM in background.
+ */
+export function assembleVehicleRoute(options: AssembleRouteOptions): VehicleRouteSegments {
+  const { rawSegments, liveCoord, onBridgesResolved } = options;
+
+  if (!rawSegments || rawSegments.length === 0) {
+    if (liveCoord && isFleetOperatingCoordinate(liveCoord.lat, liveCoord.lng)) {
+      const distFromPlant = haversineDistanceKm(
+        NANJIL_DAIRY_DEPOT.lat,
+        NANJIL_DAIRY_DEPOT.lng,
+        liveCoord.lat,
+        liveCoord.lng,
+      );
+      if (distFromPlant >= 0.15) {
+        const cached = getCachedRoadBridge(NANJIL_DAIRY_DEPOT, liveCoord);
+        if (cached) return [cached];
+        if (onBridgesResolved) {
+          fetchRoadBridge(NANJIL_DAIRY_DEPOT, liveCoord).then((pts) => {
+            if (pts && pts.length >= 2) onBridgesResolved([pts]);
+          });
+        }
+        return [[{ lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng }, { lat: liveCoord.lat, lng: liveCoord.lng }]];
+      }
+    }
+    return [];
+  }
+
+  const validMulti = rawSegments.filter((s) => s && s.length >= 2);
+
+  if (validMulti.length === 0) {
+    const flatPoints = rawSegments.flat().filter((p) => p && isFleetOperatingCoordinate(p.lat, p.lng));
+    const target =
+      liveCoord && isFleetOperatingCoordinate(liveCoord.lat, liveCoord.lng)
+        ? liveCoord
+        : flatPoints.length > 0
+          ? flatPoints[flatPoints.length - 1]
+          : null;
+
+    if (target) {
+      const distFromPlant = haversineDistanceKm(
+        NANJIL_DAIRY_DEPOT.lat,
+        NANJIL_DAIRY_DEPOT.lng,
+        target.lat,
+        target.lng,
+      );
+      if (distFromPlant >= 0.15) {
+        const cached = getCachedRoadBridge(NANJIL_DAIRY_DEPOT, target);
+        if (cached) return [cached];
+        if (onBridgesResolved) {
+          fetchRoadBridge(NANJIL_DAIRY_DEPOT, target).then((pts) => {
+            if (pts && pts.length >= 2) onBridgesResolved([pts]);
+          });
+        }
+        return [[{ lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng }, { lat: target.lat, lng: target.lng }]];
+      }
+    }
+    return [];
+  }
+
+  const initialPt = validMulti[0][0];
+  const distFromPlant = haversineDistanceKm(
+    NANJIL_DAIRY_DEPOT.lat,
+    NANJIL_DAIRY_DEPOT.lng,
+    initialPt.lat,
+    initialPt.lng,
+  );
+  const resultSegments: VehicleRouteSegments = [];
+  const pendingBridgeFetches: Array<Promise<{ idx: number; pts: LatLngPoint[] }>> = [];
+
+  if (distFromPlant >= 0.15) {
+    const cachedPlant = getCachedRoadBridge(NANJIL_DAIRY_DEPOT, initialPt);
+    if (cachedPlant) {
+      resultSegments.push(cachedPlant);
+    } else {
+      const segIndex = resultSegments.length;
+      resultSegments.push([
+        { lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng },
+        { lat: initialPt.lat, lng: initialPt.lng },
+      ]);
+      if (onBridgesResolved) {
+        pendingBridgeFetches.push(
+          fetchRoadBridge(NANJIL_DAIRY_DEPOT, initialPt).then((pts) => ({ idx: segIndex, pts })),
+        );
+      }
+    }
+  }
+
+  for (let i = 0; i < validMulti.length; i++) {
+    resultSegments.push(validMulti[i]);
+
+    if (i < validMulti.length - 1) {
+      const segEnd = validMulti[i][validMulti[i].length - 1];
+      const nextSegStart = validMulti[i + 1][0];
+      const gapDist = haversineDistanceKm(segEnd.lat, segEnd.lng, nextSegStart.lat, nextSegStart.lng);
+
+      if (gapDist >= 0.15 && gapDist <= 150) {
+        const cachedGap = getCachedRoadBridge(segEnd, nextSegStart);
+        if (cachedGap) {
+          resultSegments.push(cachedGap);
+        } else {
+          const segIndex = resultSegments.length;
+          resultSegments.push([
+            { lat: segEnd.lat, lng: segEnd.lng },
+            { lat: nextSegStart.lat, lng: nextSegStart.lng },
+          ]);
+          if (onBridgesResolved) {
+            pendingBridgeFetches.push(
+              fetchRoadBridge(segEnd, nextSegStart).then((pts) => ({ idx: segIndex, pts })),
+            );
+          }
+        }
+      }
+    }
+  }
+
+  const lastSeg = validMulti[validMulti.length - 1];
+  const lastPt = lastSeg[lastSeg.length - 1];
+
+  let finalTarget = liveCoord;
+  const allRawPoints = rawSegments.flat();
+  if (allRawPoints.length > 0) {
+    const lastRawPt = allRawPoints[allRawPoints.length - 1];
+    if (haversineDistanceKm(lastPt.lat, lastPt.lng, lastRawPt.lat, lastRawPt.lng) > 0.1) {
+      finalTarget = lastRawPt;
+    }
+  }
+
+  if (finalTarget && isFleetOperatingCoordinate(finalTarget.lat, finalTarget.lng)) {
+    const distToEnd = haversineDistanceKm(lastPt.lat, lastPt.lng, finalTarget.lat, finalTarget.lng);
+    if (distToEnd >= 0.15 && distToEnd <= 150) {
+      const cachedEnd = getCachedRoadBridge(lastPt, finalTarget);
+      if (cachedEnd) {
+        resultSegments.push(cachedEnd);
+      } else {
+        const segIndex = resultSegments.length;
+        resultSegments.push([
+          { lat: lastPt.lat, lng: lastPt.lng },
+          { lat: finalTarget.lat, lng: finalTarget.lng },
+        ]);
+        if (onBridgesResolved) {
+          pendingBridgeFetches.push(
+            fetchRoadBridge(lastPt, finalTarget).then((pts) => ({ idx: segIndex, pts })),
+          );
+        }
+      }
+    } else if (distToEnd >= 0.005) {
+      lastSeg.push({ lat: finalTarget.lat, lng: finalTarget.lng });
+    }
+  }
+
+  if (pendingBridgeFetches.length > 0 && onBridgesResolved) {
+    Promise.all(pendingBridgeFetches).then((updates) => {
+      const updated = [...resultSegments];
+      updates.forEach(({ idx, pts }) => {
+        if (pts && pts.length >= 2 && idx < updated.length) {
+          updated[idx] = pts;
+        }
+      });
+      onBridgesResolved(updated);
+    });
+  }
+
+  return resultSegments;
+}
+
+/**
  * Filter isolated GPS spikes, multipath glitches, and teleports:
  * - Discards coordinates outside the fleet operating geofence
  * - Rejects single-ping teleport spikes (implied speed > 85 km/h for > 100m)
@@ -627,17 +844,39 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]): UseTodayTravelledR
         return prev;
       });
 
+      const displaySegments = assembleVehicleRoute({
+        rawSegments: updatedSegments,
+        liveCoord: { lat: Number(lat), lng: Number(lng) },
+        onBridgesResolved: (enhancedSegments) => {
+          setRoutes((currentRoutes) => {
+            const nextMap: TodayRoutesMap = {
+              ...currentRoutes,
+              [targetKey]: enhancedSegments,
+            };
+            if (uuid && uuid !== targetKey) {
+              nextMap[uuid] = enhancedSegments;
+            }
+            if (devId && devId !== targetKey) {
+              nextMap[devId] = enhancedSegments;
+              nextMap[`device_${devId}`] = enhancedSegments;
+            }
+            routesRef.current = nextMap;
+            return nextMap;
+          });
+        },
+      });
+
       setRoutes((currentRoutes) => {
         const nextMap: TodayRoutesMap = {
           ...currentRoutes,
-          [targetKey]: updatedSegments,
+          [targetKey]: displaySegments,
         };
         if (uuid && uuid !== targetKey) {
-          nextMap[uuid] = updatedSegments;
+          nextMap[uuid] = displaySegments;
         }
         if (devId && devId !== targetKey) {
-          nextMap[devId] = updatedSegments;
-          nextMap[`device_${devId}`] = updatedSegments;
+          nextMap[devId] = displaySegments;
+          nextMap[`device_${devId}`] = displaySegments;
         }
         routesRef.current = nextMap;
         return nextMap;
@@ -718,10 +957,35 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]): UseTodayTravelledR
               }
             }
 
-            nextRoutes[uuid] = segments;
+            // Find current vehicle live coordinate
+            const vehicleObj = vehiclesRef.current.find(
+              (v) => v.id === uuid || (devId && (v.deviceId === devId || v.deviceId === `device_${devId}`))
+            );
+            const liveCoord =
+              vehicleObj && isFleetOperatingCoordinate(vehicleObj.lat, vehicleObj.lng)
+                ? { lat: Number(vehicleObj.lat), lng: Number(vehicleObj.lng) }
+                : null;
+
+            const displaySegments = assembleVehicleRoute({
+              rawSegments: segments,
+              liveCoord,
+              onBridgesResolved: (enhancedSegments) => {
+                setRoutes((curr) => {
+                  const updatedMap = {
+                    ...curr,
+                    [uuid]: enhancedSegments,
+                    ...(devId ? { [devId]: enhancedSegments, [`device_${devId}`]: enhancedSegments } : {}),
+                  };
+                  routesRef.current = updatedMap;
+                  return updatedMap;
+                });
+              },
+            });
+
+            nextRoutes[uuid] = displaySegments;
             if (devId) {
-              nextRoutes[devId] = segments;
-              nextRoutes[`device_${devId}`] = segments;
+              nextRoutes[devId] = displaySegments;
+              nextRoutes[`device_${devId}`] = displaySegments;
             }
 
             // Check if estimated plant connector should be generated (only when first GPS ping is far from plant)
