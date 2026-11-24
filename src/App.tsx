@@ -61,13 +61,13 @@ export default function App() {
       <Routes>
         <Route path="/" element={<IndexRedirect />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/driver" element={<DriverPage />} />
 
         {/* Authenticated Application Gate */}
         <Route element={<AppGate />}>
           {/* Main 12 Navigation Items */}
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/tracking" element={<TrackingPage />} />
-          <Route path="/driver" element={<DriverPage />} />
           <Route path="/routes" element={<RoutesPlannerPage />} />
           <Route path="/trips" element={<TripsPage />} />
           <Route path="/stops" element={<VehicleStopHistoryPage />} />
