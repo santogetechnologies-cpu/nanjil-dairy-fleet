@@ -767,13 +767,78 @@ export class StopDetectionEngine {
         }
       }
       const ts = safeTimestampToMs(v.lastUpdate) || now;
+      const speed = Math.max(0, Number(v.speed) || 0);
+      const isStationary = speed <= this.config.stopSpeedThresholdKmh || v.status === "idle" || v.status === "parked";
+
+      // Reconcile/ensure active stop for live stationary vehicle
+      if (isStationary && v.status !== "offline") {
+        let state = this.states.get(v.id) || (v.deviceId ? this.states.get(`unassigned-${v.deviceId}`) : undefined);
+        if (!state) {
+          state = {
+            vehicleId: v.id,
+            vehicleNumber: v.number,
+            driverId: v.driverId || null,
+            driverName: v.driver || null,
+            lastLat: Number(v.lat) || 0,
+            lastLng: Number(v.lng) || 0,
+            lastTimestampMs: ts,
+            lastFreshTelemetryMs: now,
+            lastSpeed: speed,
+            provisionalStationaryStartMs: ts,
+            provisionalLat: Number(v.lat) || 0,
+            provisionalLng: Number(v.lng) || 0,
+            provisionalLocation: v.location || null,
+            provisionalEngineOn: Boolean(v.engineOn || v.ignition),
+            movementCandidateStartMs: null,
+            activeStop: null,
+          };
+          this.states.set(v.id, state);
+        }
+
+        if (!state.activeStop) {
+          const startedAtIso = new Date(ts).toISOString();
+          const durSec = Math.max(1, Math.round((now - ts) / 1000));
+          const confirmedStop: VehicleStopEvent = {
+            id: generateUuid(),
+            dedup_key: `live:${v.id}:${startedAtIso}`,
+            vehicle_id: v.id,
+            vehicle_number: v.number,
+            vehicle_model: v.model,
+            driver_id: v.driverId || null,
+            driver_name: v.driver || null,
+            started_at: startedAtIso,
+            ended_at: null,
+            duration_seconds: durSec,
+            start_lat: Number(v.lat) || 0,
+            start_lng: Number(v.lng) || 0,
+            end_lat: Number(v.lat) || 0,
+            end_lng: Number(v.lng) || 0,
+            location: v.location || "Nagercoil Depot",
+            engine_on: Boolean(v.engineOn || v.ignition),
+            status: "ACTIVE",
+            source: "telemetry",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          state.activeStop = confirmedStop;
+          this.addConfirmedStop(confirmedStop);
+          this.saveToStorage();
+          results.push({ vehicleId: v.id, action: "STOP_CONFIRMED", stopEvent: confirmedStop });
+        } else {
+          // Keep active stop updated with latest location and engine status
+          state.lastFreshTelemetryMs = now;
+          state.activeStop.engine_on = Boolean(v.engineOn || v.ignition);
+          if (v.location) state.activeStop.location = v.location;
+        }
+      }
+
       const pt: TelemetryPoint = {
         vehicleId: v.id,
         vehicleNumber: v.number,
         driverId: v.driverId || null,
         driverName: v.driver || null,
         timestamp: ts,
-        speed: Number(v.speed) || 0,
+        speed: speed,
         lat: Number(v.lat) || 0,
         lng: Number(v.lng) || 0,
         engineOn: Boolean(v.engineOn || v.ignition),
@@ -1092,6 +1157,8 @@ export class StopDetectionEngine {
       if (error) {
         if (
           error.code === "PGRST205" ||
+          error.code === "42501" ||
+          error.message?.includes("permission denied") ||
           error.message?.includes("schema cache") ||
           error.message?.includes("404")
         ) {
@@ -1268,7 +1335,7 @@ export class StopDetectionEngine {
           processedCount++;
         }
 
-        if (pageData.length < pageSize) {
+        if (pageData.length < pageSize || page >= 4) {
           hasMore = false;
         } else {
           page++;
