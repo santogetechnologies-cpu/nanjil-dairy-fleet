@@ -6,7 +6,7 @@ export type Role = "admin" | "manager" | "driver";
 export const REDIRECT_MAP: Record<Role, string> = {
   admin: "/dashboard",
   manager: "/dashboard",
-  driver: "/driver",
+  driver: "/dashboard",
 };
 
 export interface AuthUser {

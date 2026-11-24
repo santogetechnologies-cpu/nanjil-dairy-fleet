@@ -267,11 +267,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
     };
   }, [liveVehicles]);
 
-  // Dedicated Driver View (standalone mobile-first interface)
-  if (user?.role === "driver") {
-    return <>{children}</>;
-  }
-
   const NAV_SECTIONS: NavSection[] = [
     {
       title: "MONITORING",
@@ -330,6 +325,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
           shortcut: "G F",
           description: "Tank-to-tank km/L & anomaly detection",
         },
+        {
+          to: "/driver",
+          label: "Driver Portal",
+          icon: ShieldCheck,
+          shortcut: "G P",
+          description: "Shift tracking, inspections & manual fuel logs",
+        },
       ],
     },
     {
@@ -378,18 +380,22 @@ export function AppLayout({ children }: { children: ReactNode }) {
         },
       ],
     },
-    {
-      title: "ADMINISTRATION",
-      items: [
-        {
-          to: "/settings",
-          label: "System Settings",
-          icon: Settings,
-          shortcut: "G ,",
-          description: "Operational thresholds & user access",
-        },
-      ],
-    },
+    ...(user?.role === "admin" || user?.role === "manager"
+      ? [
+          {
+            title: "ADMINISTRATION",
+            items: [
+              {
+                to: "/settings",
+                label: "System Settings",
+                icon: Settings,
+                shortcut: "G ,",
+                description: "Operational thresholds & user access",
+              },
+            ],
+          },
+        ]
+      : []),
   ];
 
   // Dynamic Current Navigation Context
@@ -605,7 +611,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
                   {user?.name || "Fleet User"}
                 </div>
                 <div className="text-slate-400 text-[10px] capitalize font-medium">
-                  {user?.role === "admin" ? "Administrator" : "Fleet Manager"}
+                  {user?.role === "admin" ? "Administrator" : user?.role === "manager" ? "Fleet Manager" : "Driver"}
                 </div>
               </div>
             )}
@@ -952,7 +958,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
                   {user?.name || "Fleet User"}
                 </div>
                 <div className="text-[10px] text-slate-400 capitalize leading-tight">
-                  {user?.role === "admin" ? "Administrator" : "Fleet Manager"}
+                  {user?.role === "admin" ? "Administrator" : user?.role === "manager" ? "Fleet Manager" : "Driver"}
                 </div>
               </div>
               <div className="h-7.5 w-7.5 rounded-full flex items-center justify-center text-xs font-bold text-white bg-gradient-to-br from-indigo-600 to-indigo-800 shrink-0 shadow-2xs">
@@ -973,7 +979,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
                       {user?.email || "fleet@nanjildairy.com"}
                     </div>
                     <div className="mt-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700">
-                      <span>{user?.role === "admin" ? "Role: Admin" : "Role: Fleet Manager"}</span>
+                      <span>{user?.role === "admin" ? "Role: Admin" : user?.role === "manager" ? "Role: Fleet Manager" : "Role: Driver"}</span>
                     </div>
                   </div>
 

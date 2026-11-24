@@ -7,10 +7,6 @@ function AppGate() {
   if (!ready) return null;
   if (!user) return <Navigate to="/login" />;
 
-  if (REDIRECT_MAP[user.role] !== "/dashboard") {
-    return <Navigate to={REDIRECT_MAP[user.role]} />;
-  }
-
   return (
     <AppLayout>
       <Outlet />
