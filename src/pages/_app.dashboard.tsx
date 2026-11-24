@@ -3,7 +3,6 @@ import { useEffect, useState, useMemo } from "react";
 import {
   Truck,
   Activity,
-  Radio,
   Route,
   History,
   Gauge,
@@ -166,7 +165,7 @@ export default function DashboardPage() {
       />
 
       {/* ── TOP KPI INDICATOR CARDS ────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {/* Total Vehicles */}
         <Link
           to="/vehicles"
@@ -206,19 +205,6 @@ export default function DashboardPage() {
             {statusCounts.idle + statusCounts.stopped}
           </div>
           <div className="text-[11px] text-slate-500 mt-0.5">{statusCounts.idle} idle · {statusCounts.stopped} parked</div>
-        </Link>
-
-        {/* Offline */}
-        <Link
-          to="/tracking"
-          className="bg-white border border-slate-200/80 p-3.5 rounded-2xl shadow-xs hover:border-slate-300 transition-all group"
-        >
-          <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-            <span>Offline</span>
-            <Radio className="h-3.5 w-3.5 text-slate-400" />
-          </div>
-          <div className="text-2xl font-bold text-slate-600 mt-1">{statusCounts.offline}</div>
-          <div className="text-[11px] text-slate-400 mt-0.5">No signal &gt;15 mins</div>
         </Link>
 
         {/* Active Routes */}
