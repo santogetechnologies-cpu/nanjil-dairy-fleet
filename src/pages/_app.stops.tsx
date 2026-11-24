@@ -130,7 +130,7 @@ export default function VehicleStopHistoryPage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("live");
 
   // Filter States
-  const [dateFilter, setDateFilter] = useState<DateFilter>("today");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [vehicleFilter, setVehicleFilter] = useState<string>("All");
   const [driverFilter, setDriverFilter] = useState<string>("All");
   const [durationFilter, setDurationFilter] = useState<DurationFilter>("all");
@@ -1033,9 +1033,22 @@ GRANT SELECT ON public.v_vehicle_stop_summary TO anon, authenticated;`);
                     <td colSpan={11} className="text-center py-12 text-slate-400">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <Clock className="h-8 w-8 text-slate-300" />
-                        <div className="font-semibold text-slate-700">No Stop Records Found</div>
+                        <div className="font-semibold text-slate-700">No Stop Records Found on Selected Period</div>
                         <div className="text-xs text-slate-400 max-w-sm">
-                          Try switching your period filter to "All Time" or resetting vehicle/duration filters.
+                          {stops.length > 0 && dateFilter !== "all" ? (
+                            <span>
+                              {stops.length} stop events recorded in fleet history.{" "}
+                              <button
+                                type="button"
+                                onClick={() => setDateFilter("all")}
+                                className="text-indigo-600 font-semibold underline hover:text-indigo-800 cursor-pointer"
+                              >
+                                View All Time Stops
+                              </button>
+                            </span>
+                          ) : (
+                            <span>Try resetting vehicle, driver or duration filters.</span>
+                          )}
                         </div>
                       </div>
                     </td>

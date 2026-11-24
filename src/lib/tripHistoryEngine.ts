@@ -100,7 +100,7 @@ export interface TimelineEvent {
  * and safely converts them to UTC ISO strings for Supabase database queries.
  */
 export function getIstDateRange(
-  mode: "today" | "yesterday" | "last7" | "last30" | "custom",
+  mode: "latest" | "today" | "yesterday" | "last7" | "last30" | "custom",
   customStart?: string,
   customEnd?: string,
   refDate = new Date()
@@ -123,7 +123,11 @@ export function getIstDateRange(
   let endIstDate = todayIstStr;
   let displayLabel = "Today";
 
-  if (mode === "today") {
+  if (mode === "latest") {
+    startIstDate = customStart || todayIstStr;
+    endIstDate = customEnd || customStart || todayIstStr;
+    displayLabel = customStart ? `Latest Trip (${customStart})` : "Latest Trip";
+  } else if (mode === "today") {
     startIstDate = todayIstStr;
     endIstDate = todayIstStr;
     displayLabel = `Today (${todayIstStr})`;
@@ -312,6 +316,17 @@ export async function fetchPaginatedTelemetryHistory(
         const lat = Number(row.lat);
         const lng = Number(row.lng);
         if (isValidGpsCoord(lat, lng) && isFleetOperatingCoordinate(lat, lng)) {
+          // Reject consecutive identical points with exact same millisecond timestamp and coordinate
+          const lastPt = allPoints[allPoints.length - 1];
+          if (
+            lastPt &&
+            lastPt.recorded_at === row.recorded_at &&
+            Math.abs(lastPt.lat - lat) < 0.000001 &&
+            Math.abs(lastPt.lng - lng) < 0.000001
+          ) {
+            continue;
+          }
+
           allPoints.push({
             id: idStr,
             lat,
@@ -341,6 +356,60 @@ export async function fetchPaginatedTelemetryHistory(
     earliestTimestamp: allPoints[0]?.recorded_at,
     latestTimestamp: allPoints[allPoints.length - 1]?.recorded_at,
   };
+}
+
+/**
+ * Fast lookup for the latest recorded active/moving trip date of a vehicle.
+ * Returns both the UTC ISO string and the IST calendar date (YYYY-MM-DD).
+ */
+export async function fetchVehicleLatestActiveDate(
+  supabaseClient: any,
+  vehicleUuid: string
+): Promise<{ dateIso: string; dateIstStr: string; speed?: number } | null> {
+  if (!isValidUuid(vehicleUuid)) return null;
+
+  try {
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+
+    // 1. Find latest moving GPS point (> 3 km/h)
+    const { data, error } = await supabaseClient
+      .from("telemetry_history")
+      .select("recorded_at, speed")
+      .eq("vehicle_id", vehicleUuid)
+      .gt("speed", 3)
+      .order("recorded_at", { ascending: false })
+      .limit(1);
+
+    if (!error && data && data.length > 0) {
+      const iso = data[0].recorded_at;
+      const dateIstStr = formatter.format(new Date(iso));
+      return { dateIso: iso, dateIstStr, speed: Number(data[0].speed) };
+    }
+
+    // 2. Fallback: check any telemetry reading
+    const { data: anyData } = await supabaseClient
+      .from("telemetry_history")
+      .select("recorded_at, speed")
+      .eq("vehicle_id", vehicleUuid)
+      .order("recorded_at", { ascending: false })
+      .limit(1);
+
+    if (anyData && anyData.length > 0) {
+      const iso = anyData[0].recorded_at;
+      const dateIstStr = formatter.format(new Date(iso));
+      return { dateIso: iso, dateIstStr, speed: Number(anyData[0].speed) };
+    }
+
+    return null;
+  } catch (err) {
+    console.warn("fetchVehicleLatestActiveDate error:", err);
+    return null;
+  }
 }
 
 // ── ROUTE SEGMENTATION & GAP SPLITTING ───────────────────────────────────────

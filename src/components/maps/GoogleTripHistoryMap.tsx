@@ -13,6 +13,7 @@ import {
   splitPointsIntoSegments,
 } from "@/lib/tripHistoryEngine";
 import type { Vehicle } from "@/lib/types";
+import { getFleetVehicleRouteColor } from "@/lib/vehicle-stop-detection";
 import { Truck, Navigation } from "lucide-react";
 import {
   DEFAULT_MAP_CENTER,
@@ -70,6 +71,10 @@ export function GoogleTripHistoryMap({
     }
     return DEFAULT_MAP_CENTER;
   }, [currentPoint, vehicleCurrentPosition]);
+
+  const vehicleRouteColor = useMemo(() => {
+    return getFleetVehicleRouteColor(selectedVehicle?.id);
+  }, [selectedVehicle?.id]);
 
   // Fit bounds function for the entire route
   const fitRouteBounds = useCallback(() => {
@@ -134,6 +139,13 @@ export function GoogleTripHistoryMap({
       onRegisterFitBounds(fitRouteBounds);
     }
   }, [onRegisterFitBounds, fitRouteBounds]);
+
+  // Auto-fit bounds whenever map becomes available or points/selected journey changes
+  useEffect(() => {
+    if (map) {
+      fitRouteBounds();
+    }
+  }, [map, activeGpsPoints, selectedJourneyId, fitRouteBounds]);
 
   const isInitialMountRef = useRef(true);
   const prevPointRef = useRef<{ lat: number; lng: number } | null>(null);
@@ -260,9 +272,9 @@ export function GoogleTripHistoryMap({
           <Polyline
             key={`line-${vehicleKeyPrefix}-${selectedJourneyId}-${idx}`}
             path={coords}
-            strokeColor="#2563EB"
-            strokeOpacity={0.75}
-            strokeWeight={3.8}
+            strokeColor={vehicleRouteColor}
+            strokeOpacity={0.85}
+            strokeWeight={4}
             geodesic={true}
             zIndex={50}
           />
@@ -284,17 +296,34 @@ export function GoogleTripHistoryMap({
           <Polyline
             key={`trav-line-${vehicleKeyPrefix}-${selectedJourneyId}-${idx}`}
             path={coords}
-            strokeColor="#1D4ED8"
+            strokeColor="#1E1B4B"
             strokeOpacity={1.0}
-            strokeWeight={4.5}
+            strokeWeight={4.8}
             geodesic={true}
             zIndex={70}
           />
         </Fragment>
       ))}
 
+      {/* Stationary at Depot Marker (when vehicle points exist but no road polyline >= 50m) */}
+      {segmentPaths.length === 0 && activeGpsPoints.length > 0 && isValidFleetCoord(activeGpsPoints[0]) && (
+        <AdvancedMarker position={{ lat: activeGpsPoints[0].lat, lng: activeGpsPoints[0].lng }}>
+          <div className="relative flex flex-col items-center justify-center cursor-pointer">
+            <div
+              className="h-9 w-9 rounded-full text-white flex items-center justify-center shadow-2xl border-2 border-white ring-4 ring-slate-200"
+              style={{ backgroundColor: vehicleRouteColor }}
+            >
+              <Truck className="h-4 w-4" />
+            </div>
+            <div className="mt-1 bg-slate-900 text-white text-[10px] font-semibold px-2 py-0.5 rounded shadow whitespace-nowrap">
+              {selectedVehicle?.number || "Vehicle"} · Stationary at Depot
+            </div>
+          </div>
+        </AdvancedMarker>
+      )}
+
       {/* Start Marker A (Emerald) */}
-      {activeGpsPoints.length > 0 &&
+      {segmentPaths.length > 0 && activeGpsPoints.length > 0 &&
         isValidFleetCoord(activeGpsPoints[0]) && (
           <AdvancedMarker
             position={{ lat: activeGpsPoints[0].lat, lng: activeGpsPoints[0].lng }}
@@ -307,7 +336,7 @@ export function GoogleTripHistoryMap({
         )}
 
       {/* End Marker B (Slate) */}
-      {activeGpsPoints.length > 1 &&
+      {segmentPaths.length > 0 && activeGpsPoints.length > 1 &&
         isValidFleetCoord(activeGpsPoints[activeGpsPoints.length - 1]) && (
           <AdvancedMarker
             position={{
@@ -363,7 +392,10 @@ export function GoogleTripHistoryMap({
             position={{ lat: vehicleCurrentPosition.lat, lng: vehicleCurrentPosition.lng }}
           >
             <div className="relative flex items-center justify-center group cursor-pointer">
-              <div className="h-9 w-9 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-2xl border-2 border-white ring-4 ring-indigo-200">
+              <div
+                className="h-9 w-9 rounded-full text-white flex items-center justify-center shadow-2xl border-2 border-white ring-4 ring-indigo-200"
+                style={{ backgroundColor: vehicleRouteColor }}
+              >
                 <Truck className="h-4 w-4" />
               </div>
               <div className="absolute -top-7 bg-slate-900 text-white text-[10px] font-semibold px-2 py-0.5 rounded shadow whitespace-nowrap pointer-events-none">
@@ -377,7 +409,10 @@ export function GoogleTripHistoryMap({
       {isValidFleetCoord(currentPoint) && (
         <AdvancedMarker position={{ lat: currentPoint.lat, lng: currentPoint.lng }}>
           <div className="relative flex items-center justify-center">
-            <div className="h-9 w-9 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-2xl border-2 border-white ring-4 ring-indigo-300 animate-pulse">
+            <div
+              className="h-9 w-9 rounded-full text-white flex items-center justify-center shadow-2xl border-2 border-white ring-4 ring-indigo-300 animate-pulse"
+              style={{ backgroundColor: vehicleRouteColor }}
+            >
               <Navigation className="h-5 w-5" />
             </div>
           </div>

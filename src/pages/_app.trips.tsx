@@ -49,6 +49,7 @@ import {
   formatIstTime,
   isValidUuid,
   fetchPaginatedTelemetryHistory,
+  fetchVehicleLatestActiveDate,
   splitPointsIntoSegments,
   buildSegmentedGeoJson,
   calculateJourneyMetrics,
@@ -65,7 +66,8 @@ export default function TripHistoryPage() {
   // Filters
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [selectedDriverId, setSelectedDriverId] = useState("All");
-  const [dateFilterMode, setDateFilterMode] = useState<"today" | "yesterday" | "last7" | "last30" | "custom">("today");
+  const [dateFilterMode, setDateFilterMode] = useState<"latest" | "today" | "yesterday" | "last7" | "last30" | "custom">("today");
+  const [vehicleLatestDates, setVehicleLatestDates] = useState<Record<string, { dateIso: string; dateIstStr: string; speed?: number }>>({});
   const [customStartDate, setCustomStartDate] = useState(
     new Date(Date.now() - 24 * 3600 * 1000).toISOString().split("T")[0]
   );
@@ -174,7 +176,10 @@ export default function TripHistoryPage() {
       if (listToUse.length > 0) {
         setSelectedVehicleId((prev) => {
           const stillValid = listToUse.some((x) => x.id === prev);
-          return stillValid ? prev : listToUse[0].id;
+          if (stillValid && prev) return prev;
+          // Prefer an actively moving vehicle or one with speed > 0 or recent movement
+          const movingVeh = listToUse.find((x) => (x.speed && x.speed > 0) || x.status === "moving");
+          return movingVeh ? movingVeh.id : listToUse[0].id;
         });
       }
 
@@ -197,10 +202,27 @@ export default function TripHistoryPage() {
     init();
   }, []);
 
+  // Fetch selected vehicle's latest active trip date if not cached
+  useEffect(() => {
+    if (!selectedVehicleId) return;
+    if (!vehicleLatestDates[selectedVehicleId]) {
+      fetchVehicleLatestActiveDate(supabase, selectedVehicleId).then((res) => {
+        if (res) {
+          setVehicleLatestDates((prev) => ({ ...prev, [selectedVehicleId]: res }));
+        }
+      });
+    }
+  }, [selectedVehicleId, vehicleLatestDates]);
+
   // 2. Compute Target Date Range in Asia/Kolkata (IST = UTC+05:30)
+  const targetLatestDate = vehicleLatestDates[selectedVehicleId]?.dateIstStr;
   const dateRange = useMemo(() => {
-    return getIstDateRange(dateFilterMode, customStartDate, customEndDate);
-  }, [dateFilterMode, customStartDate, customEndDate]);
+    return getIstDateRange(
+      dateFilterMode,
+      dateFilterMode === "latest" ? targetLatestDate : customStartDate,
+      dateFilterMode === "latest" ? targetLatestDate : customEndDate
+    );
+  }, [dateFilterMode, customStartDate, customEndDate, targetLatestDate]);
 
   // Selected vehicle object
   const selectedVehicle = useMemo(() => {
@@ -864,19 +886,32 @@ export default function TripHistoryPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           {/* Quick Date Filters (Timezone: Asia/Kolkata) */}
           <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-semibold">
-            {(["today", "yesterday", "last7", "last30", "custom"] as const).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setDateFilterMode(mode)}
-                className={`px-3 py-1.5 rounded-lg transition-all capitalize ${
-                  dateFilterMode === mode
-                    ? "bg-white text-slate-900 shadow-xs"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-              >
-                {mode === "last7" ? "Last 7 Days" : mode === "last30" ? "Last 30 Days" : mode}
-              </button>
-            ))}
+            {(["latest", "today", "yesterday", "last7", "last30", "custom"] as const).map((mode) => {
+              const label =
+                mode === "latest"
+                  ? targetLatestDate
+                    ? `Latest (${targetLatestDate.slice(5)})`
+                    : "Latest Trip"
+                  : mode === "last7"
+                  ? "Last 7 Days"
+                  : mode === "last30"
+                  ? "Last 30 Days"
+                  : mode;
+
+              return (
+                <button
+                  key={mode}
+                  onClick={() => setDateFilterMode(mode)}
+                  className={`px-3 py-1.5 rounded-lg transition-all capitalize cursor-pointer ${
+                    dateFilterMode === mode
+                      ? "bg-white text-slate-900 shadow-xs"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
 
           {/* Vehicle, Driver & Status Selectors */}
@@ -988,6 +1023,32 @@ export default function TripHistoryPage() {
           </div>
         </div>
       </Card>
+
+      {/* Stationary Notice / Latest Trip Jump Action */}
+      {selectedVehicle && !isLoadingGps && derivedJourneys.length === 0 && (
+        <div className="bg-amber-50 border border-amber-200/90 p-3 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs text-amber-900 shadow-xs">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+            <span>
+              Vehicle <strong>{selectedVehicle.number}</strong> had no active driving trips on{" "}
+              <strong>{dateRange.displayLabel}</strong>
+              {allRangeGpsPoints.length > 0 ? " (Stationary at Depot)" : " (No Telemetry Recorded)"}.
+              {targetLatestDate && targetLatestDate !== dateRange.startIstDate && (
+                <span> Latest trip recorded was on <strong>{targetLatestDate}</strong>.</span>
+              )}
+            </span>
+          </div>
+          {targetLatestDate && targetLatestDate !== dateRange.startIstDate && (
+            <button
+              type="button"
+              className="px-3 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs rounded-xl cursor-pointer shrink-0 transition-colors shadow-2xs"
+              onClick={() => setDateFilterMode("latest")}
+            >
+              View Latest Trip ({targetLatestDate})
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── SUMMARY STATS BAR (Real Mathematical Metrics) ───────── */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
@@ -1343,8 +1404,17 @@ export default function TripHistoryPage() {
             {/* Journeys Scroll List */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               {filteredJourneys.length === 0 ? (
-                <div className="text-center py-6 text-slate-400 text-xs">
-                  No journeys recorded for this filter selection.
+                <div className="text-center py-6 text-slate-400 text-xs space-y-2">
+                  <p>No journeys recorded for this filter selection.</p>
+                  {targetLatestDate && targetLatestDate !== dateRange.startIstDate && (
+                    <button
+                      type="button"
+                      onClick={() => setDateFilterMode("latest")}
+                      className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg font-semibold text-[11px] cursor-pointer"
+                    >
+                      Jump to Latest Trip ({targetLatestDate})
+                    </button>
+                  )}
                 </div>
               ) : (
                 <>
