@@ -10,7 +10,6 @@ import {
   UsersRound,
   Route,
   Gauge,
-  Fuel,
   Wrench,
   CheckCircle2,
   FileSpreadsheet,
@@ -123,7 +122,6 @@ export default function ReportsPage() {
             model: v.model || v.type || "Fleet Asset",
             category: v.type || "Tanker",
             odometerKm: v.odometer ? `${Number(v.odometer).toLocaleString()} km` : "-",
-            fuelLevel: typeof v.fuel === "number" ? `${v.fuel}%` : "100%",
             status: v.status || "Offline",
             location: getImmediateLocationDisplay(v.location, v.lat, v.lng),
             lastReported: v.last_update

@@ -246,7 +246,6 @@ test("8. Export Integration: Daily Vehicle Activity table and CSV contain resolv
     model: v.model,
     category: v.type,
     odometerKm: `${v.odometer.toLocaleString()} km`,
-    fuelLevel: `${v.fuel}%`,
     status: v.status,
     location: getImmediateLocationDisplay(v.location, v.lat, v.lng),
   }));
