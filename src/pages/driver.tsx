@@ -1,12 +1,12 @@
 import { Navigate, useNavigate } from "react-router-dom";
-import { useAuth, REDIRECT_MAP } from "@/lib/auth";
-import { Logo } from "@/components/Logo";
+import { useAuth } from "@/lib/auth";
 import {
   Truck, Fuel, Thermometer, Gauge, MapPin, Bell, ShieldCheck, Play,
-  LogOut, Loader2, Calendar, Route, Home, StopCircle,
+  Loader2, Calendar, Route, Home, StopCircle,
   CheckCircle2, ChevronRight, Droplets,
 } from "lucide-react";
 import { Badge } from "@/components/ui-kit";
+import { PageHeader } from "@/components/AppLayout";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 
@@ -22,7 +22,7 @@ const TABS: { id: TabId; label: string; icon: typeof Home }[] = [
 ];
 
 function DriverPage() {
-  const { user, logout, ready } = useAuth();
+  const { user, ready } = useAuth();
   const nav = useNavigate();
   const [activeTab, setActiveTab] = useState<TabId>("home");
   const [driver, setDriver] = useState<any>(null);
@@ -452,19 +452,12 @@ function DriverPage() {
 
   if (!ready) return null;
   if (!user) return <Navigate to="/login" />;
-  if (REDIRECT_MAP[user.role] !== "/driver") return <Navigate to={REDIRECT_MAP[user.role]} />;
 
   if (loading) {
     return (
-      <div
-        className="min-h-screen flex flex-col items-center justify-center gap-4"
-        style={{ background: "linear-gradient(160deg, oklch(0.14 0.06 258) 0%, oklch(0.20 0.09 265) 100%)" }}
-      >
-        <div className="bg-white/10 rounded-2xl p-4">
-          <Logo className="h-12" />
-        </div>
-        <Loader2 className="h-6 w-6 text-white animate-spin" />
-        <p className="text-white/60 text-sm">Loading driver portal…</p>
+      <div className="py-24 flex flex-col items-center justify-center gap-3 text-slate-500 text-xs">
+        <Loader2 className="h-6 w-6 animate-spin text-indigo-600" />
+        <span>Loading driver portal…</span>
       </div>
     );
   }
@@ -915,72 +908,28 @@ function DriverPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-
-      {/* ── TOP HEADER ── */}
-      <header
-        className="safe-top shrink-0"
-        style={{
-          background: "linear-gradient(135deg, oklch(0.16 0.07 258) 0%, oklch(0.22 0.09 265) 100%)",
-        }}
-      >
-        <div className="flex items-center gap-3 px-4 py-3.5">
-          <div className="bg-white/12 rounded-xl p-2 shrink-0">
-            <Logo className="h-8" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-white/55 text-[10px] font-semibold uppercase tracking-widest">Driver Portal</div>
-            <div className="text-white font-bold text-base leading-tight truncate">{user.name}</div>
-          </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Driver Portal"
+        subtitle={`Driver: ${user.name} · Shifts, Vehicle Inspections & Fuel Logs`}
+        actions={
           <div className="flex items-center gap-2">
-            {openAlerts > 0 && (
-              <button
-                onClick={() => setActiveTab("alerts")}
-                className="relative p-2 rounded-xl bg-white/10 text-white transition-colors hover:bg-white/20 min-h-0 min-w-0"
-              >
-                <Bell className="h-5 w-5" />
-                <span
-                  className="absolute -top-1 -right-1 h-4.5 w-4.5 text-white text-[9px] font-bold flex items-center justify-center rounded-full"
-                  style={{ background: "oklch(0.58 0.24 25)", minWidth: "18px", height: "18px" }}
-                >
-                  {openAlerts}
-                </span>
-              </button>
+            {activeShift ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                Active Shift: {formatTime(activeSeconds)}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                No Active Shift
+              </span>
             )}
-            <button
-              onClick={() => { logout(); nav("/login"); }}
-              className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors min-h-0 min-w-0"
-            >
-              <LogOut className="h-5 w-5" />
-            </button>
           </div>
-        </div>
-      </header>
+        }
+      />
 
-      {/* ── SCROLLABLE BODY ── */}
-      <main className="flex-1 overflow-y-auto px-4 pt-4 pb-24 max-w-lg mx-auto w-full">
-        <div className="mb-4">
-          <h2 className="text-xl font-bold text-foreground">
-            {TABS.find((t) => t.id === activeTab)?.label}
-          </h2>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
-          </p>
-        </div>
-        {renderTab()}
-      </main>
-
-      {/* ── BOTTOM NAV ── */}
-      <nav
-        className="fixed bottom-0 left-0 right-0 safe-bottom z-40 flex"
-        style={{
-          background: "rgba(255,255,255,0.94)",
-          backdropFilter: "blur(16px) saturate(180%)",
-          WebkitBackdropFilter: "blur(16px) saturate(180%)",
-          borderTop: "1px solid oklch(0.90 0.012 240)",
-          boxShadow: "0 -4px 20px rgba(10,20,60,0.08)",
-        }}
-      >
+      {/* Tab Selector Pills */}
+      <div className="flex flex-wrap items-center gap-2">
         {TABS.map((tab) => {
           const isActive = activeTab === tab.id;
           const Icon = tab.icon;
@@ -989,40 +938,28 @@ function DriverPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className="flex-1 flex flex-col items-center justify-center py-2.5 gap-1 transition-all relative min-h-0"
-              style={{ minHeight: "56px" }}
+              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                isActive
+                  ? "bg-indigo-600 text-white shadow-xs"
+                  : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
+              }`}
             >
-              <div className="relative">
-                <Icon
-                  className="h-5 w-5 transition-all"
-                  style={{ color: isActive ? "oklch(0.42 0.18 264)" : "oklch(0.60 0.02 240)" }}
-                  strokeWidth={isActive ? 2.3 : 1.8}
-                />
-                {badge && (
-                  <span
-                    className="absolute -top-1.5 -right-1.5 h-3.5 w-3.5 text-white text-[8px] font-bold flex items-center justify-center rounded-full"
-                    style={{ background: "oklch(0.58 0.24 25)" }}
-                  >
-                    {openAlerts}
-                  </span>
-                )}
-              </div>
-              <span
-                className="text-[10px] font-semibold transition-all"
-                style={{ color: isActive ? "oklch(0.42 0.18 264)" : "oklch(0.60 0.02 240)" }}
-              >
-                {tab.label}
-              </span>
-              {isActive && (
-                <div
-                  className="absolute bottom-0 left-1/2 -translate-x-1/2 h-0.5 w-8 rounded-full"
-                  style={{ background: "oklch(0.42 0.18 264)" }}
-                />
+              <Icon className="h-3.5 w-3.5" />
+              <span>{tab.label}</span>
+              {badge && (
+                <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-red-500 text-white font-bold leading-none">
+                  {openAlerts}
+                </span>
               )}
             </button>
           );
         })}
-      </nav>
+      </div>
+
+      {/* Main Tab Content */}
+      <div className="max-w-2xl">
+        {renderTab()}
+      </div>
 
       {/* ── PRE-TRIP INSPECTION MODAL ── */}
       {showInspectionModal && (
