@@ -289,7 +289,7 @@ function TrackingPage() {
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {(["All", "Moving", "Idle", "Parked", "Offline"] as const).map((s) => (
+              {(["All", "Moving", "Idle", "Parked"] as const).map((s) => (
                 <button
                   key={s}
                   onClick={() => setFilter(s)}
