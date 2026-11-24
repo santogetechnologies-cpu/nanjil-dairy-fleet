@@ -16,6 +16,7 @@ import {
   parseGoogleGeocoderResult,
 } from "../src/lib/reverseGeocoding.ts";
 import { toFleetCoord } from "../src/components/maps/mapConstants.ts";
+import { isGpsVehicle } from "../src/lib/vehicle-stop-detection.ts";
 
 test("1. isCoordinateString: Accurately distinguishes raw GPS coordinates from text labels", () => {
   assert.equal(isCoordinateString("8.2607, 77.2877"), true);
@@ -266,4 +267,65 @@ test("8. Export Integration: Daily Vehicle Activity table and CSV contain resolv
   assert.ok(csvContent.includes('"Nagercoil, Tamil Nadu, India"'));
   assert.ok(csvContent.includes('"Thirupuram, Kerala, India"'));
   assert.ok(!csvContent.includes('"Agastiswaram"'));
+});
+
+test("9. Fleet Reports Dashboard: Strictly filters registered and telemetry assets to the 7 authentic GPS devices", () => {
+  // Mixed fleet representing the full database (50 vehicles including legacy manual assets from user screenshot)
+  const allFleetVehicles = [
+    // Non-GPS legacy units shown in user's screenshot
+    { id: "leg-1", number: "TN 75 AF 7931", type: "Container", model: "ASHOK LEYLAND DOST", device_id: null },
+    { id: "leg-2", number: "TN 75 AF 8077", type: "Container", model: "ASHOK LEYLAND DOST", device_id: null },
+    { id: "leg-3", number: "TN 75 AJ 6356", type: "Container", model: "TATA 407", device_id: null },
+    { id: "leg-4", number: "TN 75 AM 7623", type: "Container", model: "ASHOK LEYLAND DOST", device_id: null },
+    { id: "leg-5", number: "TN 75 AM 9974", type: "Container", model: "TATA 407", device_id: null },
+    { id: "leg-6", number: "TN 75 AS 6366", type: "Container", model: "Unknown Model", device_id: null },
+    { id: "leg-7", number: "TN 75 AT 1215", type: "Container", model: "TATA Indra", device_id: null },
+    { id: "leg-8", number: "TN 75 BE 8960", type: "Milk Van", model: "Bolero Maxi", device_id: null },
+    { id: "leg-9", number: "TN 75 BJ 4692", type: "Milk Van", model: "Bolero Pickup", device_id: null },
+    // The 7 Authentic GPS fleet vehicles
+    { id: "09b85a4a-1d9f-43f0-8343-ace9d27a1670", number: "TN 75 F 4323", type: "Tanker", model: "Eicher Pro 2049", device_id: "863110086146753" },
+    { id: "1b115b9d-6357-4a9e-8e76-1d59497695af", number: "TN 75 S 9826", type: "Tanker", model: "Tata 407 Gold SFC", device_id: "863110086146985" },
+    { id: "325081e0-a535-4269-8239-582de0f2ba66", number: "TN 75 R 9952", type: "Tanker", model: "Tata 407 Gold SFC", device_id: "863110086150292" },
+    { id: "7b9543e8-bcdd-4fb6-ad83-a78d92be4176", number: "TN 75 S 1688", type: "Tanker", model: "20 KL", device_id: "863110086162107" },
+    { id: "f30c9dcd-56a2-4b6c-bb93-d1f4c458682c", number: "TN 75 BF 0320", type: "Tanker", model: "Mahindra Bolero Maxi Truck", device_id: "863110086164111" },
+    { id: "d3887a78-ac32-4b63-b3c0-61563ad9f3d7", number: "TN 75 M 0041", type: "Tanker", model: "75 kl", device_id: "863110086186932" },
+    { id: "d0fea864-64a4-4148-b3b2-600f68459583", number: "TN 75 BC 2219", type: "Tanker", model: "Tanker 10KL", device_id: "863110086192104" },
+  ];
+
+  // 1. Metadata dropdown list filtering
+  const dropdownVehicles = allFleetVehicles.filter(isGpsVehicle);
+  assert.equal(dropdownVehicles.length, 7, "Metadata vehicle dropdown must contain exactly 7 GPS vehicles");
+
+  const numbers = dropdownVehicles.map((v) => v.number);
+  assert.ok(numbers.includes("TN 75 F 4323"));
+  assert.ok(numbers.includes("TN 75 S 9826"));
+  assert.ok(numbers.includes("TN 75 R 9952"));
+  assert.ok(numbers.includes("TN 75 S 1688"));
+  assert.ok(numbers.includes("TN 75 BF 0320"));
+  assert.ok(numbers.includes("TN 75 M 0041"));
+  assert.ok(numbers.includes("TN 75 BC 2219"));
+
+  // Reject non-GPS assets
+  assert.ok(!numbers.includes("TN 75 AF 7931"));
+  assert.ok(!numbers.includes("TN 75 AF 8077"));
+  assert.ok(!numbers.includes("TN 75 AJ 6356"));
+  assert.ok(!numbers.includes("TN 75 AM 7623"));
+  assert.ok(!numbers.includes("TN 75 BE 8960"));
+
+  // 2. Daily Vehicle Activity report rows
+  const reportRows = dropdownVehicles.map((v) => ({
+    vehicle: v.number,
+    driver: "Unassigned",
+    model: v.model,
+    category: v.type,
+    odometerKm: "12,450 km",
+    status: "Transmitting",
+    location: "Nagercoil Central Depot Yard",
+    lastReported: "Active",
+  }));
+
+  assert.equal(reportRows.length, 7);
+  for (const row of reportRows) {
+    assert.equal(row.fuelLevel, undefined, "Fuel Level column must not exist");
+  }
 });

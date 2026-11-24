@@ -30,6 +30,7 @@ import {
   clearGeocodeCache,
 } from "@/lib/reverseGeocoding";
 import { toFleetCoord } from "@/components/maps/mapConstants";
+import { isGpsVehicle } from "@/lib/vehicle-stop-detection";
 
 type ReportType =
   | "daily_activity"
@@ -52,14 +53,14 @@ export default function ReportsPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Load registered vehicles for dropdown filter
+  // Load registered vehicles for dropdown filter (strictly 7 GPS units)
   useEffect(() => {
     async function loadMetadata() {
       const { data } = await supabase
         .from("vehicles")
-        .select("id, number, type, model")
+        .select("id, number, type, model, device_id")
         .order("number");
-      if (data) setVehicles(data);
+      if (data) setVehicles(data.filter(isGpsVehicle));
     }
     loadMetadata();
   }, []);
@@ -94,10 +95,10 @@ export default function ReportsPage() {
         const threshold = getDateThreshold(dateRange);
 
         if (selectedReport === "daily_activity") {
-          // Authentic vehicle fleet status from v_vehicles view
+          // Authentic vehicle fleet status from v_vehicles view (strictly 7 GPS units)
           let query = supabase
             .from("v_vehicles")
-            .select("id, number, driver_name, type, model, odometer, fuel, status, location, lat, lng, last_update")
+            .select("id, number, driver_name, type, model, odometer, fuel, status, location, lat, lng, last_update, device_id")
             .order("number");
 
           if (selectedVehicle !== "All") {
@@ -108,7 +109,7 @@ export default function ReportsPage() {
           if (cancelled) return;
           if (error) throw error;
 
-          let filtered = data || [];
+          let filtered = (data || []).filter(isGpsVehicle);
           if (threshold) {
             filtered = filtered.filter(
               (v) => !v.last_update || new Date(v.last_update) >= threshold
@@ -181,14 +182,14 @@ export default function ReportsPage() {
           // Authentic milk collection routes from collection_routes
           let query = supabase
             .from("collection_routes")
-            .select("*, vehicles(number), drivers(name)")
+            .select("*, vehicles(id, number, device_id), drivers(name)")
             .order("created_at", { ascending: false });
 
           const { data, error } = await query;
           if (cancelled) return;
           if (error) throw error;
 
-          let filtered = data || [];
+          let filtered = (data || []).filter((r) => isGpsVehicle(r.vehicles));
           if (threshold) {
             filtered = filtered.filter((r) => new Date(r.created_at) >= threshold);
           }
@@ -215,17 +216,17 @@ export default function ReportsPage() {
             }))
           );
         } else if (selectedReport === "speeding_incidents") {
-          // Authentic safety alerts from alerts table
+          // Authentic safety alerts from alerts table (strictly 7 GPS units)
           let query = supabase
             .from("alerts")
-            .select("*, vehicles(number)")
+            .select("*, vehicles(id, number, device_id)")
             .order("time", { ascending: false });
 
           const { data, error } = await query;
           if (cancelled) return;
           if (error) throw error;
 
-          let filtered = data || [];
+          let filtered = (data || []).filter((a) => isGpsVehicle(a.vehicles));
           if (threshold) {
             filtered = filtered.filter((a) => new Date(a.time) >= threshold);
           }
@@ -257,17 +258,17 @@ export default function ReportsPage() {
             }))
           );
         } else if (selectedReport === "fuel_efficiency") {
-          // Authentic fuel purchase logs from fuel_purchase_logs
+          // Authentic fuel purchase logs from fuel_purchase_logs (strictly 7 GPS units)
           let query = supabase
             .from("fuel_purchase_logs")
-            .select("*, vehicles(number), drivers(name)")
+            .select("*, vehicles(id, number, device_id), drivers(name)")
             .order("logged_at", { ascending: false });
 
           const { data, error } = await query;
           if (cancelled) return;
           if (error) throw error;
 
-          let filtered = data || [];
+          let filtered = (data || []).filter((f) => isGpsVehicle(f.vehicles));
           if (threshold) {
             filtered = filtered.filter((f) => new Date(f.logged_at) >= threshold);
           }
@@ -295,17 +296,17 @@ export default function ReportsPage() {
             }))
           );
         } else if (selectedReport === "maintenance_costs") {
-          // Authentic maintenance records from maintenance_records
+          // Authentic maintenance records from maintenance_records (strictly 7 GPS units)
           let query = supabase
             .from("maintenance_records")
-            .select("*, vehicles(number)")
+            .select("*, vehicles(id, number, device_id)")
             .order("created_at", { ascending: false });
 
           const { data, error } = await query;
           if (cancelled) return;
           if (error) throw error;
 
-          let filtered = data || [];
+          let filtered = (data || []).filter((m) => isGpsVehicle(m.vehicles));
           if (threshold) {
             filtered = filtered.filter((m) => new Date(m.created_at) >= threshold);
           }
@@ -488,7 +489,7 @@ export default function ReportsPage() {
               onChange={(e) => setSelectedVehicle(e.target.value)}
               className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-semibold text-slate-800 cursor-pointer"
             >
-              <option value="All">All Fleet Vehicles ({vehicles.length})</option>
+              <option value="All">All GPS Fleet Vehicles ({vehicles.length})</option>
               {vehicles.map((v) => (
                 <option key={v.id} value={v.number}>
                   {v.number}
@@ -499,7 +500,7 @@ export default function ReportsPage() {
 
           <div className="flex items-center gap-2">
             <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 font-semibold border border-indigo-200 text-[11px]">
-              {reportRows.length} Backend {reportRows.length === 1 ? "Record" : "Records"}
+              {reportRows.length} GPS {reportRows.length === 1 ? "Record" : "Records"}
             </span>
             {selectedReport === "speeding_incidents" && (
               <button
@@ -514,7 +515,7 @@ export default function ReportsPage() {
               </button>
             )}
             <div className="text-slate-400 font-mono text-[11px]">
-              Live Supabase Records
+              Live GPS Fleet Records
             </div>
           </div>
         </div>
@@ -554,7 +555,7 @@ export default function ReportsPage() {
           ) : (
             <div className="py-12 text-center text-slate-400 text-xs space-y-1">
               <div className="font-semibold text-slate-600">No records found for the selected query.</div>
-              <div className="text-[11px]">Try switching the Period filter to "All Time" or selecting "All Fleet Vehicles".</div>
+              <div className="text-[11px]">Try switching the Period filter to "All Time" or selecting "All GPS Fleet Vehicles".</div>
             </div>
           )}
         </div>
