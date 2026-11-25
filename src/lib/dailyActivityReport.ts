@@ -811,9 +811,60 @@ function parseLeadingNumber(val: unknown): number {
  * from the currently filtered rows.
  */
 export function computeOtherReportInsights(
-  reportType: "route_completion" | "speeding_incidents" | "fuel_efficiency" | "maintenance_costs",
+  reportType:
+    | "route_completion"
+    | "speeding_incidents"
+    | "fuel_efficiency"
+    | "maintenance_costs"
+    | "trip_statements",
   rows: Record<string, any>[]
 ): OtherReportSummary {
+  if (reportType === "trip_statements") {
+    const totalTrips = rows.length;
+    const totalRunningKm = rows.reduce((s, r) => s + parseLeadingNumber(r.runningKm), 0);
+    const totalDiesel = rows.reduce((s, r) => s + parseLeadingNumber(r.dieselLitres), 0);
+    const totalFuelCost = rows.reduce((s, r) => s + parseLeadingNumber(r.fuelAmount), 0);
+    const avgKmpl = totalDiesel > 0 && totalRunningKm > 0 ? totalRunningKm / totalDiesel : 0;
+
+    const byVehicle = new Map<string, { km: number; diesel: number }>();
+    for (const r of rows) {
+      const v = String(r.vehicle || "Fleet Unit");
+      const cur = byVehicle.get(v) || { km: 0, diesel: 0 };
+      cur.km += parseLeadingNumber(r.runningKm);
+      cur.diesel += parseLeadingNumber(r.dieselLitres);
+      byVehicle.set(v, cur);
+    }
+
+    return {
+      kpis: [
+        { label: "Trip Statements", value: String(totalTrips), hint: "Filtered statement entries" },
+        {
+          label: "Total Running KMs",
+          value: `${(Math.round(totalRunningKm * 10) / 10).toLocaleString()} km`,
+          hint: "Sum of (In KM - Out KM)",
+        },
+        {
+          label: "Diesel & Amount",
+          value: `${totalDiesel.toFixed(1)} L`,
+          hint: totalFuelCost > 0 ? `₹ ${Math.round(totalFuelCost).toLocaleString("en-IN")}` : "No fuel spend logged",
+        },
+        {
+          label: "Overall KMPL",
+          value: avgKmpl > 0 ? `${avgKmpl.toFixed(2)} km/L` : "-",
+          hint: "Total Running KM ÷ Diesel",
+        },
+      ],
+      chartTitle: "Trip Statement Running KMs by Vehicle",
+      chartData: Array.from(byVehicle.entries()).map(([name, val]) => ({
+        name,
+        primary: Math.round(val.km * 10) / 10,
+        secondary: Math.round(val.diesel * 10) / 10,
+        primaryLabel: "Running (km)",
+        secondaryLabel: "Diesel (L)",
+      })),
+    };
+  }
+
   if (reportType === "route_completion") {
     const totalRoutes = rows.length;
     const totalLitres = rows.reduce((s, r) => s + parseLeadingNumber(r.milkCollectedLiters), 0);

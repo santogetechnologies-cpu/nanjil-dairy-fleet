@@ -4,11 +4,28 @@ import { Logo } from "@/components/Logo";
 import {
   Truck, Fuel, Thermometer, Gauge, MapPin, Bell, ShieldCheck, Play,
   LogOut, Loader2, Calendar, Route, Home, StopCircle,
-  CheckCircle2, ChevronRight, Droplets,
+  CheckCircle2, ChevronRight, Droplets, FileText, Lock, AlertCircle, Clock,
 } from "lucide-react";
 import { Badge } from "@/components/ui-kit";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
+import { useVehicles } from "@/hooks/useVehicleTracking";
+import { getTodayIstDateString } from "@/lib/odometerTrackingEngine";
+import {
+  type VehicleOperationTripRecord,
+  type ValidationFieldErrors,
+  getCurrentIstTimeString,
+  formatIsoToIstTime,
+  resolveAuthoritativeOutKm,
+  computeRunningKm,
+  computeTripKmpl,
+  parseStrictNumericInput,
+  validateTripStart,
+  validateTripCloseStatement,
+  submitStartDriverTripStatement,
+  submitCloseDriverTripStatement,
+  submitDriverFuelRefillRpc,
+} from "@/lib/driverOperationStatement";
 
 /* ─── Types ─── */
 type TabId = "home" | "trip" | "fuel" | "alerts" | "schedule";
@@ -47,43 +64,243 @@ function DriverPage() {
 
   // Scheduling & Dispatch states
   const [schedules, setSchedules] = useState<any[]>([]);
-  const [ongoingTrip, setOngoingTrip] = useState<any>(null);
-  const [endTripForm, setEndTripForm] = useState({ endKm: 0, endFuelLiters: 0 });
+  const [ongoingTrip, setOngoingTrip] = useState<VehicleOperationTripRecord | null>(null);
+  const [closedTrips, setClosedTrips] = useState<VehicleOperationTripRecord[]>([]);
   const [submittingTrip, setSubmittingTrip] = useState(false);
   const [assignedVehicles, setAssignedVehicles] = useState<any[]>([]);
+  const [liveHardwareOdometer, setLiveHardwareOdometer] = useState<number>(0);
 
-  async function handleEndManualTrip(e: React.FormEvent) {
+  // Vehicle Operation Statement states (Start & Close)
+  const [startStatementForm, setStartStatementForm] = useState({
+    route: "",
+    salesmanName: "",
+    outDate: getTodayIstDateString(),
+    outTime: getCurrentIstTimeString(),
+    notes: "",
+  });
+  const [closeStatementForm, setCloseStatementForm] = useState({
+    inKm: "",
+    inDate: getTodayIstDateString(),
+    inTime: getCurrentIstTimeString(),
+    dieselLitres: "",
+    fuelAmount: "",
+    salesmanName: "",
+    notes: "",
+  });
+  const [statementErrors, setStatementErrors] = useState<ValidationFieldErrors>({});
+  const [statementBanner, setStatementBanner] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [showCloseConfirmModal, setShowCloseConfirmModal] = useState(false);
+
+  const liveVehicles = useVehicles();
+
+  const activeLiveHardwareOdo = useMemo(() => {
+    if (!vehicle?.id) return liveHardwareOdometer;
+    const matchedLive = liveVehicles.find(
+      (lv) =>
+        lv.id === vehicle.id ||
+        (vehicle.deviceId && lv.deviceId === vehicle.deviceId) ||
+        (vehicle.number && lv.number === vehicle.number)
+    );
+    const liveHw = Number(matchedLive?.hardwareOdometer || 0);
+    return Math.max(liveHardwareOdometer, Number.isFinite(liveHw) ? liveHw : 0);
+  }, [liveVehicles, vehicle?.id, vehicle?.deviceId, vehicle?.number, liveHardwareOdometer]);
+
+  const authoritativeVehicleOdo = useMemo(
+    () => resolveAuthoritativeOutKm(vehicle?.odometer, activeLiveHardwareOdo),
+    [vehicle?.odometer, activeLiveHardwareOdo]
+  );
+
+  async function handleStartTripStatement(e: React.FormEvent) {
     e.preventDefault();
-    if (!ongoingTrip || !driver?.id || endTripForm.endKm < (ongoingTrip.start_km || 0)) {
-      alert("Invalid trip logging entries. Ending odometer must be >= starting odometer.");
+    setStatementBanner(null);
+    setStatementErrors({});
+
+    const check = validateTripStart({
+      vehicleId: vehicle?.id,
+      driverId: driver?.id,
+      assignedVehicleIds: assignedVehicles.map((v) => v.id).filter(Boolean),
+      vehicleOdometer: vehicle?.odometer,
+      hardwareOdometer: activeLiveHardwareOdo,
+      outDate: startStatementForm.outDate,
+      outTime: startStatementForm.outTime,
+      hasActiveVehicleTrip: Boolean(ongoingTrip && ongoingTrip.vehicle_id === vehicle?.id),
+      hasActiveDriverTrip: Boolean(ongoingTrip),
+    });
+
+    if (!check.valid) {
+      setStatementBanner({ type: "error", message: check.error || "Unable to start trip." });
       return;
     }
+
     setSubmittingTrip(true);
     try {
-      const elapsedMs = Date.now() - new Date(ongoingTrip.created_at || ongoingTrip.date).getTime();
-      const elapsedMins = Math.round(elapsedMs / (1000 * 60));
-      const durationStr = elapsedMins > 60 ? `${Math.floor(elapsedMins / 60)}h ${elapsedMins % 60}m` : `${elapsedMins}m`;
-      const startKm = ongoingTrip.start_km || 0;
-      const endKm = endTripForm.endKm;
-      const distance = endKm - startKm;
+      const res = await submitStartDriverTripStatement(supabase, {
+        vehicleId: vehicle.id,
+        route: startStatementForm.route || vehicle.route,
+        salesmanName: startStatementForm.salesmanName,
+        outDate: startStatementForm.outDate,
+        outTime: startStatementForm.outTime,
+        notes: startStatementForm.notes,
+      });
 
-      const updateData: Record<string, any> = { status: 'Completed', end_km: endKm, distance, duration: durationStr };
-      if (endTripForm.endFuelLiters > 0) updateData.fuel_liters_end = endTripForm.endFuelLiters;
-
-      const { error: tripErr } = await supabase
-        .from('trips')
-        .update(updateData)
-        .eq('id', ongoingTrip.id);
-      if (tripErr) throw tripErr;
-
-      if (ongoingTrip.vehicle_id) {
-        await supabase.from('vehicles').update({ odometer: endKm }).eq('id', ongoingTrip.vehicle_id);
+      if (!res.ok) {
+        setStatementBanner({ type: "error", message: res.error || "Failed to start trip." });
+        return;
       }
-      alert("Trip completed and logged successfully!");
-      setOngoingTrip(null);
-      load();
+
+      setStatementBanner({
+        type: "success",
+        message: `Trip Started! Out KM locked at ${(res.outKm ?? check.outKm).toLocaleString()} KM.`,
+      });
+      setStartStatementForm((prev) => ({
+        ...prev,
+        salesmanName: "",
+        notes: "",
+        outDate: getTodayIstDateString(),
+        outTime: getCurrentIstTimeString(),
+      }));
+      await load();
     } catch (err: any) {
-      alert("Failed to complete trip: " + err.message);
+      setStatementBanner({ type: "error", message: err?.message || "Failed to start trip." });
+    } finally {
+      setSubmittingTrip(false);
+    }
+  }
+
+  function handlePrepareCloseStatement(e: React.FormEvent) {
+    e.preventDefault();
+    setStatementBanner(null);
+
+    if (!ongoingTrip || !driver?.id) {
+      setStatementErrors({ general: "No active trip found for your account." });
+      return;
+    }
+
+    const outKm = Number(ongoingTrip.start_km ?? authoritativeVehicleOdo ?? 0);
+    const outDate = ongoingTrip.out_date || ongoingTrip.date || getTodayIstDateString();
+    const outTime =
+      ongoingTrip.out_time || formatIsoToIstTime(ongoingTrip.started_at || ongoingTrip.created_at) || "00:00";
+
+    const validation = validateTripCloseStatement({
+      tripId: ongoingTrip.id,
+      tripStatus: ongoingTrip.status,
+      tripClosedAt: ongoingTrip.closed_at,
+      tripDriverId: ongoingTrip.driver_id,
+      tripVehicleId: ongoingTrip.vehicle_id,
+      authenticatedDriverId: driver.id,
+      assignedVehicleIds: assignedVehicles.map((v) => v.id).filter(Boolean),
+      outKm,
+      inKmRaw: closeStatementForm.inKm,
+      currentVehicleOdometer: vehicle?.odometer,
+      hardwareOdometer: activeLiveHardwareOdo,
+      outDate,
+      outTime,
+      inDate: closeStatementForm.inDate,
+      inTime: closeStatementForm.inTime,
+      dieselLitresRaw: closeStatementForm.dieselLitres,
+      fuelAmountRaw: closeStatementForm.fuelAmount,
+    });
+
+    if (!validation.valid) {
+      setStatementErrors(validation.errors);
+      if (validation.errors.general) {
+        setStatementBanner({ type: "error", message: validation.errors.general });
+      }
+      return;
+    }
+
+    setStatementErrors({});
+    setShowCloseConfirmModal(true);
+  }
+
+  async function handleConfirmCloseStatement() {
+    if (submittingTrip || !ongoingTrip || !driver?.id) return;
+
+    const outKm = Number(ongoingTrip.start_km ?? authoritativeVehicleOdo ?? 0);
+    const outDate = ongoingTrip.out_date || ongoingTrip.date || getTodayIstDateString();
+    const outTime =
+      ongoingTrip.out_time || formatIsoToIstTime(ongoingTrip.started_at || ongoingTrip.created_at) || "00:00";
+
+    const validation = validateTripCloseStatement({
+      tripId: ongoingTrip.id,
+      tripStatus: ongoingTrip.status,
+      tripClosedAt: ongoingTrip.closed_at,
+      tripDriverId: ongoingTrip.driver_id,
+      tripVehicleId: ongoingTrip.vehicle_id,
+      authenticatedDriverId: driver.id,
+      assignedVehicleIds: assignedVehicles.map((v) => v.id).filter(Boolean),
+      outKm,
+      inKmRaw: closeStatementForm.inKm,
+      currentVehicleOdometer: vehicle?.odometer,
+      hardwareOdometer: activeLiveHardwareOdo,
+      outDate,
+      outTime,
+      inDate: closeStatementForm.inDate,
+      inTime: closeStatementForm.inTime,
+      dieselLitresRaw: closeStatementForm.dieselLitres,
+      fuelAmountRaw: closeStatementForm.fuelAmount,
+    });
+
+    if (!validation.valid || !validation.parsed) {
+      setShowCloseConfirmModal(false);
+      setStatementErrors(validation.errors);
+      if (validation.errors.general) {
+        setStatementBanner({ type: "error", message: validation.errors.general });
+      }
+      return;
+    }
+
+    setSubmittingTrip(true);
+    try {
+      const res = await submitCloseDriverTripStatement(supabase, {
+        tripId: ongoingTrip.id,
+        inKm: validation.parsed.inKm,
+        inDate: validation.parsed.inDate,
+        inTime: validation.parsed.inTime,
+        dieselLitres: validation.parsed.dieselLitres,
+        fuelAmount: validation.parsed.fuelAmount,
+        salesmanName: closeStatementForm.salesmanName,
+        notes: closeStatementForm.notes,
+        deviceId: vehicle?.deviceId,
+      });
+
+      if (!res.ok) {
+        setShowCloseConfirmModal(false);
+        setStatementErrors({ general: res.error, inKm: res.error });
+        setStatementBanner({
+          type: "error",
+          message: res.error || "Failed to close trip.",
+        });
+        return;
+      }
+
+      const finalOdo = res.vehicleOdometer ?? validation.parsed.inKm;
+      setShowCloseConfirmModal(false);
+      setStatementErrors({});
+      setStatementBanner({
+        type: "success",
+        message: `Trip Closed Successfully! Vehicle Odometer Updated to ${finalOdo.toLocaleString()} KM.`,
+      });
+      setOngoingTrip(null);
+      setCloseStatementForm({
+        inKm: "",
+        inDate: getTodayIstDateString(),
+        inTime: getCurrentIstTimeString(),
+        dieselLitres: "",
+        fuelAmount: "",
+        salesmanName: "",
+        notes: "",
+      });
+      await load();
+    } catch (err: any) {
+      setShowCloseConfirmModal(false);
+      setStatementBanner({
+        type: "error",
+        message: err?.message || "Database update failed while closing trip.",
+      });
     } finally {
       setSubmittingTrip(false);
     }
@@ -120,30 +337,17 @@ function DriverPage() {
 
     setSubmittingFuel(true);
     try {
-      const payload: any = {
-        vehicle_id: vehicle.id,
-        driver_id: driver.id,
+      const res = await submitDriverFuelRefillRpc(supabase, {
+        vehicleId: vehicle.id,
         liters: Number(fuelForm.liters),
         cost: Number(fuelForm.cost),
-        odometer: Math.round(Number(fuelForm.odometer)),
-        is_full_tank: Boolean(fuelForm.isFullTank),
-      };
+        odometer: Math.round(Number(fuelForm.odometer) * 100) / 100,
+        isFullTank: Boolean(fuelForm.isFullTank),
+        deviceId: vehicle.deviceId,
+      });
 
-      const { error } = await supabase.from('fuel_purchase_logs').insert(payload);
-      if (error && error.message?.includes('is_full_tank')) {
-        delete payload.is_full_tank;
-        const { error: retryError } = await supabase.from('fuel_purchase_logs').insert(payload);
-        if (retryError) throw retryError;
-      } else if (error) {
-        throw error;
-      }
-
-      // Update vehicle physical odometer if entered reading is higher
-      if (fuelForm.odometer > currentVehicleOdo) {
-        await supabase
-          .from('vehicles')
-          .update({ odometer: Math.round(Number(fuelForm.odometer)) })
-          .eq('id', vehicle.id);
+      if (!res.ok) {
+        throw new Error(res.error || "Failed to log fuel refill.");
       }
 
       alert("Fuel refill logged successfully!");
@@ -272,22 +476,31 @@ function DriverPage() {
       temperature: Number(activeV.temperature || 0), humidity: Number(activeV.humidity || 0),
       engineOn: activeV.engine_on || false, ignition: activeV.ignition || false,
       driver: activeV.driver_name || resolvedDriver.name, driverId: activeV.driver_id || resolvedDriver.id,
+      deviceId: activeV.device_id || "",
       lastUpdate: activeV.last_update ? new Date(activeV.last_update).toLocaleTimeString() : 'sec ago',
     } : {
       id: null, number: "Unassigned", type: "No Assigned Vehicle",
       status: "Offline", fuel: 0, speed: 0, temperature: 0, engineOn: false, route: "No route assigned", odometer: 0,
     };
     setVehicle(resolvedVehicle);
+    setStartStatementForm((prev) => ({
+      ...prev,
+      route: prev.route || resolvedVehicle.route || "",
+    }));
 
     if (resolvedVehicle.id) {
-      const { data: aData } = await supabase
-        .from('alerts').select('*').eq('vehicle_id', resolvedVehicle.id).limit(4);
+      const [{ data: aData }, { data: vtData }] = await Promise.all([
+        supabase.from('alerts').select('*').eq('vehicle_id', resolvedVehicle.id).limit(4),
+        supabase.from('vehicle_telemetry').select('odometer').eq('vehicle_id', resolvedVehicle.id).maybeSingle(),
+      ]);
       setAlerts(aData ? aData.map((a: any) => ({
         id: a.id, severity: a.severity, message: a.message, type: a.type,
         time: a.time ? new Date(a.time).toLocaleTimeString() : '1h ago', resolved: a.resolved,
       })) : []);
+      setLiveHardwareOdometer(vtData?.odometer != null ? Number(vtData.odometer) || 0 : 0);
     } else {
       setAlerts([]);
+      setLiveHardwareOdometer(0);
     }
 
     if (resolvedDriver.id) {
@@ -305,15 +518,37 @@ function DriverPage() {
         .gte('date', new Date().toISOString().split('T')[0]).order('date', { ascending: true }).limit(10);
       if (scheds) setSchedules(scheds);
 
-      const { data: activeTrip } = await supabase
-        .from('trips').select('*, vehicles(number)').eq('driver_id', resolvedDriver.id)
-        .eq('status', 'Ongoing').maybeSingle();
+      const [{ data: activeTrip }, { data: completedTripsData }] = await Promise.all([
+        supabase
+          .from('trips')
+          .select('*, vehicles(number, route, odometer)')
+          .eq('driver_id', resolvedDriver.id)
+          .eq('status', 'Ongoing')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('trips')
+          .select('*, vehicles(number)')
+          .eq('driver_id', resolvedDriver.id)
+          .eq('status', 'Completed')
+          .order('date', { ascending: false })
+          .order('created_at', { ascending: false })
+          .limit(10),
+      ]);
+
       if (activeTrip) {
-        setOngoingTrip(activeTrip);
-        setEndTripForm({ endKm: (activeTrip.start_km || 0) + 1, endFuelLiters: 0 });
+        setOngoingTrip(activeTrip as VehicleOperationTripRecord);
+        setCloseStatementForm((prev) => ({
+          ...prev,
+          inDate: prev.inDate || getTodayIstDateString(),
+          inTime: getCurrentIstTimeString(),
+          salesmanName: prev.salesmanName || activeTrip.salesman_name || "",
+        }));
       } else {
         setOngoingTrip(null);
       }
+      setClosedTrips((completedTripsData || []) as VehicleOperationTripRecord[]);
     }
 
     setLoading(false);
@@ -328,6 +563,7 @@ function DriverPage() {
       const channelId = `driver-portal-realtime-${Math.random().toString(36).substring(2, 9)}`;
       channel = supabase
         .channel(channelId)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_assignments' }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_telemetry' }, () => { if (!cancelled) load(); })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_shifts' }, () => { if (!cancelled) load(); })
@@ -475,7 +711,7 @@ function DriverPage() {
   function renderTab() {
     switch (activeTab) {
       case "home":    return <HomeTab />;
-      case "trip":    return <TripTab />;
+      case "trip":    return renderTripTab();
       case "fuel":    return <FuelTab />;
       case "alerts":  return <AlertsTab />;
       case "schedule":return <ScheduleTab />;
@@ -535,6 +771,19 @@ function DriverPage() {
             ))}
           </div>
         </div>
+
+        {/* Unassigned vehicle explanation */}
+        {!vehicle?.id && (
+          <div className="rounded-2xl p-4 border border-amber-200 bg-amber-50 text-amber-900 text-xs flex items-start gap-2.5">
+            <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-bold">No Vehicle Assigned to {driver?.name || user?.name}</div>
+              <p className="mt-0.5 text-amber-800/90 leading-relaxed">
+                This driver account has no active vehicle assignment in Supabase yet. Ask your Fleet Admin to assign a vehicle to <strong>{driver?.name || user?.name}</strong> in Drivers Directory or Vehicles Directory.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Shift card */}
         <div className="bg-card border border-border rounded-2xl p-5" style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}>
@@ -606,6 +855,15 @@ function DriverPage() {
               <MapPin className="h-4 w-4" /> View Route
             </button>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("trip")}
+            className="mt-2.5 w-full h-11 rounded-xl text-sm font-semibold border border-indigo-200 bg-indigo-50/80 text-indigo-800 flex items-center justify-center gap-2 hover:bg-indigo-100 transition-all"
+          >
+            <FileText className="h-4 w-4" />
+            {ongoingTrip ? "Close Active Trip & Update Odometer" : "Open Vehicle Operation Statement"}
+          </button>
         </div>
 
         {/* Stats */}
@@ -643,88 +901,471 @@ function DriverPage() {
     );
   }
 
-  /* ─────────────── TRIP TAB ─────────────── */
-  function TripTab() {
+  /* ─────────────── TRIP / VEHICLE OPERATION STATEMENT TAB ─────────────── */
+  function renderTripTab() {
+    const activeOutKm = Number(ongoingTrip?.start_km ?? authoritativeVehicleOdo ?? 0);
+    const activeOutDate = ongoingTrip?.out_date || ongoingTrip?.date || getTodayIstDateString();
+    const activeOutTime =
+      ongoingTrip?.out_time ||
+      formatIsoToIstTime(ongoingTrip?.started_at || ongoingTrip?.created_at) ||
+      "—";
+    const activeRouteLabel = ongoingTrip
+      ? ongoingTrip.destination
+        ? `${ongoingTrip.start} → ${ongoingTrip.destination}`
+        : ongoingTrip.start
+      : vehicle?.route || "No route assigned";
+
+    const parsedInKmPreview = parseStrictNumericInput(closeStatementForm.inKm);
+    const hasValidPositiveInKm = parsedInKmPreview.valid && parsedInKmPreview.value > 0;
+    const isInKmBelowOut = hasValidPositiveInKm && parsedInKmPreview.value < activeOutKm;
+    const liveRunningKm =
+      hasValidPositiveInKm && !isInKmBelowOut
+        ? computeRunningKm(activeOutKm, parsedInKmPreview.value)
+        : null;
+
+    const parsedDieselPreview = parseStrictNumericInput(closeStatementForm.dieselLitres);
+    const liveDieselNum =
+      parsedDieselPreview.valid && parsedDieselPreview.value > 0 ? parsedDieselPreview.value : 0;
+    const liveKmpl =
+      liveRunningKm !== null ? computeTripKmpl(liveRunningKm, liveDieselNum) : null;
+
     return (
       <div className="space-y-4">
+        {statementBanner && (
+          <div
+            role="alert"
+            className={`rounded-2xl p-4 border text-sm font-medium flex items-start gap-3 ${
+              statementBanner.type === "success"
+                ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+                : "bg-red-50 border-red-200 text-red-900"
+            }`}
+          >
+            {statementBanner.type === "success" ? (
+              <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+            ) : (
+              <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+            )}
+            <div className="flex-1">{statementBanner.message}</div>
+          </div>
+        )}
+
         {ongoingTrip ? (
           <div
-            className="rounded-2xl p-5 border"
+            className="rounded-2xl p-5 border bg-card space-y-5"
             style={{
-              background: "linear-gradient(135deg, oklch(0.42 0.18 264 / 0.08), oklch(1 0 0))",
-              borderColor: "oklch(0.42 0.18 264 / 0.25)",
-              boxShadow: "0 1px 3px rgba(10,20,60,0.06)",
+              borderColor: "oklch(0.42 0.18 264 / 0.28)",
+              boxShadow: "0 2px 10px rgba(10,20,60,0.06)",
             }}
           >
-            <div className="flex items-center gap-2 mb-4">
-              <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
-              <span className="text-sm font-bold text-primary">Active Dispatch Trip</span>
+            {/* Header */}
+            <div className="flex items-center justify-between gap-2 pb-3 border-b border-border/70">
+              <div className="flex items-center gap-2">
+                <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                <div>
+                  <div className="text-sm font-bold text-foreground">Vehicle Operation Statement</div>
+                  <div className="text-[11px] text-muted-foreground">Active Trip · Close &amp; Update Odometer</div>
+                </div>
+              </div>
+              <Badge status="Moving">Trip Open</Badge>
             </div>
 
-            <div className="space-y-3 mb-5">
+            {/* Auto-populated Read-only Trip Identity Block */}
+            <div className="grid grid-cols-2 gap-3 text-xs bg-muted/35 p-3.5 rounded-xl border border-border/60">
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">Route</div>
-                <div className="text-base font-semibold text-foreground">
-                  {ongoingTrip.destination ? `${ongoingTrip.start} → ${ongoingTrip.destination}` : ongoingTrip.start}
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Vehicle Number</div>
+                <div className="text-sm font-bold text-foreground mt-0.5">
+                  {ongoingTrip.vehicles?.number || vehicle?.number || "Assigned"}
                 </div>
               </div>
-              <div className="flex gap-6">
-                <div>
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-0.5">Vehicle</div>
-                  <div className="text-sm font-semibold">{ongoingTrip.vehicles?.number || 'Assigned'}</div>
-                </div>
-                <div>
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-0.5">Start Odo</div>
-                  <div className="text-sm font-semibold">{ongoingTrip.start_km} km</div>
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Statement Date</div>
+                <div className="text-sm font-semibold text-foreground mt-0.5">{ongoingTrip.date || activeOutDate}</div>
+              </div>
+              <div className="col-span-2">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Route</div>
+                <div className="text-sm font-semibold text-foreground mt-0.5">{activeRouteLabel}</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Driver Name</div>
+                <div className="text-sm font-semibold text-foreground mt-0.5">{driver?.name || user?.name}</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Out Date · Out Time</div>
+                <div className="text-sm font-semibold text-foreground mt-0.5">
+                  {activeOutDate} · {activeOutTime}
                 </div>
               </div>
             </div>
 
-            <form onSubmit={handleEndManualTrip} className="space-y-3 pt-4 border-t border-border/60">
+            <form onSubmit={handlePrepareCloseStatement} className="space-y-4">
+              {/* Read-only Out KM + Highlighted In KM */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
+                    <span>Out KM (Starting)</span>
+                    <span className="inline-flex items-center gap-1 text-[9px] text-slate-500">
+                      <Lock className="h-2.5 w-2.5" /> Read-Only
+                    </span>
+                  </label>
+                  <input
+                    type="text"
+                    readOnly
+                    tabIndex={-1}
+                    value={`${activeOutKm.toLocaleString()} km`}
+                    aria-label="Out KM"
+                    className="w-full h-14 px-4 rounded-xl border border-border bg-muted/70 text-base font-bold text-muted-foreground cursor-not-allowed select-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-widest text-primary mb-1.5">
+                    In KM (Closing Odometer) *
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    required
+                    aria-label="In KM"
+                    value={closeStatementForm.inKm}
+                    onChange={(e) => {
+                      setCloseStatementForm((prev) => ({ ...prev, inKm: e.target.value }));
+                      if (statementErrors.inKm || statementErrors.general) {
+                        setStatementErrors((prev) => ({ ...prev, inKm: undefined, general: undefined }));
+                      }
+                    }}
+                    placeholder={`>= ${activeOutKm}`}
+                    className={`w-full h-14 px-4 rounded-xl border-2 text-lg font-extrabold bg-background focus:outline-none focus:ring-2 ${
+                      statementErrors.inKm || isInKmBelowOut
+                        ? "border-red-500 focus:ring-red-500/25 text-red-700"
+                        : "border-primary/60 focus:border-primary focus:ring-primary/25 text-foreground"
+                    }`}
+                  />
+                  {statementErrors.inKm ? (
+                    <p className="mt-1.5 text-xs font-semibold text-red-600">{statementErrors.inKm}</p>
+                  ) : isInKmBelowOut ? (
+                    <p className="mt-1.5 text-xs font-semibold text-red-600">
+                      Invalid Odometer Reading! In KM cannot be less than Out KM.
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              {/* Instant Auto-Calculated Running KMs + KMPL Banner */}
+              <div className="grid grid-cols-2 gap-3 p-3.5 rounded-xl bg-indigo-50/80 border border-indigo-200">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">Running KMs</div>
+                  <div className="text-xl font-extrabold text-indigo-950 mt-0.5">
+                    {liveRunningKm !== null ? `${liveRunningKm.toLocaleString()} km` : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">Estimated KMPL</div>
+                  <div className="text-xl font-extrabold text-indigo-950 mt-0.5">
+                    {liveKmpl !== null ? `${liveKmpl.toFixed(2)} km/L` : "—"}
+                  </div>
+                </div>
+              </div>
+
+              {/* In Date & In Time */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
+                    In Date *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={closeStatementForm.inDate}
+                    min={activeOutDate}
+                    onChange={(e) => {
+                      setCloseStatementForm((prev) => ({ ...prev, inDate: e.target.value }));
+                      setStatementErrors((prev) => ({ ...prev, inDate: undefined, inTime: undefined }));
+                    }}
+                    className="w-full h-12 px-3 rounded-xl border border-border bg-background text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                  {statementErrors.inDate && (
+                    <p className="mt-1 text-xs font-semibold text-red-600">{statementErrors.inDate}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
+                    In Time *
+                  </label>
+                  <input
+                    type="time"
+                    required
+                    value={closeStatementForm.inTime}
+                    onChange={(e) => {
+                      setCloseStatementForm((prev) => ({ ...prev, inTime: e.target.value }));
+                      setStatementErrors((prev) => ({ ...prev, inTime: undefined }));
+                    }}
+                    className="w-full h-12 px-3 rounded-xl border border-border bg-background text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                  {statementErrors.inTime && (
+                    <p className="mt-1 text-xs font-semibold text-red-600">{statementErrors.inTime}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Diesel (Litres) & Amount */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
+                    Diesel (Litres)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    min={0}
+                    value={closeStatementForm.dieselLitres}
+                    onChange={(e) => {
+                      setCloseStatementForm((prev) => ({ ...prev, dieselLitres: e.target.value }));
+                      setStatementErrors((prev) => ({ ...prev, dieselLitres: undefined }));
+                    }}
+                    placeholder="0.00"
+                    className="w-full h-12 px-3 rounded-xl border border-border bg-background text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                  {statementErrors.dieselLitres && (
+                    <p className="mt-1 text-xs font-semibold text-red-600">{statementErrors.dieselLitres}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
+                    Amount (INR)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    min={0}
+                    value={closeStatementForm.fuelAmount}
+                    onChange={(e) => {
+                      setCloseStatementForm((prev) => ({ ...prev, fuelAmount: e.target.value }));
+                      setStatementErrors((prev) => ({ ...prev, fuelAmount: undefined }));
+                    }}
+                    placeholder="0.00"
+                    className="w-full h-12 px-3 rounded-xl border border-border bg-background text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                  {statementErrors.fuelAmount && (
+                    <p className="mt-1 text-xs font-semibold text-red-600">{statementErrors.fuelAmount}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Optional Salesman */}
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">
-                  Closing Odometer (km) *
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
+                  Salesman <span className="text-muted-foreground/60 normal-case font-normal">– optional</span>
                 </label>
                 <input
-                  type="number"
-                  required
-                  min={ongoingTrip.start_km || 0}
-                  className="w-full h-12 px-4 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/60"
-                  value={endTripForm.endKm || ""}
-                  onChange={(e) => setEndTripForm({ ...endTripForm, endKm: Number(e.target.value) })}
-                  placeholder="e.g. 10300"
+                  type="text"
+                  value={closeStatementForm.salesmanName}
+                  onChange={(e) =>
+                    setCloseStatementForm((prev) => ({ ...prev, salesmanName: e.target.value }))
+                  }
+                  placeholder="Enter salesman name if accompanied"
+                  className="w-full h-12 px-3.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                 />
               </div>
-              <div>
-                <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">
-                  Ending Fuel (Liters) <span className="text-muted-foreground/50 normal-case font-normal">– optional</span>
-                </label>
-                <input
-                  type="number" step="0.01"
-                  min={0}
-                  className="w-full h-12 px-4 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/60"
-                  value={endTripForm.endFuelLiters || ""}
-                  onChange={(e) => setEndTripForm({ ...endTripForm, endFuelLiters: Number(e.target.value) })}
-                  placeholder="e.g. 45.5"
-                />
-              </div>
+
+              {statementErrors.general && (
+                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-700">
+                  {statementErrors.general}
+                </div>
+              )}
+
               <button
                 type="submit"
                 disabled={submittingTrip}
-                className="w-full h-12 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all"
+                className="w-full h-13 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all hover:opacity-95 disabled:opacity-50"
                 style={{ background: "linear-gradient(135deg, oklch(0.44 0.22 264), oklch(0.36 0.18 258))" }}
               >
-                {submittingTrip ? <Loader2 className="animate-spin h-4 w-4" /> : <><CheckCircle2 className="h-4 w-4" /> Complete Trip & Log Data</>}
+                {submittingTrip ? (
+                  <Loader2 className="animate-spin h-4 w-4" />
+                ) : (
+                  <>
+                    <CheckCircle2 className="h-4 w-4" /> Close Trip &amp; Update Odometer
+                  </>
+                )}
               </button>
             </form>
           </div>
         ) : (
-          <div className="bg-card border border-border rounded-2xl p-8 text-center" style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}>
-            <Route className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-            <div className="text-base font-semibold text-foreground mb-1">No Active Trip</div>
-            <p className="text-sm text-muted-foreground">Main office will assign dispatches dynamically to your profile.</p>
+          <div
+            className="bg-card border border-border rounded-2xl p-5 space-y-4"
+            style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}
+          >
+            <div className="flex items-center gap-2.5 pb-3 border-b border-border/70">
+              <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0">
+                <FileText className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-sm font-bold text-foreground">Start Trip · Vehicle Operation Statement</div>
+                <div className="text-xs text-muted-foreground">
+                  Out KM is automatically locked from {vehicle?.number || "assigned vehicle"}
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleStartTripStatement} className="space-y-3.5">
+              <div className="grid grid-cols-2 gap-3 text-xs bg-muted/35 p-3.5 rounded-xl border border-border/60">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Vehicle Number</div>
+                  <div className="text-sm font-bold text-foreground mt-0.5">{vehicle?.number || "Unassigned"}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Driver Name</div>
+                  <div className="text-sm font-semibold text-foreground mt-0.5">{driver?.name || user?.name}</div>
+                </div>
+              </div>
+
+              <div>
+                <label className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
+                  <span>Out KM (Auto from Vehicle Odometer)</span>
+                  <span className="inline-flex items-center gap-1 text-[9px] text-slate-500">
+                    <Lock className="h-2.5 w-2.5" /> Read-Only
+                  </span>
+                </label>
+                <input
+                  type="text"
+                  readOnly
+                  tabIndex={-1}
+                  value={`${authoritativeVehicleOdo.toLocaleString()} km`}
+                  aria-label="Out KM"
+                  className="w-full h-12 px-3.5 rounded-xl border border-border bg-muted/70 text-base font-bold text-foreground cursor-not-allowed select-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
+                  Route *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={startStatementForm.route}
+                  onChange={(e) => setStartStatementForm((prev) => ({ ...prev, route: e.target.value }))}
+                  placeholder="e.g. Nagercoil Plant to Marthandam Loop"
+                  className="w-full h-12 px-3.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
+                    Out Date *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={startStatementForm.outDate}
+                    onChange={(e) => setStartStatementForm((prev) => ({ ...prev, outDate: e.target.value }))}
+                    className="w-full h-12 px-3 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
+                    Out Time *
+                  </label>
+                  <input
+                    type="time"
+                    required
+                    value={startStatementForm.outTime}
+                    onChange={(e) => setStartStatementForm((prev) => ({ ...prev, outTime: e.target.value }))}
+                    className="w-full h-12 px-3 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
+                  Salesman <span className="text-muted-foreground/60 normal-case font-normal">– optional</span>
+                </label>
+                <input
+                  type="text"
+                  value={startStatementForm.salesmanName}
+                  onChange={(e) =>
+                    setStartStatementForm((prev) => ({ ...prev, salesmanName: e.target.value }))
+                  }
+                  placeholder="Enter salesman name"
+                  className="w-full h-12 px-3.5 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={submittingTrip || !vehicle?.id || !driver?.id}
+                className="w-full h-13 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                style={{ background: "linear-gradient(135deg, oklch(0.44 0.22 264), oklch(0.36 0.18 258))" }}
+              >
+                {submittingTrip ? (
+                  <Loader2 className="animate-spin h-4 w-4" />
+                ) : (
+                  <>
+                    <Play className="h-4 w-4" /> Start Trip &amp; Lock Out KM
+                  </>
+                )}
+              </button>
+            </form>
           </div>
         )}
+
+        {/* Read-Only Closed Statements History */}
+        <div
+          className="bg-card border border-border rounded-2xl overflow-hidden"
+          style={{ boxShadow: "0 1px 3px rgba(10,20,60,0.06)" }}
+        >
+          <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
+            <div className="text-sm font-bold text-foreground">Closed Operation Statements</div>
+            <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+              <Lock className="h-3 w-3" /> Read-Only
+            </span>
+          </div>
+          {closedTrips.length === 0 ? (
+            <div className="p-6 text-center text-xs text-muted-foreground">
+              No closed trip statements yet. Completed trips lock automatically here.
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              {closedTrips.map((t) => (
+                <div key={t.id} className="p-4 space-y-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-bold text-foreground">
+                      {t.vehicles?.number || vehicle?.number} · {t.in_date || t.date}
+                    </div>
+                    <Badge status="Completed">Closed</Badge>
+                  </div>
+                  <div className="text-muted-foreground">
+                    {t.destination ? `${t.start} → ${t.destination}` : t.start}
+                    {t.salesman_name ? ` · Salesman: ${t.salesman_name}` : ""}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 bg-muted/35 p-2.5 rounded-xl">
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">Out → In KM</div>
+                      <div className="font-semibold text-foreground">
+                        {Number(t.start_km || 0).toLocaleString()} → {Number(t.end_km || 0).toLocaleString()}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">Running KMs</div>
+                      <div className="font-bold text-indigo-700">{Number(t.distance || 0).toLocaleString()} km</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">Diesel / KMPL</div>
+                      <div className="font-semibold text-foreground">
+                        {Number(t.diesel_liters || 0) > 0
+                          ? `${t.diesel_liters}L · ${t.kmpl != null ? `${t.kmpl} km/L` : "—"}`
+                          : "—"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -1106,6 +1747,93 @@ function DriverPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── TRIP CLOSURE CONFIRMATION DIALOG ── */}
+      {showCloseConfirmModal && ongoingTrip && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 z-50">
+          <div
+            className="w-full max-w-sm rounded-2xl overflow-hidden bg-white"
+            style={{ boxShadow: "0 24px 64px rgba(10,20,60,0.28)" }}
+          >
+            <div
+              className="px-5 py-4"
+              style={{ background: "linear-gradient(135deg, oklch(0.16 0.07 258), oklch(0.22 0.09 265))" }}
+            >
+              <div className="text-white font-bold text-base">Confirm Trip Closure</div>
+              <div className="text-white/65 text-xs">
+                Once closed, this Vehicle Operation Statement becomes read-only.
+              </div>
+            </div>
+            <div className="p-5 space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-2.5 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Vehicle</div>
+                  <div className="font-bold text-slate-900">{ongoingTrip.vehicles?.number || vehicle?.number}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Out KM</div>
+                  <div className="font-semibold text-slate-800">{Number(ongoingTrip.start_km ?? authoritativeVehicleOdo).toLocaleString()} km</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">In KM (New Master Odo)</div>
+                  <div className="font-extrabold text-indigo-700">{Number(closeStatementForm.inKm).toLocaleString()} km</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Running KMs</div>
+                  <div className="font-extrabold text-emerald-700">
+                    {computeRunningKm(
+                      Number(ongoingTrip.start_km ?? authoritativeVehicleOdo),
+                      Number(closeStatementForm.inKm)
+                    ).toLocaleString()} km
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">In Date &amp; Time</div>
+                  <div className="font-semibold text-slate-800">
+                    {closeStatementForm.inDate} · {closeStatementForm.inTime}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Diesel / KMPL</div>
+                  <div className="font-semibold text-slate-800">
+                    {Number(closeStatementForm.dieselLitres || 0) > 0
+                      ? `${closeStatementForm.dieselLitres} L (${
+                          computeTripKmpl(
+                            computeRunningKm(
+                              Number(ongoingTrip.start_km ?? authoritativeVehicleOdo),
+                              Number(closeStatementForm.inKm)
+                            ),
+                            Number(closeStatementForm.dieselLitres)
+                          ) ?? "—"
+                        } km/L)`
+                      : "0 L"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2.5 pt-1">
+                <button
+                  type="button"
+                  disabled={submittingTrip}
+                  onClick={() => setShowCloseConfirmModal(false)}
+                  className="flex-1 h-12 rounded-xl text-sm font-semibold border border-border bg-card text-foreground hover:bg-muted/60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={submittingTrip}
+                  onClick={handleConfirmCloseStatement}
+                  className="flex-1 h-12 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2"
+                  style={{ background: "linear-gradient(135deg, oklch(0.44 0.22 264), oklch(0.36 0.18 258))" }}
+                >
+                  {submittingTrip ? <Loader2 className="animate-spin h-4 w-4" /> : "Confirm & Close"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

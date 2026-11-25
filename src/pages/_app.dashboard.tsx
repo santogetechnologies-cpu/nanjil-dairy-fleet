@@ -88,8 +88,23 @@ export default function DashboardPage() {
 
     loadData();
 
+    const channelId = `dashboard-overview-realtime-${Math.random().toString(36).substring(2, 9)}`;
+    const channel = supabase
+      .channel(channelId)
+      .on("postgres_changes", { event: "*", schema: "public", table: "vehicles" }, () => {
+        if (!cancelled) loadData();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "trips" }, () => {
+        if (!cancelled) loadData();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "fuel_purchase_logs" }, () => {
+        if (!cancelled) loadData();
+      })
+      .subscribe();
+
     return () => {
       cancelled = true;
+      supabase.removeChannel(channel);
     };
   }, []);
 
