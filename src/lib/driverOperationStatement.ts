@@ -624,16 +624,38 @@ export async function submitDriverFuelRefillRpc(
     cost: number;
     odometer: number;
     isFullTank: boolean;
+    pricePerLiter?: number;
+    station?: string;
+    receiptRef?: string;
     deviceId?: string;
   }
-): Promise<{ ok: boolean; vehicleOdometer?: number; error?: string }> {
-  const { data, error } = await supabaseClient.rpc("log_driver_fuel_refill", {
+): Promise<{ ok: boolean; vehicleOdometer?: number; fuelLog?: any; error?: string }> {
+  let { data, error } = await supabaseClient.rpc("log_driver_fuel_refill", {
     p_vehicle_id: params.vehicleId,
     p_liters: params.liters,
     p_cost: params.cost,
     p_odometer: params.odometer,
     p_is_full_tank: params.isFullTank,
+    p_price_per_liter: params.pricePerLiter ?? null,
+    p_station: params.station?.trim() || null,
+    p_receipt_ref: params.receiptRef?.trim() || null,
   });
+
+  // Backwards-compatible fallback if remote DB only has the earlier 5-parameter RPC deployed
+  if (
+    error &&
+    (error.message?.includes("Could not find the function") || error.message?.includes("PGRST202"))
+  ) {
+    const legacyRes = await supabaseClient.rpc("log_driver_fuel_refill", {
+      p_vehicle_id: params.vehicleId,
+      p_liters: params.liters,
+      p_cost: params.cost,
+      p_odometer: params.odometer,
+      p_is_full_tank: params.isFullTank,
+    });
+    data = legacyRes.data;
+    error = legacyRes.error;
+  }
 
   if (error) {
     return { ok: false, error: formatRpcErrorMessage(error.message) };
@@ -644,7 +666,7 @@ export async function submitDriverFuelRefillRpc(
     notifyManualOdometerUpdate(params.vehicleId, updatedOdo, params.deviceId);
   }
 
-  return { ok: true, vehicleOdometer: updatedOdo };
+  return { ok: true, vehicleOdometer: updatedOdo, fuelLog: data?.fuel_log };
 }
 
 function formatRpcErrorMessage(raw?: string): string {

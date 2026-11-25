@@ -4,8 +4,10 @@ import {
   AlertCircle,
   Bell,
   CheckCircle2,
+  Fuel,
   Home,
   LogOut,
+  Plus,
   Route,
   Truck,
   User,
@@ -46,8 +48,9 @@ import {
   VehicleOperationStatementForm,
 } from "@/components/driver/VehicleOperationStatementForm";
 import { MyTripsTab } from "@/components/driver/MyTripsTab";
-import { VehicleTab } from "@/components/driver/VehicleTab";
+import { type DriverFuelHistoryRow, VehicleTab } from "@/components/driver/VehicleTab";
 import { ProfileTab } from "@/components/driver/ProfileTab";
+import { type DriverFuelFormState, DriverFuelModal } from "@/components/driver/DriverFuelModal";
 
 const NAV_TABS: { id: DriverTabId; label: string; icon: typeof Home }[] = [
   { id: "home", label: "Home", icon: Home },
@@ -135,12 +138,17 @@ export default function DriverPage() {
   });
   const [statementErrors, setStatementErrors] = useState<ValidationFieldErrors>({});
 
-  // Fuel Log State (on Vehicle Tab)
-  const [fuelForm, setFuelForm] = useState({
-    liters: 0,
-    cost: 0,
+  // Record Fuel Transaction Modal & History State
+  const [showFuelModal, setShowFuelModal] = useState(false);
+  const [fuelLogs, setFuelLogs] = useState<DriverFuelHistoryRow[]>([]);
+  const [fuelForm, setFuelForm] = useState<DriverFuelFormState>({
+    vehicleId: "",
+    liters: 60,
+    pricePerLiter: 94.5,
     odometer: 0,
     isFullTank: true,
+    station: "Indian Oil Swastik Station, Nagercoil",
+    receiptRef: "",
   });
   const [fuelError, setFuelError] = useState<string | null>(null);
   const [fuelSuccess, setFuelSuccess] = useState<string | null>(null);
@@ -430,10 +438,24 @@ export default function DriverPage() {
         }
 
         setTripsHistory((historyTrips || []) as VehicleOperationTripRecord[]);
+
+        // Fetch fuel purchase logs for assigned vehicle / driver
+        if (resolvedVehicle.id) {
+          const { data: fLogs } = await supabase
+            .from("fuel_purchase_logs")
+            .select("*")
+            .eq("vehicle_id", resolvedVehicle.id)
+            .order("logged_at", { ascending: false })
+            .limit(15);
+          setFuelLogs((fLogs || []) as DriverFuelHistoryRow[]);
+        } else {
+          setFuelLogs([]);
+        }
       } else {
         setActiveShift(null);
         setOngoingTrip(null);
         setTripsHistory([]);
+        setFuelLogs([]);
       }
     } catch (err: any) {
       setLoadError(err?.message || "Failed to load driver portal data.");
@@ -469,6 +491,9 @@ export default function DriverPage() {
         if (!cancelled) load();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "alerts" }, () => {
+        if (!cancelled) load();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "fuel_purchase_logs" }, () => {
         if (!cancelled) load();
       })
       .subscribe();
@@ -746,30 +771,58 @@ export default function DriverPage() {
     }
   }
 
+  function openLogRefillModal() {
+    setFuelError(null);
+    setFuelForm({
+      vehicleId: vehicle?.id || assignedVehicles[0]?.id || "",
+      liters: 60,
+      pricePerLiter: 94.5,
+      odometer: authoritativeVehicleOdo > 0 ? authoritativeVehicleOdo : 0,
+      isFullTank: true,
+      station: "Indian Oil Swastik Station, Nagercoil",
+      receiptRef: "",
+    });
+    setShowFuelModal(true);
+  }
+
   async function handleLogFuelDriver(e: React.FormEvent) {
     e.preventDefault();
     setFuelError(null);
     setFuelSuccess(null);
 
-    if (!vehicle?.id || !driver?.id) {
+    const targetVehicleId = fuelForm.vehicleId || vehicle?.id;
+    const matchedTarget =
+      assignedVehicles.find((v) => v.id === targetVehicleId) || vehicle;
+    const targetBaselineOdo = resolveAuthoritativeOutKm(
+      matchedTarget?.odometer,
+      targetVehicleId === vehicle?.id ? activeLiveHardwareOdo : 0
+    );
+
+    if (!targetVehicleId || !driver?.id) {
       setFuelError("Vehicle or driver not assigned.");
       return;
     }
-    if (fuelForm.liters <= 0) {
-      setFuelError("Fuel volume must be greater than 0 litres.");
+    if (!Number.isFinite(fuelForm.liters) || fuelForm.liters <= 0) {
+      setFuelError("Volume (Litres) must be greater than 0.");
       return;
     }
-    if (fuelForm.cost <= 0) {
-      setFuelError("Total cost must be greater than ₹0.");
+    if (!Number.isFinite(fuelForm.pricePerLiter) || fuelForm.pricePerLiter <= 0) {
+      setFuelError("Price per Litre must be greater than ₹0.");
       return;
     }
-    if (fuelForm.odometer < 0) {
-      setFuelError("Odometer reading cannot be negative.");
+
+    const totalCost = Math.round(Number(fuelForm.liters) * Number(fuelForm.pricePerLiter));
+    if (totalCost <= 0) {
+      setFuelError("Total Estimated Cost must be greater than ₹0.");
       return;
     }
-    if (authoritativeVehicleOdo > 0 && fuelForm.odometer < authoritativeVehicleOdo) {
+    if (!Number.isFinite(fuelForm.odometer) || fuelForm.odometer <= 0) {
+      setFuelError("Please enter a valid positive Physical Odometer (km) reading.");
+      return;
+    }
+    if (targetBaselineOdo > 0 && fuelForm.odometer < targetBaselineOdo) {
       setFuelError(
-        `Odometer reading (${fuelForm.odometer.toLocaleString()} KM) is lower than current vehicle odometer (${authoritativeVehicleOdo.toLocaleString()} KM).`
+        `Odometer reading (${fuelForm.odometer.toLocaleString()} KM) is lower than current vehicle odometer (${targetBaselineOdo.toLocaleString()} KM).`
       );
       return;
     }
@@ -777,22 +830,30 @@ export default function DriverPage() {
     setSubmittingFuel(true);
     try {
       const res = await submitDriverFuelRefillRpc(supabase, {
-        vehicleId: vehicle.id,
+        vehicleId: targetVehicleId,
         liters: Number(fuelForm.liters),
-        cost: Number(fuelForm.cost),
+        cost: totalCost,
         odometer: Math.round(Number(fuelForm.odometer) * 100) / 100,
         isFullTank: Boolean(fuelForm.isFullTank),
-        deviceId: vehicle.deviceId,
+        pricePerLiter: Number(fuelForm.pricePerLiter),
+        station: fuelForm.station,
+        receiptRef: fuelForm.receiptRef,
+        deviceId: matchedTarget?.device_id || vehicle?.deviceId,
       });
 
       if (!res.ok) {
         throw new Error(res.error || "Failed to save fuel refill log.");
       }
 
+      const finalOdo = res.vehicleOdometer ?? fuelForm.odometer;
+      setShowFuelModal(false);
       setFuelSuccess(
-        `Fuel refill logged! Vehicle Odometer: ${(res.vehicleOdometer ?? fuelForm.odometer).toLocaleString()} KM`
+        `Fuel transaction submitted (${fuelForm.liters} L · ₹${totalCost.toLocaleString("en-IN")}). Vehicle Odometer: ${finalOdo.toLocaleString()} KM`
       );
-      setFuelForm({ liters: 0, cost: 0, odometer: 0, isFullTank: true });
+      setCompletionBanner({
+        title: "Fuel Transaction Recorded!",
+        subtitle: `${fuelForm.liters} L · ₹${totalCost.toLocaleString("en-IN")} · Odometer: ${finalOdo.toLocaleString()} KM`,
+      });
       await load();
     } catch (err: any) {
       setFuelError(err?.message || "Failed to save fuel log.");
@@ -994,131 +1055,175 @@ export default function DriverPage() {
             <div className="h-36 rounded-2xl bg-slate-200/70 animate-pulse" />
             <div className="h-44 rounded-2xl bg-slate-200/60 animate-pulse" />
           </div>
-        ) : activeTab === "home" ? (
-          showCloseForm && ongoingTrip ? (
-            <VehicleOperationStatementForm
-              trip={ongoingTrip}
-              driver={driver}
-              vehicle={liveMergedVehicle}
-              authoritativeOdometer={authoritativeVehicleOdo}
-              form={closeForm}
-              errors={statementErrors}
-              submitting={closingTrip}
-              showConfirmModal={showCloseConfirmModal}
-              onChangeForm={setCloseForm}
-              onClearError={(keys) =>
-                setStatementErrors((prev) => {
-                  const next = { ...prev };
-                  keys.forEach((k) => {
-                    next[k] = undefined;
-                  });
-                  return next;
-                })
-              }
-              onSubmitPrepare={handlePrepareCloseSubmit}
-              onConfirmSubmit={handleConfirmCloseSubmit}
-              onCloseConfirmModal={() => setShowCloseConfirmModal(false)}
-              onBackToActiveTrip={() => {
-                setShowCloseForm(false);
-                setStatementErrors({});
-              }}
-            />
-          ) : ongoingTrip ? (
-            <div className="space-y-4">
-              <ActiveTripDashboard
-                trip={ongoingTrip}
-                vehicle={liveMergedVehicle}
-                authoritativeOdometer={authoritativeVehicleOdo}
-                justStartedBanner={justStartedBanner}
-                onDismissStartedBanner={() => setJustStartedBanner(false)}
-                onCompleteTripClockOut={handleOpenCloseStatement}
-                onViewRoute={handleViewRoute}
-              />
-              {tripsHistory.length > 0 && (
-                <div className="bg-card border border-border rounded-2xl p-4 shadow-xs flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-xs font-bold text-foreground">
-                      Recent Completed Statements ({tripsHistory.length})
+        ) : (
+          <>
+            {activeTab === "home" ? (
+              showCloseForm && ongoingTrip ? (
+                <VehicleOperationStatementForm
+                  trip={ongoingTrip}
+                  driver={driver}
+                  vehicle={liveMergedVehicle}
+                  authoritativeOdometer={authoritativeVehicleOdo}
+                  form={closeForm}
+                  errors={statementErrors}
+                  submitting={closingTrip}
+                  showConfirmModal={showCloseConfirmModal}
+                  onChangeForm={setCloseForm}
+                  onClearError={(keys) =>
+                    setStatementErrors((prev) => {
+                      const next = { ...prev };
+                      keys.forEach((k) => {
+                        next[k] = undefined;
+                      });
+                      return next;
+                    })
+                  }
+                  onSubmitPrepare={handlePrepareCloseSubmit}
+                  onConfirmSubmit={handleConfirmCloseSubmit}
+                  onCloseConfirmModal={() => setShowCloseConfirmModal(false)}
+                  onBackToActiveTrip={() => {
+                    setShowCloseForm(false);
+                    setStatementErrors({});
+                  }}
+                />
+              ) : ongoingTrip ? (
+                <div className="space-y-4">
+                  <ActiveTripDashboard
+                    trip={ongoingTrip}
+                    vehicle={liveMergedVehicle}
+                    authoritativeOdometer={authoritativeVehicleOdo}
+                    justStartedBanner={justStartedBanner}
+                    onDismissStartedBanner={() => setJustStartedBanner(false)}
+                    onCompleteTripClockOut={handleOpenCloseStatement}
+                    onViewRoute={handleViewRoute}
+                  />
+                  {tripsHistory.length > 0 && (
+                    <div className="bg-card border border-border rounded-2xl p-4 shadow-xs flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-bold text-foreground">
+                          Recent Completed Statements ({tripsHistory.length})
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          Last closed: {tripsHistory[0].in_date || tripsHistory[0].date} ·{" "}
+                          {Number(tripsHistory[0].distance || 0).toLocaleString()} KM
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("trips")}
+                        className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-800 cursor-pointer"
+                      >
+                        My Trips →
+                      </button>
                     </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      Last closed: {tripsHistory[0].in_date || tripsHistory[0].date} ·{" "}
-                      {Number(tripsHistory[0].distance || 0).toLocaleString()} KM
+                  )}
+                </div>
+              ) : activeShift ? (
+                <VehicleConfirmCard
+                  driver={driver}
+                  vehicle={liveMergedVehicle}
+                  assignedVehicles={assignedVehicles}
+                  authoritativeOdometer={authoritativeVehicleOdo}
+                  outDate={getTodayIstDateString()}
+                  outTime={getCurrentIstTimeString()}
+                  routeValue={startRoute}
+                  salesmanValue={startSalesman}
+                  submitting={startingTrip}
+                  errorBanner={workflowError}
+                  onChangeVehicle={handleSwitchVehicle}
+                  onChangeRoute={setStartRoute}
+                  onChangeSalesman={setStartSalesman}
+                  onConfirmStartTrip={handleConfirmStartTrip}
+                  onCancelClockIn={handleCancelVehicleConfirmation}
+                />
+              ) : (
+                <ClockInScreen
+                  driver={driver}
+                  vehicle={liveMergedVehicle}
+                  assignedVehiclesCount={assignedVehicles.length}
+                  authoritativeOdometer={authoritativeVehicleOdo}
+                  hasOtherDriverTrip={hasOtherDriverTrip}
+                  clockingIn={clockingIn}
+                  errorBanner={workflowError}
+                  recentTrips={tripsHistory}
+                  onClockIn={handleClockIn}
+                  onOpenTripHistory={() => setActiveTab("trips")}
+                  onInspectTrip={(trip) => {
+                    setPreviewTripSlip(trip);
+                  }}
+                />
+              )
+            ) : null}
+
+            {/* Quick 1-Tap Log Refill bar on Home whenever vehicle is assigned */}
+            {activeTab === "home" && !showCloseForm && vehicle?.id && (
+              <div className="bg-card border border-border rounded-2xl p-4 shadow-xs flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="h-9 w-9 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
+                    <Fuel className="h-4.5 w-4.5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-foreground">Diesel Refill &amp; Receipt</div>
+                    <div className="text-[11px] text-muted-foreground truncate">
+                      Log refill with physical odometer &amp; invoice
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("trips")}
-                    className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-bold text-slate-800 cursor-pointer"
-                  >
-                    My Trips →
-                  </button>
                 </div>
-              )}
-            </div>
-          ) : activeShift ? (
-            <VehicleConfirmCard
-              driver={driver}
-              vehicle={liveMergedVehicle}
-              assignedVehicles={assignedVehicles}
-              authoritativeOdometer={authoritativeVehicleOdo}
-              outDate={getTodayIstDateString()}
-              outTime={getCurrentIstTimeString()}
-              routeValue={startRoute}
-              salesmanValue={startSalesman}
-              submitting={startingTrip}
-              errorBanner={workflowError}
-              onChangeVehicle={handleSwitchVehicle}
-              onChangeRoute={setStartRoute}
-              onChangeSalesman={setStartSalesman}
-              onConfirmStartTrip={handleConfirmStartTrip}
-              onCancelClockIn={handleCancelVehicleConfirmation}
-            />
-          ) : (
-            <ClockInScreen
-              driver={driver}
-              vehicle={liveMergedVehicle}
-              assignedVehiclesCount={assignedVehicles.length}
-              authoritativeOdometer={authoritativeVehicleOdo}
-              hasOtherDriverTrip={hasOtherDriverTrip}
-              clockingIn={clockingIn}
-              errorBanner={workflowError}
-              recentTrips={tripsHistory}
-              onClockIn={handleClockIn}
-              onOpenTripHistory={() => setActiveTab("trips")}
-              onInspectTrip={(trip) => {
-                setPreviewTripSlip(trip);
-              }}
-            />
-          )
-        ) : activeTab === "trips" ? (
-          <MyTripsTab
-            ongoingTrip={ongoingTrip}
-            tripsHistory={tripsHistory}
-            defaultVehicleNumber={vehicle.number}
-            driverName={driver.name}
-          />
-        ) : activeTab === "vehicle" ? (
-          <VehicleTab
-            vehicle={liveMergedVehicle}
-            authoritativeOdometer={authoritativeVehicleOdo}
-            liveHardwareOdometer={activeLiveHardwareOdo}
-            alerts={alerts}
-            fuelForm={fuelForm}
-            fuelError={fuelError}
-            fuelSuccess={fuelSuccess}
-            submittingFuel={submittingFuel}
-            onChangeFuelForm={setFuelForm}
-            onSubmitFuel={handleLogFuelDriver}
-          />
-        ) : (
-          <ProfileTab
-            driver={driver}
-            vehicle={liveMergedVehicle}
-            userEmail={user.email}
-            onLogout={handleLogout}
-          />
+                <button
+                  type="button"
+                  onClick={openLogRefillModal}
+                  className="px-4 min-h-[40px] rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-bold text-xs flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Log Refill
+                </button>
+              </div>
+            )}
+
+            {activeTab === "trips" ? (
+              <MyTripsTab
+                ongoingTrip={ongoingTrip}
+                tripsHistory={tripsHistory}
+                defaultVehicleNumber={vehicle.number}
+                driverName={driver.name}
+              />
+            ) : activeTab === "vehicle" ? (
+              <VehicleTab
+                vehicle={liveMergedVehicle}
+                authoritativeOdometer={authoritativeVehicleOdo}
+                liveHardwareOdometer={activeLiveHardwareOdo}
+                alerts={alerts}
+                fuelLogs={fuelLogs}
+                fuelSuccess={fuelSuccess}
+                onOpenLogRefill={openLogRefillModal}
+              />
+            ) : activeTab === "profile" ? (
+              <ProfileTab
+                driver={driver}
+                vehicle={liveMergedVehicle}
+                userEmail={user.email}
+                onLogout={handleLogout}
+              />
+            ) : null}
+          </>
         )}
       </main>
+
+      <DriverFuelModal
+        open={showFuelModal}
+        driver={driver}
+        vehicle={liveMergedVehicle}
+        assignedVehicles={assignedVehicles}
+        authoritativeOdometer={authoritativeVehicleOdo}
+        form={fuelForm}
+        error={fuelError}
+        submitting={submittingFuel}
+        onChangeForm={setFuelForm}
+        onClose={() => {
+          setShowFuelModal(false);
+          setFuelError(null);
+        }}
+        onSubmit={handleLogFuelDriver}
+      />
 
       {/* Quick Read-Only Statement Preview from Home Recent Trips */}
       {previewTripSlip && (

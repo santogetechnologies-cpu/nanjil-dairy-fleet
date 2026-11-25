@@ -12,6 +12,7 @@ import {
   validateTripCloseStatement,
   submitDriverClockIn,
   submitDriverClockOut,
+  submitDriverFuelRefillRpc,
   submitStartDriverTripStatement,
   submitCloseDriverTripStatement,
 } from "../src/lib/driverOperationStatement.ts";
@@ -418,4 +419,55 @@ test("Test 11: Statement Number formatting, IST greetings, and My Trips period f
   assert.equal(filterDriverTripsByPeriod(sampleTrips, "week", undefined, undefined, "2026-11-25").length, 2);
   assert.equal(filterDriverTripsByPeriod(sampleTrips, "month", undefined, undefined, "2026-11-25").length, 3);
   assert.equal(filterDriverTripsByPeriod(sampleTrips, "custom", "2026-10-01", "2026-11-10", "2026-11-25").length, 2);
+});
+
+test("Test 12: submitDriverFuelRefillRpc forwards station, price per litre, receipt ref, and supports legacy fallback", async () => {
+  let receivedArgs = null;
+  const mockFuelRpc = {
+    rpc: async (_fn, args) => {
+      receivedArgs = args;
+      return { data: { ok: true, vehicle_odometer: 66850 }, error: null };
+    },
+  };
+
+  const res = await submitDriverFuelRefillRpc(mockFuelRpc, {
+    vehicleId: VEHICLE_ID,
+    liters: 60,
+    cost: 5670,
+    odometer: 66850,
+    isFullTank: true,
+    pricePerLiter: 94.5,
+    station: "Indian Oil Swastik Station, Nagercoil",
+    receiptRef: "INV-9812",
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.vehicleOdometer, 66850);
+  assert.equal(receivedArgs.p_price_per_liter, 94.5);
+  assert.equal(receivedArgs.p_station, "Indian Oil Swastik Station, Nagercoil");
+  assert.equal(receivedArgs.p_receipt_ref, "INV-9812");
+
+  // Legacy 5-arg fallback when 8-arg signature returns PGRST202
+  let callCount = 0;
+  const legacyMock = {
+    rpc: async (_fn, args) => {
+      callCount += 1;
+      if (callCount === 1 && "p_receipt_ref" in args) {
+        return { data: null, error: { message: "Could not find the function public.log_driver_fuel_refill (PGRST202)" } };
+      }
+      return { data: { ok: true, vehicle_odometer: 66850 }, error: null };
+    },
+  };
+  const fallbackRes = await submitDriverFuelRefillRpc(legacyMock, {
+    vehicleId: VEHICLE_ID,
+    liters: 60,
+    cost: 5670,
+    odometer: 66850,
+    isFullTank: true,
+    pricePerLiter: 94.5,
+    station: "Indian Oil Swastik Station, Nagercoil",
+    receiptRef: "INV-9812",
+  });
+  assert.equal(fallbackRes.ok, true);
+  assert.equal(callCount, 2);
 });

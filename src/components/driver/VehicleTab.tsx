@@ -2,11 +2,11 @@ import {
   AlertTriangle,
   Bell,
   CheckCircle2,
-  Droplets,
   Fuel,
   Gauge,
-  Loader2,
+  Plus,
   Radio,
+  Receipt,
   ShieldCheck,
   Thermometer,
   Truck,
@@ -14,17 +14,26 @@ import {
 import { Badge } from "@/components/ui-kit";
 import type { DriverAlertItem, DriverAssignedVehicle } from "./types";
 
+export interface DriverFuelHistoryRow {
+  id: string;
+  liters: number;
+  cost: number;
+  odometer: number;
+  is_full_tank?: boolean | null;
+  price_per_liter?: number | null;
+  station?: string | null;
+  receipt_ref?: string | null;
+  logged_at?: string | null;
+}
+
 interface VehicleTabProps {
   vehicle: DriverAssignedVehicle;
   authoritativeOdometer: number;
   liveHardwareOdometer: number;
   alerts: DriverAlertItem[];
-  fuelForm: { liters: number; cost: number; odometer: number; isFullTank: boolean };
-  fuelError: string | null;
+  fuelLogs: DriverFuelHistoryRow[];
   fuelSuccess: string | null;
-  submittingFuel: boolean;
-  onChangeFuelForm: (next: { liters: number; cost: number; odometer: number; isFullTank: boolean }) => void;
-  onSubmitFuel: (e: React.FormEvent) => void;
+  onOpenLogRefill: () => void;
 }
 
 export function VehicleTab({
@@ -32,12 +41,9 @@ export function VehicleTab({
   authoritativeOdometer,
   liveHardwareOdometer,
   alerts,
-  fuelForm,
-  fuelError,
+  fuelLogs,
   fuelSuccess,
-  submittingFuel,
-  onChangeFuelForm,
-  onSubmitFuel,
+  onOpenLogRefill,
 }: VehicleTabProps) {
   const hasVehicle = Boolean(vehicle?.id);
 
@@ -103,10 +109,83 @@ export function VehicleTab({
           <div className="font-semibold">{vehicle.route || "No route assigned"}</div>
           {vehicle.odometerSource && (
             <div className="text-[10px] text-white/60 pt-0.5">
-              Last Odometer Source: <span className="font-mono text-white/90">{vehicle.odometerSource}</span>
+              Last Odometer Source:{" "}
+              <span className="font-mono text-white/90">{vehicle.odometerSource}</span>
             </div>
           )}
         </div>
+      </div>
+
+      {/* Record Fuel Transaction Card & CTA */}
+      <div className="bg-card border border-border rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="h-10 w-10 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
+              <Fuel className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-foreground">Fuel Refill &amp; Receipt Log</div>
+              <div className="text-xs text-muted-foreground">
+                Record station refill with physical odometer &amp; invoice ref
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={!hasVehicle}
+            onClick={onOpenLogRefill}
+            className="px-4 min-h-[42px] rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs disabled:opacity-50 shrink-0 cursor-pointer"
+          >
+            <Plus className="h-4 w-4" /> Log Refill
+          </button>
+        </div>
+
+        {fuelSuccess && (
+          <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-800">
+            {fuelSuccess}
+          </div>
+        )}
+      </div>
+
+      {/* Recent Fuel Transactions */}
+      <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-xs">
+        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-foreground">
+            <Receipt className="h-4 w-4 text-blue-600" /> Recent Fuel Transactions ({fuelLogs.length})
+          </div>
+        </div>
+        {fuelLogs.length === 0 ? (
+          <div className="p-5 text-center text-xs text-muted-foreground">
+            No fuel refill transactions recorded for {vehicle.number} yet.
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {fuelLogs.slice(0, 8).map((log) => (
+              <div key={log.id} className="p-3.5 text-xs space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-bold text-foreground">
+                    {Number(log.liters || 0).toFixed(1)} L · ₹{" "}
+                    {Math.round(Number(log.cost || 0)).toLocaleString("en-IN")}
+                  </div>
+                  <span
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                      log.is_full_tank !== false
+                        ? "bg-indigo-100 text-indigo-800"
+                        : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {log.is_full_tank !== false ? "Full Tank" : "Partial Fill"}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                  <span>Odo: {Number(log.odometer || 0).toLocaleString()} km</span>
+                  {log.station && <span>{log.station}</span>}
+                  {log.receipt_ref && <span className="font-mono">Ref: {log.receipt_ref}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Compliance & Service Details */}
@@ -155,103 +234,6 @@ export function VehicleTab({
             ))}
           </div>
         )}
-      </div>
-
-      {/* Fuel Refill Logger (Preserved) */}
-      <div className="bg-card border border-border rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
-        <div className="flex items-center gap-2.5">
-          <div className="h-9 w-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
-            <Fuel className="h-4.5 w-4.5" />
-          </div>
-          <div>
-            <div className="text-sm font-bold text-foreground">Log Fuel Refill</div>
-            <div className="text-xs text-muted-foreground">Record station refueling with odometer check</div>
-          </div>
-        </div>
-
-        <form onSubmit={onSubmitFuel} className="space-y-3">
-          {fuelSuccess && (
-            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-800">
-              {fuelSuccess}
-            </div>
-          )}
-          {fuelError && (
-            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-700">
-              {fuelError}
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
-                Litres *
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                inputMode="decimal"
-                required
-                value={fuelForm.liters || ""}
-                onChange={(e) => onChangeFuelForm({ ...fuelForm, liters: Number(e.target.value) })}
-                placeholder="e.g. 50"
-                className="w-full h-12 px-3 rounded-xl border border-border bg-background text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
-                Cost (INR) *
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                inputMode="decimal"
-                required
-                value={fuelForm.cost || ""}
-                onChange={(e) => onChangeFuelForm({ ...fuelForm, cost: Number(e.target.value) })}
-                placeholder="e.g. 4800"
-                className="w-full h-12 px-3 rounded-xl border border-border bg-background text-sm"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">
-              Odometer (KM) *
-            </label>
-            <input
-              type="number"
-              inputMode="decimal"
-              required
-              value={fuelForm.odometer || ""}
-              onChange={(e) => onChangeFuelForm({ ...fuelForm, odometer: Number(e.target.value) })}
-              placeholder={hasVehicle ? `>= ${authoritativeOdometer}` : "e.g. 66800"}
-              className="w-full h-12 px-3 rounded-xl border border-border bg-background text-sm"
-            />
-          </div>
-          <label className="flex items-center gap-2.5 p-3 rounded-xl border border-border bg-muted/30 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={fuelForm.isFullTank}
-              onChange={(e) => onChangeFuelForm({ ...fuelForm, isFullTank: e.target.checked })}
-              className="h-4 w-4 rounded accent-indigo-600"
-            />
-            <span className="text-xs font-semibold text-foreground">
-              Full Tank Refuel (used for fleet KMPL verification)
-            </span>
-          </label>
-          <button
-            type="submit"
-            disabled={submittingFuel || !hasVehicle}
-            className="w-full min-h-[48px] rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
-            style={{ background: "linear-gradient(135deg, oklch(0.44 0.22 264), oklch(0.36 0.18 258))" }}
-          >
-            {submittingFuel ? (
-              <Loader2 className="animate-spin h-4 w-4" />
-            ) : (
-              <>
-                <Droplets className="h-4 w-4" /> Save Refuel Log
-              </>
-            )}
-          </button>
-        </form>
       </div>
     </div>
   );
