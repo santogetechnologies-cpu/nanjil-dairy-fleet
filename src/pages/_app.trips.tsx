@@ -109,12 +109,27 @@ export default function TripHistoryPage() {
   const fetchAbortRef = useRef<AbortController | null>(null);
 
   // 1. Load Vehicles, Drivers, Vehicle Assignments & Trips from Supabase
+  const reloadTripsRecords = useCallback(async () => {
+    const { data } = await supabase
+      .from("trips")
+      .select("*, vehicles(number, odometer), drivers(name)")
+      .order("date", { ascending: false })
+      .order("created_at", { ascending: false });
+    if (data) {
+      setTripsTableRecords(data);
+    }
+  }, []);
+
   useEffect(() => {
     async function init() {
       const [vRes, dRes, tRes, aRes] = await Promise.all([
-        supabase.from("vehicles").select("id, number, type, model, device_id"),
+        supabase.from("vehicles").select("id, number, type, model, device_id, odometer"),
         supabase.from("drivers").select("id, name, phone"),
-        supabase.from("trips").select("*, vehicles(number), drivers(name)").order("date", { ascending: false }),
+        supabase
+          .from("trips")
+          .select("*, vehicles(number, odometer), drivers(name)")
+          .order("date", { ascending: false })
+          .order("created_at", { ascending: false }),
         supabase.from("vehicle_assignments").select("id, vehicle_id, driver_id, assigned_at, unassigned_at, is_active, drivers(id, name, phone)"),
       ]);
 
@@ -144,6 +159,7 @@ export default function TripHistoryPage() {
                 // Guarantee authoritative UUID is preserved
                 id: existing.id,
                 device_id: existing.device_id,
+                odometer: v.odometer != null ? Number(v.odometer) : existing.odometer,
               });
             }
           }
@@ -200,7 +216,19 @@ export default function TripHistoryPage() {
       }
     }
     init();
-  }, []);
+
+    const channelId = `trips-statements-realtime-${Math.random().toString(36).substring(2, 9)}`;
+    const channel = supabase
+      .channel(channelId)
+      .on("postgres_changes", { event: "*", schema: "public", table: "trips" }, () => {
+        reloadTripsRecords();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [reloadTripsRecords]);
 
   // Fetch selected vehicle's latest active trip date if not cached
   useEffect(() => {
@@ -1603,6 +1631,118 @@ export default function TripHistoryPage() {
           </Card>
         </div>
       </div>
+
+      {/* ── DRIVER OPERATION STATEMENTS (OUT KM / IN KM / RUNNING KM) ── */}
+      <Card className="border border-slate-200/80 p-5 shadow-xs space-y-3 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+          <div>
+            <div className="text-sm font-bold text-slate-900">
+              Driver Vehicle Operation Statements ({
+                tripsTableRecords.filter(
+                  (t) =>
+                    (!selectedVehicleId || t.vehicle_id === selectedVehicleId) &&
+                    (selectedDriverId === "All" || t.driver_id === selectedDriverId)
+                ).length
+              })
+            </div>
+            <div className="text-xs text-slate-500">
+              Verified Out KM, In KM, Running KM, Diesel &amp; KMPL submitted from Driver Portal
+            </div>
+          </div>
+          <Badge variant="outline" className="text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200">
+            Live Realtime Sync
+          </Badge>
+        </div>
+
+        <div className="overflow-x-auto">
+          {(() => {
+            const matchingStatements = tripsTableRecords.filter(
+              (t) =>
+                (!selectedVehicleId || t.vehicle_id === selectedVehicleId) &&
+                (selectedDriverId === "All" || t.driver_id === selectedDriverId)
+            );
+            if (matchingStatements.length === 0) {
+              return (
+                <div className="py-6 text-center text-xs text-slate-400">
+                  No driver operation statements recorded for the selected vehicle yet.
+                </div>
+              );
+            }
+            return (
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
+                    <th className="py-2 px-3">Date</th>
+                    <th className="py-2 px-3">Vehicle</th>
+                    <th className="py-2 px-3">Driver</th>
+                    <th className="py-2 px-3">Route</th>
+                    <th className="py-2 px-3">Out → In Time</th>
+                    <th className="py-2 px-3">Out KM</th>
+                    <th className="py-2 px-3">In KM</th>
+                    <th className="py-2 px-3">Running KM</th>
+                    <th className="py-2 px-3">Diesel / KMPL</th>
+                    <th className="py-2 px-3">Source</th>
+                    <th className="py-2 px-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {matchingStatements.slice(0, 25).map((t: any) => (
+                    <tr key={t.id} className="hover:bg-slate-50/70">
+                      <td className="py-2.5 px-3 font-medium text-slate-800 whitespace-nowrap">
+                        {t.in_date || t.out_date || t.date}
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-slate-900 whitespace-nowrap">
+                        {t.vehicles?.number || selectedVehicle?.number || "-"}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-700 whitespace-nowrap">
+                        {t.drivers?.name || "Driver"}
+                        {t.salesman_name ? (
+                          <span className="text-[10px] text-slate-400 block">Salesman: {t.salesman_name}</span>
+                        ) : null}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600 max-w-[180px] truncate" title={`${t.start} → ${t.destination}`}>
+                        {t.destination ? `${t.start} → ${t.destination}` : t.start}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap">
+                        {t.out_time || "—"} → {t.in_time || "—"}
+                      </td>
+                      <td className="py-2.5 px-3 font-medium text-slate-700 whitespace-nowrap">
+                        {t.start_km != null ? `${Number(t.start_km).toLocaleString()} km` : "—"}
+                      </td>
+                      <td className="py-2.5 px-3 font-bold text-slate-900 whitespace-nowrap">
+                        {t.end_km != null ? `${Number(t.end_km).toLocaleString()} km` : "—"}
+                      </td>
+                      <td className="py-2.5 px-3 font-extrabold text-indigo-700 whitespace-nowrap">
+                        {t.distance != null ? `${Number(t.distance).toLocaleString()} km` : "—"}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-700 whitespace-nowrap">
+                        {Number(t.diesel_liters || 0) > 0
+                          ? `${t.diesel_liters}L · ${t.kmpl != null ? `${t.kmpl} km/L` : "—"}`
+                          : "—"}
+                      </td>
+                      <td className="py-2.5 px-3 text-[10px] font-mono text-slate-500 whitespace-nowrap">
+                        {t.odometer_updated_source || "MANUAL"}
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] ${
+                            t.status === "Completed"
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : "bg-blue-50 text-blue-700 border-blue-200"
+                          }`}
+                        >
+                          {t.status}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            );
+          })()}
+        </div>
+      </Card>
     </div>
   );
 }

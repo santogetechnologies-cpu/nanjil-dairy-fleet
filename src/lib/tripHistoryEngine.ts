@@ -316,13 +316,17 @@ export async function fetchPaginatedTelemetryHistory(
         const lat = Number(row.lat);
         const lng = Number(row.lng);
         if (isValidGpsCoord(lat, lng) && isFleetOperatingCoordinate(lat, lng)) {
-          // Reject consecutive identical points with exact same millisecond timestamp and coordinate
+          // Reject consecutive identical or sub-second duplicate burst points at the same location
           const lastPt = allPoints[allPoints.length - 1];
+          const currRecMs = new Date(row.recorded_at).getTime();
+          const lastRecMs = lastPt ? new Date(lastPt.recorded_at).getTime() : NaN;
           if (
             lastPt &&
-            lastPt.recorded_at === row.recorded_at &&
-            Math.abs(lastPt.lat - lat) < 0.000001 &&
-            Math.abs(lastPt.lng - lng) < 0.000001
+            Number.isFinite(currRecMs) &&
+            Number.isFinite(lastRecMs) &&
+            Math.abs(currRecMs - lastRecMs) < 1000 &&
+            Math.abs(lastPt.lat - lat) < 0.00001 &&
+            Math.abs(lastPt.lng - lng) < 0.00001
           ) {
             continue;
           }
@@ -448,7 +452,9 @@ export function splitPointsIntoSegments(
       points[i].lng
     );
     const impliedSpeedKmh = diffSec > 0 ? distKm / (diffSec / 3600) : 0;
-    const isDistanceJump = distKm > maxJumpKm || impliedSpeedKmh > maxJumpSpeedKmh;
+    // Require >= 0.5 km before classifying high implied speed as a teleport split
+    // so buffered packets written a few ms/s apart never split a continuous trip.
+    const isDistanceJump = distKm > maxJumpKm || (distKm >= 0.5 && impliedSpeedKmh > maxJumpSpeedKmh);
 
     if (diffMins > maxGapMinutes || isDistanceJump) {
       points[i].isGap = true;
@@ -516,6 +522,19 @@ export function buildSegmentedGeoJson(segments: RouteSegment[]): any {
 
 // ── TIMESTAMP-BASED MATHEMATICAL JOURNEY CALCULATIONS ───────────────────────
 
+/**
+ * Determines whether a telemetry interval reflects genuine vehicle movement
+ * versus stationary hardware speed-floor drift (e.g. speed 4-5 km/h at fixed coordinates).
+ */
+export function isTelemetryIntervalMoving(
+  currPoint: GpsPoint,
+  distKm: number
+): boolean {
+  if (currPoint.speed > 8) return true;
+  if (currPoint.speed > 3 && distKm > 0.005) return true;
+  return false;
+}
+
 export function calculateJourneyMetrics(
   points: GpsPoint[],
   maxGapMinutes = 15,
@@ -552,7 +571,6 @@ export function calculateJourneyMetrics(
 
   for (let i = 0; i < points.length; i++) {
     const p = points[i];
-    if (p.speed > maxSpeedKmh) maxSpeedKmh = p.speed;
 
     // Overspeed check
     if (p.speed > overspeedThresholdKmh) {
@@ -565,7 +583,8 @@ export function calculateJourneyMetrics(
     }
 
     if (i === 0) {
-      if (p.speed <= 3) {
+      if (p.speed > 8 && p.speed > maxSpeedKmh) maxSpeedKmh = p.speed;
+      if (p.speed <= 8) {
         currentStationaryStartMs = new Date(p.recorded_at).getTime();
       }
       continue;
@@ -587,7 +606,8 @@ export function calculateJourneyMetrics(
         currentStationaryStartMs = null;
       }
 
-      if (p.speed <= 3) {
+      if (p.speed > 8 && p.speed > maxSpeedKmh) maxSpeedKmh = p.speed;
+      if (p.speed <= 8) {
         currentStationaryStartMs = currMs;
       }
       continue;
@@ -597,14 +617,15 @@ export function calculateJourneyMetrics(
     const dist = haversineDistanceKm(prevP.lat, prevP.lng, p.lat, p.lng);
     const impliedSpeedKmh = deltaSec > 0 ? (dist / (deltaSec / 3600)) : 0;
 
-    // Reject teleport jump (>200 km or implied speed > 150 km/h)
-    const isValidJump = dist <= 200 && impliedSpeedKmh <= 150;
+    // Reject teleport jump (>200 km or significant >=0.5 km jump at implied speed > 150 km/h)
+    const isValidJump = dist <= 200 && (dist < 0.5 || impliedSpeedKmh <= 150);
     if (isValidJump) {
       totalDistanceKm += dist;
     }
 
-    // Movement condition (speed > 3 km/h)
-    if (p.speed > 3) {
+    // Movement condition (ignores stationary speed floor <= 8 km/h when displacement <= 5m)
+    if (isValidJump && isTelemetryIntervalMoving(p, dist)) {
+      if (p.speed > maxSpeedKmh) maxSpeedKmh = p.speed;
       drivingDurationSeconds += deltaSec;
       if (currentStationaryStartMs !== null) {
         const stationaryDurationSec = Math.round((prevMs - currentStationaryStartMs) / 1000);
@@ -831,7 +852,7 @@ export function deriveJourneysFromTelemetry(
       points[i].lng
     );
     const impliedSpeedKmh = diffMins > 0 ? distKm / (diffMins / 60) : 0;
-    const isDistanceJump = distKm > 20 || impliedSpeedKmh > 150;
+    const isDistanceJump = distKm > 20 || (distKm >= 0.5 && impliedSpeedKmh > 150);
 
     // If gap between consecutive points > journeySplitSilenceMins or distance jump > 20km, treat as new journey
     if (diffMins > journeySplitSilenceMins || isDistanceJump) {

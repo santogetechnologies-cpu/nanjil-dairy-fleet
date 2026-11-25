@@ -80,6 +80,7 @@ export default function App() {
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/maintenance" element={<MaintenancePage />} />
           <Route path="/reports" element={<ReportsPage />} />
+          <Route path="/operation-reports" element={<Navigate to="/reports?tab=operation_management" replace />} />
           <Route path="/settings" element={<SettingsPage />} />
 
           {/* Admin User Management */}

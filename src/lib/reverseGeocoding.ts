@@ -27,6 +27,20 @@ const memoryCache = new Map<string, string>();
 // In-flight promise tracking to prevent duplicate concurrent network requests
 const inFlightRequests = new Map<string, Promise<string>>();
 
+// Circuit-breaker when Google Geocoding API key is unauthorized (REQUEST_DENIED)
+let googleGeocoderDenied = false;
+
+// Serialized queue for Nominatim fallback requests to respect Nominatim rate limits
+let nominatimQueue: Promise<any> = Promise.resolve();
+let lastNominatimCallMs = 0;
+
+/**
+ * Resets internal geocoder runtime flags (primarily for testing).
+ */
+export function resetGeocoderState(): void {
+  googleGeocoderDenied = false;
+}
+
 /**
  * Automatically purges all legacy/stale cache entries (e.g. v1, v2, or unversioned)
  * from localStorage to prevent stale backend values or incorrect place names.
@@ -59,6 +73,7 @@ invalidateLegacyGeocodeCache();
 export function clearGeocodeCache(): void {
   memoryCache.clear();
   inFlightRequests.clear();
+  googleGeocoderDenied = false;
   if (typeof window !== "undefined" && window.localStorage) {
     try {
       const keysToRemove: string[] = [];
@@ -283,10 +298,10 @@ function waitForGoogleMaps(timeoutMs = 4000): Promise<any> {
  * Reverse geocode using Google Maps JavaScript Geocoder in the browser.
  */
 async function reverseGeocodeGoogle(lat: number, lng: number): Promise<string | null> {
-  if (typeof window === "undefined") return null;
+  if (typeof window === "undefined" || googleGeocoderDenied) return null;
 
   const maps = await waitForGoogleMaps(3000);
-  if (!maps?.Geocoder) return null;
+  if (!maps?.Geocoder || googleGeocoderDenied) return null;
 
   return new Promise((resolve) => {
     try {
@@ -294,6 +309,11 @@ async function reverseGeocodeGoogle(lat: number, lng: number): Promise<string | 
       geocoder.geocode(
         { location: { lat, lng } },
         (results: any[], status: string) => {
+          if (status === "REQUEST_DENIED") {
+            googleGeocoderDenied = true;
+            resolve(null);
+            return;
+          }
           if (status === "OK" && Array.isArray(results) && results.length > 0) {
             // Select result with the most specific local components
             let selectedResult = results[0];
@@ -328,38 +348,49 @@ async function reverseGeocodeGoogle(lat: number, lng: number): Promise<string | 
 
 /**
  * Reverse geocode using OpenStreetMap Nominatim API as a secondary fallback.
- * Accurately extracts village, town, suburb, city without taluk substitution.
+ * Serialized through a lightweight queue to prevent rate-limit (429) bursts.
  */
-async function reverseGeocodeNominatim(lat: number, lng: number): Promise<string | null> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
-    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
-    const res = await fetch(url, {
-      headers: { "User-Agent": "NanjilDairyFleet/3.0 (fleet-reports)" },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+function reverseGeocodeNominatim(lat: number, lng: number): Promise<string | null> {
+  const task = nominatimQueue.then(async () => {
+    const elapsed = Date.now() - lastNominatimCallMs;
+    if (lastNominatimCallMs > 0 && elapsed < 350) {
+      await new Promise((r) => setTimeout(r, 350 - elapsed));
+    }
+    lastNominatimCallMs = Date.now();
 
-    if (!res.ok) return null;
-    const data = await res.json();
-    const addr = data.address || {};
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
+      const res = await fetch(url, {
+        headers: { "User-Agent": "NanjilDairyFleet/3.0 (fleet-reports)" },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
 
-    const formatted = formatAddressHierarchy({
-      village: addr.village || addr.hamlet,
-      sublocality: addr.suburb || addr.neighbourhood,
-      town: addr.town,
-      locality: addr.city,
-      district: addr.state_district || addr.county,
-      state: addr.state,
-      country: addr.country || "India",
-      formattedAddress: data.display_name,
-    });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const addr = data.address || {};
 
-    return formatted || null;
-  } catch {
-    return null;
-  }
+      const formatted = formatAddressHierarchy({
+        village: addr.village || addr.hamlet,
+        sublocality: addr.suburb || addr.neighbourhood,
+        town: addr.town,
+        locality: addr.city,
+        district: addr.state_district || addr.county,
+        state: addr.state,
+        country: addr.country || "India",
+        formattedAddress: data.display_name,
+      });
+
+      return formatted || null;
+    } catch {
+      return null;
+    }
+  });
+
+  nominatimQueue = task.catch(() => null);
+  return task;
 }
 
 /**

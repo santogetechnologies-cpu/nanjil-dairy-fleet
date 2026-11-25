@@ -290,14 +290,18 @@ export function useOdometerTracking(vehicles: Vehicle[]) {
           const row = payload.new as any;
           if (!row || !row.id || typeof row.odometer !== "number") return;
           const cleanBase = Math.round(Number(row.odometer) * 100) / 100;
+          const isDriverClosure = row.odometer_source === "DRIVER_TRIP_CLOSURE";
           const current = statesRef.current[row.id];
           const isNaturalGpsPersistence =
             current &&
             (Math.abs(current.totalOdometerKm - cleanBase) <= 1.05 ||
               (current.totalOdometerKm >= cleanBase && Math.abs(current.baselineOdometerKm - cleanBase) <= 1.05));
 
-          if (!isNaturalGpsPersistence) {
+          if (!isNaturalGpsPersistence || isDriverClosure) {
             const updatedState = syncManualOdometerBaseline(current, cleanBase, row.id, row.device_id);
+            if (isDriverClosure) {
+              updatedState.currentTripDistanceKm = 0;
+            }
             const nextMap = {
               ...statesRef.current,
               [row.id]: updatedState,
