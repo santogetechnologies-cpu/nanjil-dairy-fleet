@@ -13,6 +13,7 @@ export interface VehicleOperationTripRecord {
   vehicle_id: string;
   driver_id: string;
   route_id?: string | null;
+  statement_number?: string | null;
   date: string;
   start: string;
   destination: string;
@@ -35,8 +36,19 @@ export interface VehicleOperationTripRecord {
   odometer_updated_source?: string | null;
   notes?: string | null;
   created_at?: string;
-  vehicles?: { number?: string; route?: string; odometer?: number } | null;
+  vehicles?: { number?: string; model?: string; route?: string; odometer?: number } | null;
 }
+
+export interface ClockInEligibilityInput {
+  driverId?: string | null;
+  assignedVehicleId?: string | null;
+  hasActiveShift?: boolean;
+  hasActiveDriverTrip?: boolean;
+  vehicleHasOtherDriverTrip?: boolean;
+  vehicleStatus?: string | null;
+}
+
+export type DriverTripPeriodFilter = "today" | "week" | "month" | "custom";
 
 export interface TripStartValidationInput {
   vehicleId?: string | null;
@@ -201,6 +213,103 @@ export function formatDurationMinutes(totalMinutes: number): string {
 }
 
 /**
+ * Formats an authoritative or fallback Nanjil VIP Statement Number.
+ */
+export function formatStatementNumber(trip?: Partial<VehicleOperationTripRecord> | null): string {
+  if (!trip) return "NVIP-PENDING";
+  if (trip.statement_number && trip.statement_number.trim()) {
+    return trip.statement_number.trim();
+  }
+  const datePart = (trip.out_date || trip.date || getTodayIstDateString()).replace(/-/g, "");
+  const suffix = trip.id ? trip.id.slice(0, 4).toUpperCase() : "NEW";
+  return `NVIP-${datePart}-${suffix}`;
+}
+
+/**
+ * Returns IST time-of-day greeting for the Driver Clock-In header.
+ */
+export function getIstGreeting(refDate = new Date()): "Good Morning" | "Good Afternoon" | "Good Evening" {
+  try {
+    const hourStr = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      hour12: false,
+    }).format(refDate);
+    const hour = Number(hourStr);
+    if (hour >= 17) return "Good Evening";
+    if (hour >= 12) return "Good Afternoon";
+    return "Good Morning";
+  } catch {
+    return "Good Morning";
+  }
+}
+
+/**
+ * Validates driver eligibility before clocking in.
+ */
+export function validateClockInEligibility(input: ClockInEligibilityInput): {
+  allowed: boolean;
+  error?: string;
+} {
+  if (!input.driverId) {
+    return { allowed: false, error: "Authenticated driver profile not found. Please contact your administrator." };
+  }
+  if (!input.assignedVehicleId) {
+    return { allowed: false, error: "No Vehicle Assigned. Please contact your administrator." };
+  }
+  if (input.hasActiveShift) {
+    return { allowed: false, error: "Duplicate Clock In prevented: You are already clocked in." };
+  }
+  if (input.hasActiveDriverTrip) {
+    return { allowed: false, error: "You already have an active trip in progress. Complete it first." };
+  }
+  if (input.vehicleHasOtherDriverTrip) {
+    return { allowed: false, error: "Assigned vehicle is unavailable because another active trip is in progress." };
+  }
+  return { allowed: true };
+}
+
+/**
+ * Filters driver trips cleanly in Asia/Kolkata timezone for Today, This Week, This Month, or Custom Date.
+ */
+export function filterDriverTripsByPeriod(
+  trips: VehicleOperationTripRecord[],
+  period: DriverTripPeriodFilter,
+  customStartDate?: string,
+  customEndDate?: string,
+  refTodayIst?: string
+): VehicleOperationTripRecord[] {
+  const todayIst = refTodayIst || getTodayIstDateString();
+  const [yr, mo, dy] = todayIst.split("-").map(Number);
+
+  let startIst = todayIst;
+  let endIst = todayIst;
+
+  if (period === "week") {
+    const dt = new Date(Date.UTC(yr, mo - 1, dy));
+    const dayOfWeek = dt.getUTCDay(); // 0=Sun..6=Sat
+    const diffToMon = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    dt.setUTCDate(dt.getUTCDate() - diffToMon);
+    startIst = dt.toISOString().slice(0, 10);
+    endIst = todayIst;
+  } else if (period === "month") {
+    startIst = `${String(yr)}-${String(mo).padStart(2, "0")}-01`;
+    endIst = todayIst;
+  } else if (period === "custom") {
+    const s = (customStartDate || todayIst).trim();
+    const e = (customEndDate || s).trim();
+    startIst = s <= e ? s : e;
+    endIst = s <= e ? e : s;
+  }
+
+  return (trips || []).filter((t) => {
+    const tripDate = (t.in_date || t.out_date || t.date || "").slice(0, 10);
+    if (!tripDate) return false;
+    return tripDate >= startIst && tripDate <= endIst;
+  });
+}
+
+/**
  * Validates whether a driver is allowed to start a new trip on the assigned vehicle.
  */
 export function validateTripStart(input: TripStartValidationInput): {
@@ -307,6 +416,9 @@ export function validateTripCloseStatement(
   if (!input.inTime || !/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(input.inTime.trim())) {
     errors.inTime = "Valid In Time is required.";
   }
+  if (input.inDate && input.outDate && input.inDate.trim() < input.outDate.trim()) {
+    errors.inDate = "In Date cannot be earlier than Out Date.";
+  }
   if (outMs !== null && inMs !== null && Math.floor(inMs / 60000) < Math.floor(outMs / 60000)) {
     errors.inTime = "In Date and In Time cannot be earlier than Out Date and Out Time.";
   }
@@ -316,7 +428,7 @@ export function validateTripCloseStatement(
   const parsedDiesel = parseStrictNumericInput(input.dieselLitresRaw);
   if (!parsedDiesel.empty) {
     if (!parsedDiesel.valid || parsedDiesel.value < 0) {
-      errors.dieselLitres = "Diesel (Litres) cannot be negative or invalid.";
+      errors.dieselLitres = "Please enter a valid non-negative diesel quantity.";
     } else {
       dieselLitres = parsedDiesel.value;
     }
@@ -326,7 +438,7 @@ export function validateTripCloseStatement(
   const parsedAmount = parseStrictNumericInput(input.fuelAmountRaw);
   if (!parsedAmount.empty) {
     if (!parsedAmount.valid || parsedAmount.value < 0) {
-      errors.fuelAmount = "Fuel Amount cannot be negative or invalid.";
+      errors.fuelAmount = "Please enter a valid non-negative fuel amount.";
     } else {
       fuelAmount = parsedAmount.value;
     }
@@ -357,6 +469,48 @@ export function validateTripCloseStatement(
       durationLabel: formatDurationMinutes(durationMinutes),
     },
   };
+}
+
+/**
+ * Clocks in an authenticated driver after verifying admin vehicle assignment & availability.
+ */
+export async function submitDriverClockIn(supabaseClient: any): Promise<{
+  ok: boolean;
+  shift?: any;
+  vehicle?: any;
+  authoritativeOdometer?: number;
+  hasActiveTrip?: boolean;
+  activeTrip?: VehicleOperationTripRecord | null;
+  error?: string;
+}> {
+  const { data, error } = await supabaseClient.rpc("driver_clock_in");
+  if (error) {
+    return { ok: false, error: formatRpcErrorMessage(error.message) };
+  }
+  return {
+    ok: true,
+    shift: data?.shift,
+    vehicle: data?.vehicle,
+    authoritativeOdometer:
+      data?.authoritative_odometer != null ? Number(data.authoritative_odometer) : undefined,
+    hasActiveTrip: Boolean(data?.has_active_trip),
+    activeTrip: (data?.active_trip as VehicleOperationTripRecord) || null,
+  };
+}
+
+/**
+ * Clocks out an authenticated driver shift when no Ongoing trip remains unclosed.
+ */
+export async function submitDriverClockOut(supabaseClient: any): Promise<{
+  ok: boolean;
+  shift?: any;
+  error?: string;
+}> {
+  const { data, error } = await supabaseClient.rpc("driver_clock_out");
+  if (error) {
+    return { ok: false, error: formatRpcErrorMessage(error.message) };
+  }
+  return { ok: true, shift: data?.shift };
 }
 
 /**
@@ -496,7 +650,7 @@ export async function submitDriverFuelRefillRpc(
 function formatRpcErrorMessage(raw?: string): string {
   if (!raw) return "Operation failed due to a server validation error.";
   if (raw.includes("Could not find the function") || raw.includes("PGRST202")) {
-    return "Database RPC is not deployed yet. Apply migration 20261125150000_driver_trip_statement_and_odometer_rpc.sql in Supabase.";
+    return "Database RPC is not deployed yet. Apply migration 20261125163000_driver_dashboard_vip_workflow.sql in Supabase.";
   }
   return raw;
 }

@@ -3,9 +3,15 @@ import assert from "node:assert/strict";
 import {
   computeRunningKm,
   computeTripKmpl,
+  filterDriverTripsByPeriod,
+  formatStatementNumber,
+  getIstGreeting,
   resolveAuthoritativeOutKm,
+  validateClockInEligibility,
   validateTripStart,
   validateTripCloseStatement,
+  submitDriverClockIn,
+  submitDriverClockOut,
   submitStartDriverTripStatement,
   submitCloseDriverTripStatement,
 } from "../src/lib/driverOperationStatement.ts";
@@ -332,4 +338,84 @@ test("Test 9: Zero diesel, In Time earlier than Out Time, and Trip Start guard r
   });
   assert.equal(startRes.ok, true);
   assert.equal(startRes.outKm, 66760);
+});
+
+test("Test 10: Clock In eligibility blocks unassigned drivers and duplicate Clock In", async () => {
+  const unassigned = validateClockInEligibility({
+    driverId: DRIVER_ID,
+    assignedVehicleId: null,
+  });
+  assert.equal(unassigned.allowed, false);
+  assert.equal(unassigned.error, "No Vehicle Assigned. Please contact your administrator.");
+
+  const duplicate = validateClockInEligibility({
+    driverId: DRIVER_ID,
+    assignedVehicleId: VEHICLE_ID,
+    hasActiveShift: true,
+  });
+  assert.equal(duplicate.allowed, false);
+  assert.ok(duplicate.error?.includes("Duplicate Clock In prevented"));
+
+  const valid = validateClockInEligibility({
+    driverId: DRIVER_ID,
+    assignedVehicleId: VEHICLE_ID,
+    hasActiveShift: false,
+    hasActiveDriverTrip: false,
+    vehicleHasOtherDriverTrip: false,
+  });
+  assert.equal(valid.allowed, true);
+
+  const mockClockInClient = {
+    rpc: async (fnName) => ({
+      data:
+        fnName === "driver_clock_in"
+          ? {
+              ok: true,
+              shift: { id: "s1", driver_id: DRIVER_ID, vehicle_id: VEHICLE_ID },
+              vehicle: { id: VEHICLE_ID, number: "TN75 BE 7871", odometer: 66755 },
+              authoritative_odometer: 66755,
+              has_active_trip: false,
+            }
+          : { ok: true },
+      error: null,
+    }),
+  };
+
+  const clockInRes = await submitDriverClockIn(mockClockInClient);
+  assert.equal(clockInRes.ok, true);
+  assert.equal(clockInRes.authoritativeOdometer, 66755);
+
+  const clockOutRes = await submitDriverClockOut(mockClockInClient);
+  assert.equal(clockOutRes.ok, true);
+});
+
+test("Test 11: Statement Number formatting, IST greetings, and My Trips period filters", () => {
+  assert.equal(
+    formatStatementNumber({
+      id: "abcd1234-0000-4000-8000-000000000000",
+      out_date: "2026-11-25",
+    }),
+    "NVIP-20261125-ABCD"
+  );
+  assert.equal(
+    formatStatementNumber({ id: TRIP_ID, statement_number: "NVIP-20261125-7871" }),
+    "NVIP-20261125-7871"
+  );
+
+  // IST greetings: 04:00Z = 09:30 IST (Morning), 08:00Z = 13:30 IST (Afternoon), 13:00Z = 18:30 IST (Evening)
+  assert.equal(getIstGreeting(new Date("2026-11-25T04:00:00Z")), "Good Morning");
+  assert.equal(getIstGreeting(new Date("2026-11-25T08:00:00Z")), "Good Afternoon");
+  assert.equal(getIstGreeting(new Date("2026-11-25T13:00:00Z")), "Good Evening");
+
+  const sampleTrips = [
+    { id: "1", vehicle_id: VEHICLE_ID, driver_id: DRIVER_ID, date: "2026-11-25", in_date: "2026-11-25", start: "A", destination: "B", status: "Completed" },
+    { id: "2", vehicle_id: VEHICLE_ID, driver_id: DRIVER_ID, date: "2026-11-23", in_date: "2026-11-23", start: "A", destination: "B", status: "Completed" },
+    { id: "3", vehicle_id: VEHICLE_ID, driver_id: DRIVER_ID, date: "2026-11-05", in_date: "2026-11-05", start: "A", destination: "B", status: "Completed" },
+    { id: "4", vehicle_id: VEHICLE_ID, driver_id: DRIVER_ID, date: "2026-10-18", in_date: "2026-10-18", start: "A", destination: "B", status: "Completed" },
+  ];
+
+  assert.equal(filterDriverTripsByPeriod(sampleTrips, "today", undefined, undefined, "2026-11-25").length, 1);
+  assert.equal(filterDriverTripsByPeriod(sampleTrips, "week", undefined, undefined, "2026-11-25").length, 2);
+  assert.equal(filterDriverTripsByPeriod(sampleTrips, "month", undefined, undefined, "2026-11-25").length, 3);
+  assert.equal(filterDriverTripsByPeriod(sampleTrips, "custom", "2026-10-01", "2026-11-10", "2026-11-25").length, 2);
 });
