@@ -90,6 +90,7 @@ function Page() {
       admin: "Administrator",
       manager: "Fleet Manager",
       driver: "Driver",
+      gatekeeper: "Gate Keeper",
       operations: "Operations"
     };
 
@@ -216,6 +217,7 @@ function Page() {
       "Administrator": "admin",
       "Fleet Manager": "manager",
       "Driver": "driver",
+      "Gate Keeper": "gatekeeper",
       "Operations": "operations"
     };
     const roleVal = roleMapping[form.role] || "driver";
@@ -866,6 +868,7 @@ function Page() {
                   <option>Administrator</option>
                   <option>Fleet Manager</option>
                   <option>Driver</option>
+                  <option>Gate Keeper</option>
                 </select>
               </div>
 

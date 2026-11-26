@@ -106,7 +106,7 @@ export default function SettingsPage() {
   const [newUserForm, setNewUserForm] = useState({
     name: "",
     email: "",
-    role: "driver" as "admin" | "manager" | "driver",
+    role: "driver" as "admin" | "manager" | "driver" | "gatekeeper",
     password: "",
   });
   const [driverList, setDriverList] = useState<{ id: string; name: string; phone: string }[]>([]);
@@ -209,7 +209,7 @@ export default function SettingsPage() {
       const cleanEmail = newUserForm.email.toLowerCase().trim();
       let createdAuthUserId: string | null = null;
 
-      const { data, error } = await supabase.auth.signUp({
+      const { data, error } = await settingsTempAuthClient.auth.signUp({
         email: cleanEmail,
         password: newUserForm.password,
         options: {
@@ -228,7 +228,7 @@ export default function SettingsPage() {
           } catch {
             // Ignore
           }
-          const retry = await supabase.auth.signUp({
+          const retry = await settingsTempAuthClient.auth.signUp({
             email: cleanEmail,
             password: newUserForm.password,
             options: {
@@ -752,7 +752,7 @@ export default function SettingsPage() {
             <div>
               <div className="text-base font-bold text-slate-900">User Roles & Access Permissions</div>
               <div className="text-xs text-slate-500">
-                Managed strictly into 3 user-facing roles: Administrator, Fleet Manager, and Driver
+                Managed strictly into 4 user-facing roles: Administrator, Fleet Manager, Driver, and Gate Keeper
               </div>
             </div>
 
@@ -798,10 +798,18 @@ export default function SettingsPage() {
                               ? "bg-purple-50 text-purple-700 border-purple-200 font-bold"
                               : u.role === "manager"
                               ? "bg-indigo-50 text-indigo-700 border-indigo-200 font-semibold"
+                              : u.role === "gatekeeper"
+                              ? "bg-teal-50 text-teal-700 border-teal-200 font-semibold"
                               : "bg-slate-100 text-slate-700"
                           }
                         >
-                          {u.role === "admin" ? "Administrator" : u.role === "manager" ? "Fleet Manager" : "Driver"}
+                          {u.role === "admin"
+                            ? "Administrator"
+                            : u.role === "manager"
+                            ? "Fleet Manager"
+                            : u.role === "gatekeeper"
+                            ? "Gate Keeper"
+                            : "Driver"}
                         </Badge>
                       </td>
                       <td className="py-3 px-3">
@@ -814,6 +822,8 @@ export default function SettingsPage() {
                           ? "Full System Access"
                           : u.role === "manager"
                           ? "Fleet Operations & Reports"
+                          : u.role === "gatekeeper"
+                          ? "Vehicle Gate Out / In Register"
                           : "Driver Trip Portal"}
                       </td>
                       <td className="py-3 px-3 text-right">
@@ -865,7 +875,7 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <div className="text-sm font-bold text-slate-900">Add Staff Account</div>
-                <div className="text-xs text-slate-500">Only Admin, Manager, and Driver roles permitted</div>
+                <div className="text-xs text-slate-500">Admin, Manager, Driver, and Gate Keeper roles permitted</div>
               </div>
               <button
                 onClick={() => {
@@ -900,6 +910,7 @@ export default function SettingsPage() {
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 cursor-pointer"
                 >
                   <option value="driver">Driver</option>
+                  <option value="gatekeeper">Gate Keeper</option>
                   <option value="manager">Fleet Manager</option>
                   <option value="admin">Administrator</option>
                 </select>

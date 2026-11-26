@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/sonner";
 const IndexRedirect = lazy(() => import("./pages/index"));
 const LoginPage = lazy(() => import("./pages/login"));
 const DriverPage = lazy(() => import("./pages/driver"));
+const GatekeeperPage = lazy(() => import("./pages/gatekeeper"));
 const AppGate = lazy(() => import("./pages/_app"));
 
 // Operational Pages
@@ -63,6 +64,7 @@ export default function App() {
         <Route path="/" element={<IndexRedirect />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/driver" element={<DriverPage />} />
+        <Route path="/gatekeeper" element={<GatekeeperPage />} />
 
         {/* Authenticated Application Gate */}
         <Route element={<AppGate />}>

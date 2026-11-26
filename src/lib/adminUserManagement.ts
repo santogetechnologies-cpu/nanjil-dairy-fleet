@@ -6,12 +6,14 @@ export type CanonicalProfileRole =
   | "admin"
   | "manager"
   | "driver"
+  | "gatekeeper"
   | "operations";
 
 export function normalizeProfileRole(roleLabel?: string | null): CanonicalProfileRole {
   const clean = (roleLabel || "").trim().toLowerCase();
   if (clean === "admin" || clean === "administrator") return "admin";
   if (clean === "manager" || clean === "fleet manager") return "manager";
+  if (clean === "gatekeeper" || clean === "gate keeper") return "gatekeeper";
   if (clean === "operations" || clean === "operation") return "operations";
   return "driver";
 }

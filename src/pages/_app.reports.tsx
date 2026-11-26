@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/AppLayout";
 import { Badge, Button, Card } from "@/components/ui-kit";
 import {
@@ -27,6 +27,9 @@ import {
   CheckCircle2,
   UserCheck,
   UsersRound,
+  ShieldCheck,
+  LogOut,
+  LogIn,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -93,12 +96,21 @@ import {
 } from "@/lib/driverAttendanceReports";
 import { fetchAssignmentsWithFallback } from "@/lib/driverRouteAssignments";
 import { DetailedDriverHistoryModal } from "@/components/DetailedDriverHistoryModal";
+import {
+  type RawVehicleGateLogRow,
+  type FormattedGatekeeperReportRow,
+  buildGatekeeperReportRows,
+  computeGatekeeperReportKpis,
+  buildGatekeeperReportCsv,
+  formatGateDuration,
+} from "@/lib/gatekeeperLogs";
 
 type ReportType =
   | "daily_activity"
   | "operation_management"
   | "driver_attendance"
   | "trip_route_history"
+  | "gatekeeper_logs"
   | "route_completion"
   | "speeding_incidents"
   | "fuel_efficiency"
@@ -121,10 +133,10 @@ function getYesterdayIstString(): string {
 
 function getStatusBadgeClass(status: string): string {
   const s = (status || "").toLowerCase();
-  if (s === "moving" || s.startsWith("active") || s === "completed" || s === "resolved") {
+  if (s === "moving" || s.startsWith("active") || s === "completed" || s === "resolved" || s === "returned") {
     return "bg-emerald-50 text-emerald-700 border-emerald-200";
   }
-  if (s === "idle" || s === "stationary") {
+  if (s === "idle" || s === "stationary" || s === "out") {
     return "bg-amber-50 text-amber-700 border-amber-200";
   }
   if (s === "parked" || s === "scheduled") {
@@ -138,6 +150,7 @@ function getStatusBadgeClass(status: string): string {
 
 export default function ReportsPage() {
   useAuth();
+  const nav = useNavigate();
   const [searchParams] = useSearchParams();
   const liveVehicles = useVehicles();
   const liveVehiclesRef = useRef(liveVehicles);
@@ -154,6 +167,9 @@ export default function ReportsPage() {
     }
     if (tabParam === "trip_route_history" || tabParam === "route_history") {
       return "trip_route_history";
+    }
+    if (tabParam === "gatekeeper_logs" || tabParam === "gatekeeper") {
+      return "gatekeeper_logs";
     }
     return "daily_activity";
   });
@@ -182,6 +198,10 @@ export default function ReportsPage() {
   const [operationAuditLogs, setOperationAuditLogs] = useState<any[]>([]);
   const [operationAuditMissing, setOperationAuditMissing] = useState(false);
   const [inspectStatementRow, setInspectStatementRow] = useState<FormattedOperationStatementRow | null>(null);
+
+  // Gatekeeper Report state
+  const [rawGateLogs, setRawGateLogs] = useState<RawVehicleGateLogRow[]>([]);
+  const [gatekeeperMissing, setGatekeeperMissing] = useState(false);
 
   // Master data & fetched report state
   const [vehicles, setVehicles] = useState<any[]>([]);
@@ -689,6 +709,25 @@ export default function ReportsPage() {
           setRawShifts((shRes.data || []) as RawShiftRow[]);
           setRawTripsAll(trRes.data || []);
           if (asgRes.data) setAssignments(asgRes.data);
+        } else if (selectedReport === "gatekeeper_logs") {
+          const { data, error } = await supabase
+            .from("vehicle_gate_logs")
+            .select("*, vehicles(id, number, device_id), drivers(id, name)")
+            .order("outgoing_at", { ascending: false })
+            .limit(1000);
+          if (cancelled) return;
+          if (error) {
+            const msg = error.message || "";
+            if (msg.includes("vehicle_gate_logs") || error.code === "PGRST205") {
+              setGatekeeperMissing(true);
+              setRawGateLogs([]);
+            } else {
+              throw error;
+            }
+          } else {
+            setGatekeeperMissing(false);
+            setRawGateLogs((data || []) as RawVehicleGateLogRow[]);
+          }
         } else if (selectedReport === "maintenance_costs") {
           const { data, error } = await supabase
             .from("maintenance_records")
@@ -765,6 +804,9 @@ export default function ReportsPage() {
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "odometer_audit_logs" }, () => {
         if (!cancelled && selectedReport === "operation_management") fetchReportData();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_gate_logs" }, () => {
+        if (!cancelled && selectedReport === "gatekeeper_logs") fetchReportData();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "vehicles" }, () => {
         if (!cancelled && (selectedReport === "daily_activity" || selectedReport === "operation_management")) {
@@ -1118,12 +1160,44 @@ export default function ReportsPage() {
     collectionRoutesList,
   ]);
 
+  const gatekeeperRows = useMemo(() => {
+    if (selectedReport !== "gatekeeper_logs") return [];
+    const rows = buildGatekeeperReportRows(rawGateLogs, dateBounds, {
+      vehicleNumber: selectedVehicle,
+      driverName: selectedDriverFilter,
+      statusFilter,
+    });
+    return filterAndSortReportRows(rows, {
+      searchQuery,
+      sortKey,
+      sortDir,
+    });
+  }, [
+    selectedReport,
+    rawGateLogs,
+    dateBounds,
+    selectedVehicle,
+    selectedDriverFilter,
+    statusFilter,
+    searchQuery,
+    sortKey,
+    sortDir,
+  ]);
+
+  const gatekeeperKpis = useMemo(
+    () => computeGatekeeperReportKpis(gatekeeperRows),
+    [gatekeeperRows]
+  );
+
   const filteredAndSortedRows = useMemo(() => {
     if (selectedReport === "driver_attendance") {
       return attendanceRows;
     }
     if (selectedReport === "trip_route_history") {
       return tripRouteHistoryRows;
+    }
+    if (selectedReport === "gatekeeper_logs") {
+      return gatekeeperRows;
     }
     if (selectedReport === "operation_management") {
       if (operationSubView === "vehicles") return operationFilteredVehicles;
@@ -1139,6 +1213,7 @@ export default function ReportsPage() {
     selectedReport,
     attendanceRows,
     tripRouteHistoryRows,
+    gatekeeperRows,
     operationSubView,
     operationFilteredVehicles,
     operationFilteredAuditLogs,
@@ -1155,7 +1230,8 @@ export default function ReportsPage() {
       selectedReport === "daily_activity" ||
       selectedReport === "operation_management" ||
       selectedReport === "driver_attendance" ||
-      selectedReport === "trip_route_history"
+      selectedReport === "trip_route_history" ||
+      selectedReport === "gatekeeper_logs"
     ) {
       return null;
     }
@@ -1179,6 +1255,9 @@ export default function ReportsPage() {
     }
     if (selectedReport === "trip_route_history") {
       return ["All", "Completed", "Ongoing", "Delayed"];
+    }
+    if (selectedReport === "gatekeeper_logs") {
+      return ["All", "Out", "Returned"];
     }
     if (selectedReport === "operation_management") {
       if (operationSubView === "vehicles") {
@@ -1256,6 +1335,8 @@ export default function ReportsPage() {
         ? buildAttendanceCsv(attendanceRows)
         : selectedReport === "trip_route_history"
         ? buildTripRouteHistoryCsv(tripRouteHistoryRows)
+        : selectedReport === "gatekeeper_logs"
+        ? buildGatekeeperReportCsv(gatekeeperRows)
         : selectedReport === "operation_management" && operationSubView === "vehicles"
         ? buildAllVehiclesOperationCsv(operationFilteredVehicles)
         : selectedReport === "operation_management" && operationSubView === "statements"
@@ -1361,6 +1442,7 @@ export default function ReportsPage() {
           { id: "operation_management", label: "Operation Management Report" },
           { id: "driver_attendance", label: "Driver Attendance" },
           { id: "trip_route_history", label: "Trip & Route History" },
+          { id: "gatekeeper_logs", label: "Gatekeeper Report" },
           { id: "route_completion", label: "Route Completion & Stops" },
           { id: "speeding_incidents", label: "Speeding & Safety Incidents" },
           { id: "fuel_efficiency", label: "Fuel Consumption & Mileage" },
@@ -1484,7 +1566,9 @@ export default function ReportsPage() {
                   <Truck className="h-3.5 w-3.5" />
                   All Fleet Vehicles ({allFleetVehicles.length})
                 </span>
-              ) : selectedReport === "driver_attendance" || selectedReport === "trip_route_history" ? (
+              ) : selectedReport === "driver_attendance" ||
+                selectedReport === "trip_route_history" ||
+                selectedReport === "gatekeeper_logs" ? (
                 <select
                   value={selectedVehicle}
                   onChange={(e) => setSelectedVehicle(e.target.value)}
@@ -1530,7 +1614,8 @@ export default function ReportsPage() {
 
             {(selectedReport === "operation_management" ||
               selectedReport === "driver_attendance" ||
-              selectedReport === "trip_route_history") && (
+              selectedReport === "trip_route_history" ||
+              selectedReport === "gatekeeper_logs") && (
               <div className="flex items-center gap-1.5">
                 <span className="text-slate-500 font-medium">Driver:</span>
                 <select
@@ -1542,7 +1627,12 @@ export default function ReportsPage() {
                   {drivers.map((d) => (
                     <option
                       key={d.id}
-                      value={selectedReport === "operation_management" ? d.name : d.id}
+                      value={
+                        selectedReport === "operation_management" ||
+                        selectedReport === "gatekeeper_logs"
+                          ? d.name
+                          : d.id
+                      }
                     >
                       {d.name}
                     </option>
@@ -1879,11 +1969,85 @@ export default function ReportsPage() {
             </div>
           )}
 
+          {/* Gatekeeper Report Overview (5 Real Database Cards) */}
+          {selectedReport === "gatekeeper_logs" && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs text-slate-500 font-medium">
+                  Gate register logs recorded by Gate Keepers (Vehicle Outgoing &amp; Incoming times, Driver, Optional Salesman)
+                </div>
+                <button
+                  type="button"
+                  onClick={() => nav("/gatekeeper")}
+                  className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  Open Gatekeeper Entry Portal
+                </button>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                {[
+                  {
+                    label: "Total Gate Entries",
+                    value: gatekeeperKpis.totalEntries,
+                    hint: dateBounds.displayLabel,
+                    icon: ShieldCheck,
+                    color: "text-indigo-600",
+                  },
+                  {
+                    label: "Currently Out",
+                    value: gatekeeperKpis.currentlyOut,
+                    hint: "Awaiting gate return",
+                    icon: LogOut,
+                    color: "text-amber-600",
+                  },
+                  {
+                    label: "Returned Vehicles",
+                    value: gatekeeperKpis.returnedCount,
+                    hint: "Incoming logged",
+                    icon: LogIn,
+                    color: "text-emerald-600",
+                  },
+                  {
+                    label: "Avg Time Outside",
+                    value:
+                      gatekeeperKpis.avgDurationMins != null
+                        ? formatGateDuration(gatekeeperKpis.avgDurationMins)
+                        : "—",
+                    hint: "Completed entries",
+                    icon: Clock,
+                    color: "text-blue-600",
+                  },
+                  {
+                    label: "Vehicles Logged",
+                    value: gatekeeperKpis.uniqueVehicles,
+                    hint: `${gatekeeperKpis.uniqueDrivers} drivers recorded`,
+                    icon: Truck,
+                    color: "text-slate-700",
+                  },
+                ].map((kpi) => {
+                  const Icon = kpi.icon;
+                  return (
+                    <div key={kpi.label} className="bg-white border border-slate-200/80 p-3.5 rounded-2xl shadow-xs">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        <span>{kpi.label}</span>
+                        <Icon className={`h-3.5 w-3.5 ${kpi.color}`} />
+                      </div>
+                      <div className="text-xl font-extrabold text-slate-900 mt-1">{kpi.value}</div>
+                      <div className="text-[11px] text-slate-500 mt-0.5 truncate">{kpi.hint}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Other Report Tabs KPI Strip */}
           {selectedReport !== "daily_activity" &&
             selectedReport !== "operation_management" &&
             selectedReport !== "driver_attendance" &&
             selectedReport !== "trip_route_history" &&
+            selectedReport !== "gatekeeper_logs" &&
             otherReportInsights && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {otherReportInsights.kpis.map((kpi) => (
@@ -2277,6 +2441,76 @@ export default function ReportsPage() {
             ) : (
               <div className="py-10 text-center text-xs text-slate-400">
                 No trip and route history records match your filters.
+              </div>
+            )
+          ) : selectedReport === "gatekeeper_logs" ? (
+            gatekeeperMissing ? (
+              <div className="py-10 text-center space-y-2 text-xs text-amber-800 bg-amber-50 rounded-xl border border-amber-200 p-4">
+                <div className="font-bold">Vehicle Gate Logs table is not deployed yet.</div>
+                <div>
+                  Run migration <code>supabase/migrations/20261126150000_gatekeeper_role_and_vehicle_gate_logs.sql</code> in Supabase SQL Editor to enable Gatekeeper reports.
+                </div>
+              </div>
+            ) : paginatedRows.length > 0 ? (
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
+                    {[
+                      { key: "logDate", label: "Date" },
+                      { key: "vehicleNumber", label: "Vehicle No" },
+                      { key: "driverName", label: "Driver Name" },
+                      { key: "salesmanName", label: "Salesman Name" },
+                      { key: "outgoingTime", label: "Outgoing Time" },
+                      { key: "incomingTime", label: "Incoming Time" },
+                      { key: "durationMins", label: "Duration" },
+                      { key: "status", label: "Status" },
+                      { key: "gatekeeperName", label: "Recorded By" },
+                      { key: "notes", label: "Remarks" },
+                    ].map((col) => (
+                      <th
+                        key={col.key}
+                        onClick={() => handleSortColumn(col.key)}
+                        className="py-2.5 px-3 whitespace-nowrap cursor-pointer select-none hover:text-slate-700"
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          <span>{col.label}</span>
+                          <ArrowUpDown className="h-3 w-3 opacity-60" />
+                          {sortKey === col.key && (
+                            <span className="text-indigo-600 font-bold">
+                              {sortDir === "asc" ? "↑" : "↓"}
+                            </span>
+                          )}
+                        </span>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(paginatedRows as FormattedGatekeeperReportRow[]).map((row) => (
+                    <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-3 px-3 font-medium text-slate-700 whitespace-nowrap">{row.logDate}</td>
+                      <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">{row.vehicleNumber}</td>
+                      <td className="py-3 px-3 font-semibold text-slate-800 whitespace-nowrap">{row.driverName}</td>
+                      <td className="py-3 px-3 text-slate-600 whitespace-nowrap">{row.salesmanName}</td>
+                      <td className="py-3 px-3 font-semibold text-amber-700 whitespace-nowrap">{row.outgoingTime}</td>
+                      <td className="py-3 px-3 font-semibold text-emerald-700 whitespace-nowrap">{row.incomingTime}</td>
+                      <td className="py-3 px-3 text-slate-700 whitespace-nowrap">{row.durationDisplay}</td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <Badge variant="outline" className={`text-[10px] ${getStatusBadgeClass(row.status)}`}>
+                          {row.status}
+                        </Badge>
+                      </td>
+                      <td className="py-3 px-3 text-slate-600 whitespace-nowrap">{row.gatekeeperName}</td>
+                      <td className="py-3 px-3 text-slate-500 max-w-[180px] truncate" title={row.notes}>
+                        {row.notes}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="py-10 text-center text-xs text-slate-400">
+                No gatekeeper entries found in Supabase for the selected period and filters.
               </div>
             )
           ) : selectedReport === "operation_management" && operationSubView === "audit" ? (
