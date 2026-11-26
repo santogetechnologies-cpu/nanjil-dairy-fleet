@@ -86,6 +86,7 @@ function Page() {
       admin: "Administrator",
       manager: "Fleet Manager",
       driver: "Driver",
+      gatekeeper: "Gate Keeper",
       operations: "Operations"
     };
 
@@ -212,6 +213,7 @@ function Page() {
       "Administrator": "admin",
       "Fleet Manager": "manager",
       "Driver": "driver",
+      "Gate Keeper": "gatekeeper",
       "Operations": "operations"
     };
     const roleVal = roleMapping[form.role] || "driver";
@@ -620,7 +622,17 @@ function Page() {
 
       // 2. If user doesn't have an auth account yet, create one via tempClient
       if (!resetSuccess) {
-        const userRole = selectedUser.role.toLowerCase() === "driver" ? "driver" : selectedUser.role.toLowerCase();
+        const lowerRole = selectedUser.role.toLowerCase();
+        const userRole =
+          lowerRole === "driver"
+            ? "driver"
+            : lowerRole === "gate keeper" || lowerRole === "gatekeeper"
+            ? "gatekeeper"
+            : lowerRole === "administrator" || lowerRole === "admin"
+            ? "admin"
+            : lowerRole === "fleet manager" || lowerRole === "manager"
+            ? "manager"
+            : lowerRole;
         const { data: signUpRes, error: signUpErr } = await tempClient.auth.signUp({
           email: cleanEmail,
           password: newPwd,
@@ -660,7 +672,17 @@ function Page() {
 
       // 3. Ensure profile and driver record are synced
       if (targetAuthId) {
-        const roleName = selectedUser.role.toLowerCase() === "driver" ? "driver" : selectedUser.role.toLowerCase();
+        const lowerRole = selectedUser.role.toLowerCase();
+        const roleName =
+          lowerRole === "driver"
+            ? "driver"
+            : lowerRole === "gate keeper" || lowerRole === "gatekeeper"
+            ? "gatekeeper"
+            : lowerRole === "administrator" || lowerRole === "admin"
+            ? "admin"
+            : lowerRole === "fleet manager" || lowerRole === "manager"
+            ? "manager"
+            : lowerRole;
         await supabase.from('profiles').upsert({
           id: targetAuthId,
           name: selectedUser.name,
@@ -962,6 +984,7 @@ function Page() {
                   <option>Administrator</option>
                   <option>Fleet Manager</option>
                   <option>Driver</option>
+                  <option>Gate Keeper</option>
                 </select>
               </div>
 

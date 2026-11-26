@@ -267,8 +267,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
     };
   }, [liveVehicles]);
 
-  // Dedicated Driver View (standalone mobile-first interface)
-  if (user?.role === "driver") {
+  // Dedicated Driver & Gatekeeper Views (standalone mobile-first interfaces)
+  if (user?.role === "driver" || user?.role === "gatekeeper") {
     return <>{children}</>;
   }
 
