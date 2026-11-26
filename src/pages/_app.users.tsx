@@ -3,9 +3,13 @@ import { PageHeader } from "@/components/AppLayout";
 import { Card, Badge, Button } from "@/components/ui-kit";
 import { DataTable } from "@/components/DataTable";
 import { useAuth } from "@/lib/auth";
-import { Plus, X, Eye, EyeOff, Loader2 } from "lucide-react";
+import { Plus, X, Eye, EyeOff, Loader2, KeyRound } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { createClient } from "@supabase/supabase-js";
+import {
+  executeAdminPasswordReset,
+  validateAdminPasswordReset,
+} from "@/lib/adminUserManagement";
 
 const tempClient = (globalThis as any)._tempSupabaseClient || (() => {
   const client = createClient(
@@ -554,141 +558,27 @@ function Page() {
   async function handleResetPassword(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedUser) return;
-    if (newPwd.length < 8) {
-      setResetError("Password must be at least 8 characters.");
+
+    const validation = validateAdminPasswordReset(newPwd, confirmPwd, user?.role);
+    if (!validation.valid) {
+      setResetError(validation.error || "Invalid password input.");
       return;
     }
-    if (newPwd !== confirmPwd) {
-      setResetError("Passwords do not match.");
-      return;
-    }
+
     setResetting(true);
     setResetError("");
 
     try {
-      const cleanEmail = selectedUser.email.includes("@")
-        ? selectedUser.email.toLowerCase().trim()
-        : `${selectedUser.name.toLowerCase().replace(/[^a-z0-9]/g, "")}@nanjilmilk.com`;
-
-      let targetAuthId: string | null = null;
-      let driverDbId: string | null = null;
-
-      if (selectedUser.id.startsWith("driver-")) {
-        driverDbId = selectedUser.id.replace("driver-", "");
-        const { data: drv } = await supabase
-          .from('drivers')
-          .select('id, profile_id')
-          .eq('id', driverDbId)
-          .maybeSingle();
-        targetAuthId = drv?.profile_id || null;
-      } else {
-        targetAuthId = selectedUser.id;
+      const res = await executeAdminPasswordReset(supabase, tempClient, selectedUser, newPwd);
+      if (!res.ok) {
+        setResetError(res.error || "Failed to reset password.");
+        return;
       }
 
-      // Check profiles if targetAuthId is still not found
-      if (!targetAuthId) {
-        const { data: profsByEmail } = await supabase
-          .from('profiles')
-          .select('id')
-          .ilike('email', cleanEmail);
-        if (profsByEmail && profsByEmail.length > 0) {
-          targetAuthId = profsByEmail[0].id;
-        }
-      }
-      if (!targetAuthId) {
-        const { data: profsByName } = await supabase
-          .from('profiles')
-          .select('id')
-          .ilike('name', selectedUser.name.trim());
-        if (profsByName && profsByName.length > 0) {
-          targetAuthId = profsByName[0].id;
-        }
-      }
-
-      let resetSuccess = false;
-
-      // 1. Reset password via admin RPC if user ID is known
-      if (targetAuthId) {
-        const { error: resetErr } = await supabase.rpc("admin_reset_user_password", {
-          user_id: targetAuthId,
-          new_password: newPwd
-        });
-        if (!resetErr) {
-          resetSuccess = true;
-        }
-      }
-
-      // 2. If user doesn't have an auth account yet, create one via tempClient
-      if (!resetSuccess) {
-        const userRole = selectedUser.role.toLowerCase() === "driver" ? "driver" : selectedUser.role.toLowerCase();
-        const { data: signUpRes, error: signUpErr } = await tempClient.auth.signUp({
-          email: cleanEmail,
-          password: newPwd,
-          options: { data: { name: selectedUser.name, role: userRole } }
-        });
-
-        if (!signUpErr && signUpRes?.user) {
-          targetAuthId = signUpRes.user.id;
-          resetSuccess = true;
-        } else if (signUpErr) {
-          const isAlreadyRegistered =
-            signUpErr.status === 422 ||
-            signUpErr.message?.toLowerCase().includes("already registered");
-
-          if (isAlreadyRegistered) {
-            try {
-              await supabase.rpc('admin_delete_user_by_email', { target_email: cleanEmail });
-            } catch (e) {
-              // ignore
-            }
-            const retry = await tempClient.auth.signUp({
-              email: cleanEmail,
-              password: newPwd,
-              options: { data: { name: selectedUser.name, role: userRole } }
-            });
-            if (retry.data?.user) {
-              targetAuthId = retry.data.user.id;
-              resetSuccess = true;
-            } else {
-              throw new Error(retry.error?.message || "Failed to reset password.");
-            }
-          } else {
-            throw new Error(`Failed to reset password: ${signUpErr.message}`);
-          }
-        }
-      }
-
-      // 3. Ensure profile and driver record are synced
-      if (targetAuthId) {
-        const roleName = selectedUser.role.toLowerCase() === "driver" ? "driver" : selectedUser.role.toLowerCase();
-        await supabase.from('profiles').upsert({
-          id: targetAuthId,
-          name: selectedUser.name,
-          email: cleanEmail,
-          role: roleName,
-          status: selectedUser.status || 'Active',
-          created_at: new Date().toISOString()
-        }, { onConflict: 'id' });
-
-        const { data: drvWithProfile } = await supabase
-          .from('drivers')
-          .select('id')
-          .eq('profile_id', targetAuthId);
-
-        if (drvWithProfile && drvWithProfile.length > 0) {
-          await supabase.from('drivers').update({ name: selectedUser.name }).eq('id', drvWithProfile[0].id);
-        } else if (driverDbId) {
-          const { error: updErr } = await supabase
-            .from('drivers')
-            .update({ profile_id: targetAuthId })
-            .eq('id', driverDbId);
-          if (updErr && updErr.code === '23505') {
-            await supabase.from('drivers').update({ name: selectedUser.name }).eq('profile_id', targetAuthId);
-          }
-        }
-      }
-
-      setToast({ show: true, message: `Password for ${selectedUser.name} reset successfully.` });
+      setToast({
+        show: true,
+        message: `Password for ${selectedUser.name} (${res.email}) reset successfully.`,
+      });
       setShowResetPwd(false);
       setNewPwd("");
       setConfirmPwd("");
@@ -696,9 +586,9 @@ function Page() {
       setShowConfirmPwd(false);
       setSelectedUser(null);
       loadUsers();
-      setTimeout(() => setToast({ show: false, message: "" }), 3000);
+      setTimeout(() => setToast({ show: false, message: "" }), 3500);
     } catch (err: any) {
-      setResetError(err.message || "Failed to reset password.");
+      setResetError(err?.message || "Failed to reset password.");
     } finally {
       setResetting(false);
     }
@@ -772,9 +662,23 @@ function Page() {
               <Button size="sm" variant="outline" onClick={() => toggle(u.id)}>
                 {u.status === "Active" ? "Deactivate" : "Activate"}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => { setSelectedUser(u); setShowResetPwd(true); }}>
-                Reset Pwd
-              </Button>
+              {user?.role === "admin" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setSelectedUser(u);
+                    setResetError("");
+                    setNewPwd("");
+                    setConfirmPwd("");
+                    setShowNewPwd(false);
+                    setShowConfirmPwd(false);
+                    setShowResetPwd(true);
+                  }}
+                >
+                  <KeyRound className="h-3.5 w-3.5 mr-1" /> Reset Password
+                </Button>
+              )}
               {u.id !== user?.id && (
                 <Button size="sm" variant="destructive" onClick={() => deleteUser(u.id)}>
                   Delete
