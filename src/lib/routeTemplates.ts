@@ -63,12 +63,7 @@ export function isValidRouteEndpoint(
   return Boolean(
     pt &&
       typeof pt.name === "string" &&
-      pt.name.trim().length > 0 &&
-      typeof pt.lat === "number" &&
-      Number.isFinite(pt.lat) &&
-      typeof pt.lng === "number" &&
-      Number.isFinite(pt.lng) &&
-      (pt.lat !== 0 || pt.lng !== 0)
+      pt.name.trim().length > 0
   );
 }
 
@@ -86,13 +81,13 @@ export function validateManualRouteConfig(input: {
   if (!isValidRouteEndpoint(input.startPoint)) {
     return {
       valid: false,
-      error: "Valid Starting Location with coordinates is required. Search or pick on the map.",
+      error: "Starting Location name is required.",
     };
   }
   if (!isValidRouteEndpoint(input.destinationPoint)) {
     return {
       valid: false,
-      error: "Valid Destination with coordinates is required. Search or pick on the map.",
+      error: "Destination name is required.",
     };
   }
   if (!["one_way", "same_path", "different_path"].includes(input.roundTripType)) {
@@ -106,20 +101,20 @@ export function validateManualRouteConfig(input: {
   }
   for (let i = 0; i < input.outboundStops.length; i++) {
     const s = input.outboundStops[i];
-    if (!s?.name?.trim() || !Number.isFinite(s.lat) || !Number.isFinite(s.lng) || (s.lat === 0 && s.lng === 0)) {
+    if (!s?.name?.trim()) {
       return {
         valid: false,
-        error: `Outbound stop #${i + 1} requires a valid name and map coordinates.`,
+        error: `Outbound stop #${i + 1} requires a stop name.`,
       };
     }
   }
   if (input.roundTripType === "different_path") {
     for (let i = 0; i < input.returnStops.length; i++) {
       const s = input.returnStops[i];
-      if (!s?.name?.trim() || !Number.isFinite(s.lat) || !Number.isFinite(s.lng) || (s.lat === 0 && s.lng === 0)) {
+      if (!s?.name?.trim()) {
         return {
           valid: false,
-          error: `Return stop #${i + 1} requires a valid name and map coordinates.`,
+          error: `Return stop #${i + 1} requires a stop name.`,
         };
       }
     }

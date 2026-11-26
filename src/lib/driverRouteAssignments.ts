@@ -117,26 +117,8 @@ export function isValidSavedRoute(routeRow: any): boolean {
 
   const start = config.startPoint;
   const dest = config.destinationPoint || config.destination;
-  const hasStart = Boolean(
-    start &&
-      typeof start.name === "string" &&
-      start.name.trim() &&
-      typeof start.lat === "number" &&
-      Number.isFinite(start.lat) &&
-      typeof start.lng === "number" &&
-      Number.isFinite(start.lng) &&
-      (start.lat !== 0 || start.lng !== 0)
-  );
-  const hasDest = Boolean(
-    dest &&
-      typeof dest.name === "string" &&
-      dest.name.trim() &&
-      typeof dest.lat === "number" &&
-      Number.isFinite(dest.lat) &&
-      typeof dest.lng === "number" &&
-      Number.isFinite(dest.lng) &&
-      (dest.lat !== 0 || dest.lng !== 0)
-  );
+  const hasStart = Boolean(start && typeof start.name === "string" && start.name.trim());
+  const hasDest = Boolean(dest && typeof dest.name === "string" && dest.name.trim());
 
   return hasStart && hasDest;
 }

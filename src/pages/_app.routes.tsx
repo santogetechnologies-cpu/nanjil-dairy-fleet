@@ -1711,48 +1711,12 @@ export default function RoutesPlannerPage() {
                       onChange={(e) => {
                         const val = e.target.value;
                         setStartPoint((prev) =>
-                          prev
-                            ? { ...prev, name: val }
-                            : { name: val, lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng }
+                          prev ? { ...prev, name: val } : { name: val, lat: 0, lng: 0 }
                         );
                       }}
                       placeholder="Type starting location name or Pick on map..."
                       className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white outline-none focus:border-indigo-500 font-medium text-slate-800"
                     />
-                    <div className="grid grid-cols-2 gap-1.5 mt-1">
-                      <input
-                        type="number"
-                        step="0.0001"
-                        value={startPoint?.lat ?? ""}
-                        onChange={(e) => {
-                          const lat = parseFloat(e.target.value);
-                          if (!Number.isFinite(lat)) return;
-                          setStartPoint((prev) => ({
-                            name: prev?.name || "Origin",
-                            lat,
-                            lng: prev?.lng ?? 77.2884,
-                          }));
-                        }}
-                        placeholder="Lat (e.g. 8.2607)"
-                        className="text-[11px] px-2 py-1 rounded border border-slate-200 bg-slate-50 font-mono"
-                      />
-                      <input
-                        type="number"
-                        step="0.0001"
-                        value={startPoint?.lng ?? ""}
-                        onChange={(e) => {
-                          const lng = parseFloat(e.target.value);
-                          if (!Number.isFinite(lng)) return;
-                          setStartPoint((prev) => ({
-                            name: prev?.name || "Origin",
-                            lat: prev?.lat ?? 8.2607,
-                            lng,
-                          }));
-                        }}
-                        placeholder="Lng (e.g. 77.2883)"
-                        className="text-[11px] px-2 py-1 rounded border border-slate-200 bg-slate-50 font-mono"
-                      />
-                    </div>
                   </div>
 
                   <div>
@@ -1778,48 +1742,12 @@ export default function RoutesPlannerPage() {
                       onChange={(e) => {
                         const val = e.target.value;
                         setDestinationPoint((prev) =>
-                          prev
-                            ? { ...prev, name: val }
-                            : { name: val, lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng }
+                          prev ? { ...prev, name: val } : { name: val, lat: 0, lng: 0 }
                         );
                       }}
                       placeholder="Type destination name or Pick on map..."
                       className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50/40 outline-none focus:border-amber-500 font-semibold text-amber-950"
                     />
-                    <div className="grid grid-cols-2 gap-1.5 mt-1">
-                      <input
-                        type="number"
-                        step="0.0001"
-                        value={destinationPoint?.lat ?? ""}
-                        onChange={(e) => {
-                          const lat = parseFloat(e.target.value);
-                          if (!Number.isFinite(lat)) return;
-                          setDestinationPoint((prev) => ({
-                            name: prev?.name || "Destination",
-                            lat,
-                            lng: prev?.lng ?? 77.2884,
-                          }));
-                        }}
-                        placeholder="Lat (e.g. 8.0883)"
-                        className="text-[11px] px-2 py-1 rounded border border-slate-200 bg-slate-50 font-mono"
-                      />
-                      <input
-                        type="number"
-                        step="0.0001"
-                        value={destinationPoint?.lng ?? ""}
-                        onChange={(e) => {
-                          const lng = parseFloat(e.target.value);
-                          if (!Number.isFinite(lng)) return;
-                          setDestinationPoint((prev) => ({
-                            name: prev?.name || "Destination",
-                            lat: prev?.lat ?? 8.0883,
-                            lng,
-                          }));
-                        }}
-                        placeholder="Lng (e.g. 77.5385)"
-                        className="text-[11px] px-2 py-1 rounded border border-slate-200 bg-slate-50 font-mono"
-                      />
-                    </div>
                   </div>
 
                   <div>
@@ -1963,7 +1891,7 @@ export default function RoutesPlannerPage() {
                       step="0.0001"
                       value={manualStopLat}
                       onChange={(e) => setManualStopLat(e.target.value)}
-                      placeholder="Lat *"
+                      placeholder="Lat (optional)"
                       className="px-2 py-1.5 rounded-lg border border-indigo-200 bg-white text-xs font-mono"
                     />
                     <input
@@ -1971,7 +1899,7 @@ export default function RoutesPlannerPage() {
                       step="0.0001"
                       value={manualStopLng}
                       onChange={(e) => setManualStopLng(e.target.value)}
-                      placeholder="Lng *"
+                      placeholder="Lng (optional)"
                       className="px-2 py-1.5 rounded-lg border border-indigo-200 bg-white text-xs font-mono"
                     />
                     <input
@@ -2205,7 +2133,7 @@ export default function RoutesPlannerPage() {
                         step="0.0001"
                         value={manualStopLat}
                         onChange={(e) => setManualStopLat(e.target.value)}
-                        placeholder="Lat *"
+                        placeholder="Lat (optional)"
                         className="px-2 py-1.5 rounded-lg border border-emerald-200 bg-white text-xs font-mono"
                       />
                       <input
@@ -2213,7 +2141,7 @@ export default function RoutesPlannerPage() {
                         step="0.0001"
                         value={manualStopLng}
                         onChange={(e) => setManualStopLng(e.target.value)}
-                        placeholder="Lng *"
+                        placeholder="Lng (optional)"
                         className="px-2 py-1.5 rounded-lg border border-emerald-200 bg-white text-xs font-mono"
                       />
                       <input

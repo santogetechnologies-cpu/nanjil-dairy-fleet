@@ -115,19 +115,31 @@ export function GoogleRoutePlannerMap({
     );
   }
 
+  const isPlottable = (pt?: { lat?: number; lng?: number } | null): pt is { lat: number; lng: number } =>
+    Boolean(
+      pt &&
+        typeof pt.lat === "number" &&
+        Number.isFinite(pt.lat) &&
+        typeof pt.lng === "number" &&
+        Number.isFinite(pt.lng) &&
+        (pt.lat !== 0 || pt.lng !== 0)
+    );
+
   const allPointsToFit = useMemo(() => {
     const list: Array<{ lat: number; lng: number }> = [];
     if (normalizedOutbound.length > 0) {
       list.push(...normalizedOutbound);
     } else {
-      if (startPoint) list.push({ lat: startPoint.lat, lng: startPoint.lng });
-      if (destinationPoint) list.push({ lat: destinationPoint.lat, lng: destinationPoint.lng });
-      outboundStops.forEach((s) => list.push({ lat: s.lat, lng: s.lng }));
+      if (isPlottable(startPoint)) list.push({ lat: startPoint.lat, lng: startPoint.lng });
+      if (isPlottable(destinationPoint)) list.push({ lat: destinationPoint.lat, lng: destinationPoint.lng });
+      outboundStops.forEach((s) => {
+        if (isPlottable(s)) list.push({ lat: s.lat, lng: s.lng });
+      });
     }
     if (roundTripType === "different_path" && normalizedReturn.length > 0) {
       list.push(...normalizedReturn);
     }
-    if (activeVehicle && typeof activeVehicle.lat === "number" && typeof activeVehicle.lng === "number") {
+    if (isPlottable(activeVehicle)) {
       list.push({ lat: activeVehicle.lat, lng: activeVehicle.lng });
     }
     return list;
@@ -146,7 +158,7 @@ export function GoogleRoutePlannerMap({
   return (
     <div className="relative w-full overflow-hidden" style={{ height }}>
       <Map
-        defaultCenter={startPoint ? { lat: startPoint.lat, lng: startPoint.lng } : NANJIL_DAIRY_DEPOT}
+        defaultCenter={isPlottable(startPoint) ? { lat: startPoint.lat, lng: startPoint.lng } : NANJIL_DAIRY_DEPOT}
         defaultZoom={DEFAULT_MAP_ZOOM}
         mapId={GOOGLE_MAPS_MAP_ID}
         gestureHandling="greedy"
@@ -197,7 +209,7 @@ export function GoogleRoutePlannerMap({
         )}
 
         {/* Start Point Marker (Depot) */}
-        {startPoint && (
+        {isPlottable(startPoint) && (
           <AdvancedMarker position={{ lat: startPoint.lat, lng: startPoint.lng }}>
             <div className="flex flex-col items-center group cursor-pointer">
               <div className="bg-slate-900 text-white text-[10px] font-bold px-2 py-0.5 rounded-md shadow-md border border-slate-700 whitespace-nowrap">
@@ -211,7 +223,7 @@ export function GoogleRoutePlannerMap({
         )}
 
         {/* Destination Marker */}
-        {destinationPoint && (
+        {isPlottable(destinationPoint) && (
           <AdvancedMarker position={{ lat: destinationPoint.lat, lng: destinationPoint.lng }}>
             <div className="flex flex-col items-center group cursor-pointer">
               <div className="bg-amber-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-md shadow-md border border-amber-700 whitespace-nowrap">
@@ -225,7 +237,7 @@ export function GoogleRoutePlannerMap({
         )}
 
         {/* Outbound Stops */}
-        {outboundStops.map((stop, idx) => {
+        {outboundStops.filter((s) => isPlottable(s)).map((stop, idx) => {
           const isSelected = activeStopId === stop.id;
           return (
             <AdvancedMarker
