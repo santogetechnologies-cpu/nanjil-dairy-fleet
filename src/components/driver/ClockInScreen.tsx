@@ -19,11 +19,17 @@ import {
   validateClockInEligibility,
   type VehicleOperationTripRecord,
 } from "@/lib/driverOperationStatement";
+import type { RouteAssignmentRecord, RouteSummaryInfo } from "@/lib/driverRouteAssignments";
+import { getTodayIstDateString } from "@/lib/odometerTrackingEngine";
 import type { DriverAssignedVehicle, DriverProfileData } from "./types";
+import { AssignedWorkCard } from "./AssignedWorkCard";
 
 interface ClockInScreenProps {
   driver: DriverProfileData;
   vehicle: DriverAssignedVehicle;
+  activeAssignment: RouteAssignmentRecord | null;
+  upcomingAssignment: RouteAssignmentRecord | null;
+  routeSummary: RouteSummaryInfo | null;
   assignedVehiclesCount: number;
   authoritativeOdometer: number;
   hasOtherDriverTrip: boolean;
@@ -38,6 +44,9 @@ interface ClockInScreenProps {
 export function ClockInScreen({
   driver,
   vehicle,
+  activeAssignment,
+  upcomingAssignment,
+  routeSummary,
   assignedVehiclesCount,
   authoritativeOdometer,
   hasOtherDriverTrip,
@@ -71,10 +80,20 @@ export function ClockInScreen({
     hour12: true,
   });
 
-  const hasVehicle = Boolean(vehicle?.id && assignedVehiclesCount > 0);
+  const todayIst = getTodayIstDateString();
+  const hasDueScheduled = Boolean(
+    upcomingAssignment &&
+      upcomingAssignment.status === "Scheduled" &&
+      upcomingAssignment.assignment_date <= todayIst
+  );
+  const hasVehicle = Boolean(
+    (vehicle?.id && assignedVehiclesCount > 0) ||
+      activeAssignment?.vehicle_id ||
+      hasDueScheduled
+  );
   const eligibility = validateClockInEligibility({
     driverId: driver?.id,
-    assignedVehicleId: hasVehicle ? vehicle.id : null,
+    assignedVehicleId: hasVehicle ? vehicle.id || activeAssignment?.vehicle_id || upcomingAssignment?.vehicle_id : null,
     vehicleHasOtherDriverTrip: hasOtherDriverTrip,
     vehicleStatus: vehicle?.status,
   });
@@ -188,47 +207,15 @@ export function ClockInScreen({
         </button>
       </div>
 
-      {/* ── Assigned Vehicle & Odometer Preview Card ── */}
-      <div className="bg-card border border-border rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center">
-              <Truck className="h-4 w-4" />
-            </div>
-            <div>
-              <div className="text-xs font-bold text-foreground uppercase tracking-wider">Assigned Vehicle</div>
-              <div className="text-[11px] text-muted-foreground">Synced from Admin Directory</div>
-            </div>
-          </div>
-          {hasVehicle ? (
-            <Badge status={vehicle.status}>{vehicle.status}</Badge>
-          ) : (
-            <Badge status="Offline">Unassigned</Badge>
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs bg-muted/40 p-3 rounded-xl border border-border/60">
-          <div>
-            <div className="text-[10px] font-bold uppercase text-muted-foreground">Registration</div>
-            <div className="font-bold text-foreground mt-0.5">{hasVehicle ? vehicle.number : "Unassigned"}</div>
-          </div>
-          <div>
-            <div className="text-[10px] font-bold uppercase text-muted-foreground">Model</div>
-            <div className="font-semibold text-foreground mt-0.5">{vehicle.model || vehicle.type || "—"}</div>
-          </div>
-          <div className="col-span-2 sm:col-span-1">
-            <div className="text-[10px] font-bold uppercase text-muted-foreground">Current Odometer</div>
-            <div className="font-bold text-indigo-700 mt-0.5 flex items-center gap-1">
-              <Gauge className="h-3.5 w-3.5" />
-              {hasVehicle ? `${authoritativeOdometer.toLocaleString()} KM` : "—"}
-            </div>
-          </div>
-          <div className="col-span-2 sm:col-span-3">
-            <div className="text-[10px] font-bold uppercase text-muted-foreground">Assigned Route</div>
-            <div className="font-medium text-foreground mt-0.5">{vehicle.route || "No route assigned"}</div>
-          </div>
-        </div>
-      </div>
+      {/* ── Assigned Work, Vehicle & Collection Route Card ── */}
+      <AssignedWorkCard
+        driver={driver}
+        vehicle={vehicle}
+        assignment={activeAssignment}
+        upcomingAssignment={upcomingAssignment}
+        routeSummary={routeSummary}
+        authoritativeOdometer={authoritativeOdometer}
+      />
 
       {/* ── Today's Trip Status & Recent Trips Snapshot ── */}
       <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-xs">

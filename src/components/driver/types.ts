@@ -1,4 +1,5 @@
 import type { VehicleOperationTripRecord } from "@/lib/driverOperationStatement";
+import type { RouteAssignmentRecord, RouteSummaryInfo } from "@/lib/driverRouteAssignments";
 
 export type DriverTabId = "home" | "trips" | "vehicle" | "profile";
 
@@ -54,6 +55,12 @@ export interface DriverAlertItem {
   type: string;
   time: string;
   resolved: boolean;
+}
+
+export interface DriverAssignedWorkInfo {
+  assignment: RouteAssignmentRecord | null;
+  upcomingAssignment: RouteAssignmentRecord | null;
+  routeSummary: RouteSummaryInfo | null;
 }
 
 export type RecentTripCardItem = VehicleOperationTripRecord;

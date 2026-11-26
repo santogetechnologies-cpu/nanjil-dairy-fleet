@@ -25,6 +25,8 @@ import {
   Eye,
   Fuel,
   CheckCircle2,
+  UserCheck,
+  UsersRound,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -78,10 +80,25 @@ import {
   buildAllVehiclesOperationSummary,
   buildAllVehiclesOperationCsv,
 } from "@/lib/operationReport";
+import {
+  type RawShiftRow,
+  type FormattedAttendanceRow,
+  type FormattedTripRouteHistoryRow,
+  computeAttendanceOverviewKpis,
+  buildDriverAttendanceRows,
+  buildDriverTripRouteHistoryRows,
+  buildDetailedDriverHistory,
+  buildAttendanceCsv,
+  buildTripRouteHistoryCsv,
+} from "@/lib/driverAttendanceReports";
+import { fetchAssignmentsWithFallback } from "@/lib/driverRouteAssignments";
+import { DetailedDriverHistoryModal } from "@/components/DetailedDriverHistoryModal";
 
 type ReportType =
   | "daily_activity"
   | "operation_management"
+  | "driver_attendance"
+  | "trip_route_history"
   | "route_completion"
   | "speeding_incidents"
   | "fuel_efficiency"
@@ -132,6 +149,12 @@ export default function ReportsPage() {
     if (tabParam === "operation_management" || tabParam === "operation") {
       return "operation_management";
     }
+    if (tabParam === "driver_attendance" || tabParam === "attendance") {
+      return "driver_attendance";
+    }
+    if (tabParam === "trip_route_history" || tabParam === "route_history") {
+      return "trip_route_history";
+    }
     return "daily_activity";
   });
   const [dateRange, setDateRange] = useState<ReportDateMode>("today");
@@ -139,12 +162,19 @@ export default function ReportsPage() {
   const [customEndDate, setCustomEndDate] = useState<string>(() => getTodayIstString());
   const [selectedVehicle, setSelectedVehicle] = useState("All");
   const [selectedDriverFilter, setSelectedDriverFilter] = useState("All");
+  const [selectedRouteFilter, setSelectedRouteFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  // Driver Attendance & Trip/Route History state
+  const [collectionRoutesList, setCollectionRoutesList] = useState<any[]>([]);
+  const [rawShifts, setRawShifts] = useState<RawShiftRow[]>([]);
+  const [rawTripsAll, setRawTripsAll] = useState<any[]>([]);
+  const [inspectDriverId, setInspectDriverId] = useState<string | null>(null);
 
   // Operation Management Report sub-state
   const [operationSubView, setOperationSubView] = useState<"vehicles" | "statements" | "audit">("vehicles");
@@ -167,13 +197,29 @@ export default function ReportsPage() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const dateBounds = useMemo(() => {
+    const isDriverAuditTab =
+      selectedReport === "driver_attendance" || selectedReport === "trip_route_history";
+    if (isDriverAuditTab && (dateRange === "week" || dateRange === "month")) {
+      const todayStr = getTodayIstString();
+      const [y, m, d] = todayStr.split("-").map(Number);
+      if (dateRange === "week") {
+        const dt = new Date(Date.UTC(y, m - 1, d));
+        const dow = dt.getUTCDay();
+        const diffToMon = dow === 0 ? 6 : dow - 1;
+        dt.setUTCDate(dt.getUTCDate() - diffToMon);
+        return resolveReportDateBounds("custom", dt.toISOString().slice(0, 10), todayStr);
+      }
+      const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
+      return resolveReportDateBounds("custom", monthStart, todayStr);
+    }
     return resolveReportDateBounds(dateRange, customStartDate, customEndDate);
-  }, [dateRange, customStartDate, customEndDate]);
+  }, [selectedReport, dateRange, customStartDate, customEndDate]);
 
   // Reset sort/pagination when switching report tabs (keep Operation Management strictly on All Vehicles)
   useEffect(() => {
     setStatusFilter("All");
     setSelectedDriverFilter("All");
+    setSelectedRouteFilter("All");
     if (selectedReport === "operation_management") {
       setSelectedVehicle("All");
       setOperationSubView("vehicles");
@@ -185,7 +231,7 @@ export default function ReportsPage() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [dateBounds, selectedVehicle, selectedDriverFilter, statusFilter, searchQuery, pageSize, operationSubView]);
+  }, [dateBounds, selectedVehicle, selectedDriverFilter, selectedRouteFilter, statusFilter, searchQuery, pageSize, operationSubView]);
 
   // Map live Firebase/Realtime telemetry by vehicle UUID and vehicle number
   const liveVehicleByKey = useMemo(() => {
@@ -202,15 +248,14 @@ export default function ReportsPage() {
   useEffect(() => {
     let cancelled = false;
     async function loadMetadata() {
-      const [vRes, dRes, aRes] = await Promise.all([
+      const [vRes, dRes, aRes, rRes] = await Promise.all([
         supabase
           .from("v_vehicles")
           .select("id, number, driver_name, type, model, route, odometer, status, location, lat, lng, last_update, device_id")
           .order("number"),
-        supabase.from("drivers").select("id, name, phone"),
-        supabase
-          .from("vehicle_assignments")
-          .select("id, vehicle_id, driver_id, assigned_at, unassigned_at, is_active, drivers(id, name)"),
+        supabase.from("drivers").select("id, name, phone, license, profile_id").order("name"),
+        fetchAssignmentsWithFallback(supabase),
+        supabase.from("collection_routes").select("*").order("name"),
       ]);
 
       if (cancelled) return;
@@ -251,8 +296,18 @@ export default function ReportsPage() {
         (a.number || "").localeCompare(b.number || "")
       );
       setVehicles(sortedFleet);
-      if (dRes.data) setDrivers(dRes.data);
+      if (dRes.data) {
+        const dMap = new Map<string, any>();
+        dRes.data.forEach((d: any) => {
+          const k = (d.name || d.id).trim().toLowerCase();
+          if (!dMap.has(k) || (d.profile_id && !dMap.get(k).profile_id)) {
+            dMap.set(k, d);
+          }
+        });
+        setDrivers(Array.from(dMap.values()));
+      }
       if (aRes.data) setAssignments(aRes.data);
+      if (rRes.data) setCollectionRoutesList(rRes.data);
     }
     loadMetadata();
     return () => {
@@ -607,6 +662,31 @@ export default function ReportsPage() {
             setOperationAuditMissing(false);
             setOperationAuditLogs(aRes.data || []);
           }
+        } else if (
+          selectedReport === "driver_attendance" ||
+          selectedReport === "trip_route_history"
+        ) {
+          const [shRes, trRes, asgRes] = await Promise.all([
+            supabase
+              .from("driver_shifts")
+              .select("*")
+              .order("started_at", { ascending: false })
+              .limit(1000),
+            supabase
+              .from("trips")
+              .select("*, vehicles(id, number, route, odometer), drivers(id, name)")
+              .order("date", { ascending: false })
+              .order("created_at", { ascending: false })
+              .limit(1000),
+            fetchAssignmentsWithFallback(supabase),
+          ]);
+          if (cancelled) return;
+          if (shRes.error) throw shRes.error;
+          if (trRes.error) throw trRes.error;
+
+          setRawShifts((shRes.data || []) as RawShiftRow[]);
+          setRawTripsAll(trRes.data || []);
+          if (asgRes.data) setAssignments(asgRes.data);
         } else if (selectedReport === "maintenance_costs") {
           const { data, error } = await supabase
             .from("maintenance_records")
@@ -656,7 +736,30 @@ export default function ReportsPage() {
         if (!cancelled && selectedReport === "speeding_incidents") fetchReportData();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "trips" }, () => {
-        if (!cancelled && selectedReport === "operation_management") fetchReportData();
+        if (
+          !cancelled &&
+          (selectedReport === "operation_management" ||
+            selectedReport === "driver_attendance" ||
+            selectedReport === "trip_route_history")
+        ) {
+          fetchReportData();
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "driver_shifts" }, () => {
+        if (
+          !cancelled &&
+          (selectedReport === "driver_attendance" || selectedReport === "trip_route_history")
+        ) {
+          fetchReportData();
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_assignments" }, () => {
+        if (
+          !cancelled &&
+          (selectedReport === "driver_attendance" || selectedReport === "trip_route_history")
+        ) {
+          fetchReportData();
+        }
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "odometer_audit_logs" }, () => {
         if (!cancelled && selectedReport === "operation_management") fetchReportData();
@@ -905,7 +1008,121 @@ export default function ReportsPage() {
     });
   }, [operationAuditLogs, selectedDriverFilter, searchQuery]);
 
+  const attendanceOverviewKpis = useMemo(
+    () => computeAttendanceOverviewKpis(drivers, rawShifts, getTodayIstString()),
+    [drivers, rawShifts]
+  );
+
+  const attendanceRows = useMemo(() => {
+    if (selectedReport !== "driver_attendance") return [];
+    const selectedVehObj =
+      selectedVehicle !== "All"
+        ? allFleetVehicles.find((v) => v.number === selectedVehicle)
+        : null;
+    const rows = buildDriverAttendanceRows(
+      drivers,
+      rawShifts,
+      allFleetVehicles,
+      collectionRoutesList,
+      assignments,
+      dateBounds,
+      {
+        driverId: selectedDriverFilter,
+        vehicleId: selectedVehObj?.id || "All",
+        routeId: selectedRouteFilter,
+        statusFilter,
+      }
+    );
+    return filterAndSortReportRows(rows, {
+      searchQuery,
+      sortKey,
+      sortDir,
+    });
+  }, [
+    selectedReport,
+    drivers,
+    rawShifts,
+    allFleetVehicles,
+    collectionRoutesList,
+    assignments,
+    dateBounds,
+    selectedDriverFilter,
+    selectedVehicle,
+    selectedRouteFilter,
+    statusFilter,
+    searchQuery,
+    sortKey,
+    sortDir,
+  ]);
+
+  const tripRouteHistoryRows = useMemo(() => {
+    if (selectedReport !== "trip_route_history") return [];
+    const selectedVehObj =
+      selectedVehicle !== "All"
+        ? allFleetVehicles.find((v) => v.number === selectedVehicle)
+        : null;
+    const rows = buildDriverTripRouteHistoryRows(
+      rawTripsAll,
+      drivers,
+      allFleetVehicles,
+      collectionRoutesList,
+      dateBounds,
+      {
+        driverId: selectedDriverFilter,
+        vehicleId: selectedVehObj?.id || "All",
+        routeId: selectedRouteFilter,
+        tripStatus: statusFilter,
+      }
+    );
+    return filterAndSortReportRows(rows, {
+      searchQuery,
+      sortKey,
+      sortDir,
+    });
+  }, [
+    selectedReport,
+    rawTripsAll,
+    drivers,
+    allFleetVehicles,
+    collectionRoutesList,
+    dateBounds,
+    selectedDriverFilter,
+    selectedVehicle,
+    selectedRouteFilter,
+    statusFilter,
+    searchQuery,
+    sortKey,
+    sortDir,
+  ]);
+
+  const detailedDriverHistoryBundle = useMemo(() => {
+    if (!inspectDriverId) return null;
+    return buildDetailedDriverHistory(
+      inspectDriverId,
+      drivers,
+      rawShifts,
+      assignments,
+      rawTripsAll,
+      allFleetVehicles,
+      collectionRoutesList
+    );
+  }, [
+    inspectDriverId,
+    drivers,
+    rawShifts,
+    assignments,
+    rawTripsAll,
+    allFleetVehicles,
+    collectionRoutesList,
+  ]);
+
   const filteredAndSortedRows = useMemo(() => {
+    if (selectedReport === "driver_attendance") {
+      return attendanceRows;
+    }
+    if (selectedReport === "trip_route_history") {
+      return tripRouteHistoryRows;
+    }
     if (selectedReport === "operation_management") {
       if (operationSubView === "vehicles") return operationFilteredVehicles;
       return operationSubView === "audit" ? operationFilteredAuditLogs : operationFilteredStatements;
@@ -918,6 +1135,8 @@ export default function ReportsPage() {
     });
   }, [
     selectedReport,
+    attendanceRows,
+    tripRouteHistoryRows,
     operationSubView,
     operationFilteredVehicles,
     operationFilteredAuditLogs,
@@ -930,7 +1149,14 @@ export default function ReportsPage() {
   ]);
 
   const otherReportInsights = useMemo(() => {
-    if (selectedReport === "daily_activity" || selectedReport === "operation_management") return null;
+    if (
+      selectedReport === "daily_activity" ||
+      selectedReport === "operation_management" ||
+      selectedReport === "driver_attendance" ||
+      selectedReport === "trip_route_history"
+    ) {
+      return null;
+    }
     return computeOtherReportInsights(selectedReport, filteredAndSortedRows);
   }, [selectedReport, filteredAndSortedRows]);
 
@@ -945,6 +1171,12 @@ export default function ReportsPage() {
   const statusOptions = useMemo(() => {
     if (selectedReport === "daily_activity") {
       return ["All", "Active", "Idle", "Parked", "No Telemetry"];
+    }
+    if (selectedReport === "driver_attendance") {
+      return ["All", "On Duty", "Completed", "Not Clocked In"];
+    }
+    if (selectedReport === "trip_route_history") {
+      return ["All", "Completed", "Ongoing", "Delayed"];
     }
     if (selectedReport === "operation_management") {
       if (operationSubView === "vehicles") {
@@ -990,6 +1222,7 @@ export default function ReportsPage() {
     handlePresetDate("today");
     setSelectedVehicle("All");
     setSelectedDriverFilter("All");
+    setSelectedRouteFilter("All");
     setStatusFilter("All");
     setSearchQuery("");
     setSortKey(null);
@@ -1017,7 +1250,11 @@ export default function ReportsPage() {
   function exportCsv() {
     if (!filteredAndSortedRows.length) return;
     const csvContent =
-      selectedReport === "operation_management" && operationSubView === "vehicles"
+      selectedReport === "driver_attendance"
+        ? buildAttendanceCsv(attendanceRows)
+        : selectedReport === "trip_route_history"
+        ? buildTripRouteHistoryCsv(tripRouteHistoryRows)
+        : selectedReport === "operation_management" && operationSubView === "vehicles"
         ? buildAllVehiclesOperationCsv(operationFilteredVehicles)
         : selectedReport === "operation_management" && operationSubView === "statements"
         ? buildOperationReportCsv(operationFilteredStatements)
@@ -1120,6 +1357,8 @@ export default function ReportsPage() {
         {[
           { id: "daily_activity", label: "Daily Vehicle Activity" },
           { id: "operation_management", label: "Operation Management Report" },
+          { id: "driver_attendance", label: "Driver Attendance" },
+          { id: "trip_route_history", label: "Trip & Route History" },
           { id: "route_completion", label: "Route Completion & Stops" },
           { id: "speeding_incidents", label: "Speeding & Safety Incidents" },
           { id: "fuel_efficiency", label: "Fuel Consumption & Mileage" },
@@ -1147,14 +1386,23 @@ export default function ReportsPage() {
             <span className="text-slate-500 font-medium">Period:</span>
             <div className="bg-slate-100 p-0.5 rounded-lg flex flex-wrap items-center font-semibold">
               {(
-                [
-                  { id: "today", label: "Today" },
-                  { id: "yesterday", label: "Yesterday" },
-                  { id: "week", label: "Last 7 Days" },
-                  { id: "month", label: "Last 30 Days" },
-                  { id: "all", label: "All Time" },
-                  { id: "custom", label: "Pick Date" },
-                ] as const
+                selectedReport === "driver_attendance" || selectedReport === "trip_route_history"
+                  ? ([
+                      { id: "today", label: "Today" },
+                      { id: "yesterday", label: "Yesterday" },
+                      { id: "week", label: "This Week" },
+                      { id: "month", label: "This Month" },
+                      { id: "all", label: "All Time" },
+                      { id: "custom", label: "Custom Date Range" },
+                    ] as const)
+                  : ([
+                      { id: "today", label: "Today" },
+                      { id: "yesterday", label: "Yesterday" },
+                      { id: "week", label: "Last 7 Days" },
+                      { id: "month", label: "Last 30 Days" },
+                      { id: "all", label: "All Time" },
+                      { id: "custom", label: "Pick Date" },
+                    ] as const)
               ).map((d) => (
                 <button
                   key={d.id}
@@ -1234,6 +1482,19 @@ export default function ReportsPage() {
                   <Truck className="h-3.5 w-3.5" />
                   All Fleet Vehicles ({allFleetVehicles.length})
                 </span>
+              ) : selectedReport === "driver_attendance" || selectedReport === "trip_route_history" ? (
+                <select
+                  value={selectedVehicle}
+                  onChange={(e) => setSelectedVehicle(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-semibold text-slate-800 cursor-pointer"
+                >
+                  <option value="All">All Fleet Vehicles ({allFleetVehicles.length})</option>
+                  {allFleetVehicles.map((v) => (
+                    <option key={v.id} value={v.number}>
+                      {v.number}
+                    </option>
+                  ))}
+                </select>
               ) : (
                 <select
                   value={selectedVehicle}
@@ -1265,7 +1526,9 @@ export default function ReportsPage() {
               </select>
             </div>
 
-            {selectedReport === "operation_management" && (
+            {(selectedReport === "operation_management" ||
+              selectedReport === "driver_attendance" ||
+              selectedReport === "trip_route_history") && (
               <div className="flex items-center gap-1.5">
                 <span className="text-slate-500 font-medium">Driver:</span>
                 <select
@@ -1275,8 +1538,29 @@ export default function ReportsPage() {
                 >
                   <option value="All">All Drivers</option>
                   {drivers.map((d) => (
-                    <option key={d.id} value={d.name}>
+                    <option
+                      key={d.id}
+                      value={selectedReport === "operation_management" ? d.name : d.id}
+                    >
                       {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {(selectedReport === "driver_attendance" || selectedReport === "trip_route_history") && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500 font-medium">Route:</span>
+                <select
+                  value={selectedRouteFilter}
+                  onChange={(e) => setSelectedRouteFilter(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white font-semibold text-slate-800 cursor-pointer max-w-[180px]"
+                >
+                  <option value="All">All Collection Routes</option>
+                  {collectionRoutesList.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
                     </option>
                   ))}
                 </select>
@@ -1567,9 +1851,37 @@ export default function ReportsPage() {
             </div>
           )}
 
+          {/* Driver Attendance Overview (6 Real Database Cards) */}
+          {selectedReport === "driver_attendance" && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {[
+                { label: "Total Drivers", value: attendanceOverviewKpis.totalDrivers, hint: "Registered drivers", icon: UsersRound, color: "text-slate-700" },
+                { label: "Clocked In Today", value: attendanceOverviewKpis.clockedInToday, hint: "IST Today", icon: UserCheck, color: "text-indigo-600" },
+                { label: "Clocked Out Today", value: attendanceOverviewKpis.clockedOutToday, hint: "IST Today", icon: CheckCircle2, color: "text-emerald-600" },
+                { label: "Currently On Duty", value: attendanceOverviewKpis.currentlyOnDuty, hint: "Open active shifts", icon: Activity, color: "text-emerald-700" },
+                { label: "Completed Shifts", value: attendanceOverviewKpis.totalCompletedShifts, hint: "Recorded total", icon: ClipboardList, color: "text-blue-600" },
+                { label: "Avg Working Hours", value: `${attendanceOverviewKpis.avgWorkingHours.toFixed(2)} h`, hint: "Completed shifts", icon: Clock, color: "text-amber-600" },
+              ].map((kpi) => {
+                const Icon = kpi.icon;
+                return (
+                  <div key={kpi.label} className="bg-white border border-slate-200/80 p-3.5 rounded-2xl shadow-xs">
+                    <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      <span>{kpi.label}</span>
+                      <Icon className={`h-3.5 w-3.5 ${kpi.color}`} />
+                    </div>
+                    <div className="text-xl font-extrabold text-slate-900 mt-1">{kpi.value}</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">{kpi.hint}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {/* Other Report Tabs KPI Strip */}
           {selectedReport !== "daily_activity" &&
             selectedReport !== "operation_management" &&
+            selectedReport !== "driver_attendance" &&
+            selectedReport !== "trip_route_history" &&
             otherReportInsights && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {otherReportInsights.kpis.map((kpi) => (
@@ -1804,6 +2116,167 @@ export default function ReportsPage() {
                 <div key={idx} className="h-9 bg-slate-100 rounded-lg animate-pulse" />
               ))}
             </div>
+          ) : selectedReport === "driver_attendance" ? (
+            paginatedRows.length > 0 ? (
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
+                    {[
+                      { key: "driverName", label: "Driver Name" },
+                      { key: "driverPhone", label: "Driver Contact" },
+                      { key: "date", label: "Date" },
+                      { key: "clockInTime", label: "Clock-in Time" },
+                      { key: "clockOutTime", label: "Clock-out Time" },
+                      { key: "totalWorkingHoursNum", label: "Total Working Hours" },
+                      { key: "vehicleRegistration", label: "Vehicle Reg" },
+                      { key: "attendanceStatus", label: "Attendance Status" },
+                    ].map((col) => (
+                      <th
+                        key={col.key}
+                        onClick={() => handleSortColumn(col.key)}
+                        className="py-2.5 px-3 whitespace-nowrap cursor-pointer select-none hover:text-slate-700"
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          <span>{col.label}</span>
+                          <ArrowUpDown className="h-3 w-3 opacity-60" />
+                        </span>
+                      </th>
+                    ))}
+                    <th className="py-2.5 px-3 text-right whitespace-nowrap">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(paginatedRows as FormattedAttendanceRow[]).map((row) => (
+                    <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => setInspectDriverId(row.driverId)}
+                          className="hover:text-indigo-700 hover:underline text-left cursor-pointer"
+                        >
+                          {row.driverName}
+                        </button>
+                      </td>
+                      <td className="py-3 px-3 text-slate-600 whitespace-nowrap">{row.driverPhone}</td>
+                      <td className="py-3 px-3 font-medium text-slate-700 whitespace-nowrap">{row.date}</td>
+                      <td className="py-3 px-3 font-semibold text-slate-800 whitespace-nowrap">{row.clockInTime}</td>
+                      <td className="py-3 px-3 font-semibold text-slate-800 whitespace-nowrap">{row.clockOutTime}</td>
+                      <td className="py-3 px-3 font-bold text-indigo-700 whitespace-nowrap">{row.totalWorkingHours}</td>
+                      <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">{row.vehicleRegistration}</td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] ${
+                            row.attendanceStatus === "On Duty"
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : row.attendanceStatus === "Completed"
+                              ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+                              : "bg-slate-100 text-slate-600 border-slate-200"
+                          }`}
+                        >
+                          {row.attendanceStatus}
+                        </Badge>
+                      </td>
+                      <td className="py-3 px-3 text-right whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => setInspectDriverId(row.driverId)}
+                          className="px-2.5 py-1 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <Eye className="h-3 w-3" /> History
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="py-10 text-center text-xs text-slate-400">
+                No driver attendance records match your filters.
+              </div>
+            )
+          ) : selectedReport === "trip_route_history" ? (
+            paginatedRows.length > 0 ? (
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
+                    {[
+                      { key: "driverName", label: "Driver" },
+                      { key: "vehicleRegistration", label: "Vehicle Reg" },
+                      { key: "routeName", label: "Route Name" },
+                      { key: "startingPoint", label: "Starting Point" },
+                      { key: "destination", label: "Destination" },
+                      { key: "tripDate", label: "Trip Date" },
+                      { key: "departureTime", label: "Actual Dep" },
+                      { key: "returnTime", label: "Actual Return" },
+                      { key: "outKmNum", label: "Start Odo" },
+                      { key: "inKmNum", label: "End Odo" },
+                      { key: "distanceNum", label: "Distance" },
+                      { key: "tripDuration", label: "Duration" },
+                      { key: "tripStatus", label: "Status" },
+                      { key: "statementNumber", label: "Statement No" },
+                    ].map((col) => (
+                      <th
+                        key={col.key}
+                        onClick={() => handleSortColumn(col.key)}
+                        className="py-2.5 px-3 whitespace-nowrap cursor-pointer select-none hover:text-slate-700"
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          <span>{col.label}</span>
+                          <ArrowUpDown className="h-3 w-3 opacity-60" />
+                        </span>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(paginatedRows as FormattedTripRouteHistoryRow[]).map((row) => (
+                    <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
+                        {row.driverId ? (
+                          <button
+                            type="button"
+                            onClick={() => setInspectDriverId(row.driverId)}
+                            className="hover:text-indigo-700 hover:underline text-left cursor-pointer"
+                          >
+                            {row.driverName}
+                          </button>
+                        ) : (
+                          row.driverName
+                        )}
+                      </td>
+                      <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">{row.vehicleRegistration}</td>
+                      <td className="py-3 px-3 font-medium text-slate-800 max-w-[160px] truncate" title={row.routeName}>
+                        {row.routeName}
+                      </td>
+                      <td className="py-3 px-3 text-slate-600 max-w-[140px] truncate" title={row.startingPoint}>
+                        {row.startingPoint}
+                      </td>
+                      <td className="py-3 px-3 text-slate-600 max-w-[140px] truncate" title={row.destination}>
+                        {row.destination}
+                      </td>
+                      <td className="py-3 px-3 text-slate-700 whitespace-nowrap">{row.tripDate}</td>
+                      <td className="py-3 px-3 text-slate-700 whitespace-nowrap">{row.departureTime}</td>
+                      <td className="py-3 px-3 text-slate-700 whitespace-nowrap">{row.returnTime}</td>
+                      <td className="py-3 px-3 text-slate-700 whitespace-nowrap">{row.outKm}</td>
+                      <td className="py-3 px-3 font-semibold text-slate-900 whitespace-nowrap">{row.inKm}</td>
+                      <td className="py-3 px-3 font-extrabold text-indigo-700 whitespace-nowrap">{row.distanceTravelled}</td>
+                      <td className="py-3 px-3 text-slate-600 whitespace-nowrap">{row.tripDuration}</td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <Badge variant="outline" className={`text-[10px] ${getStatusBadgeClass(row.tripStatus)}`}>
+                          {row.tripStatus}
+                        </Badge>
+                      </td>
+                      <td className="py-3 px-3 font-mono font-bold text-slate-700 whitespace-nowrap">{row.statementNumber}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="py-10 text-center text-xs text-slate-400">
+                No trip and route history records match your filters.
+              </div>
+            )
           ) : selectedReport === "operation_management" && operationSubView === "audit" ? (
             operationAuditMissing ? (
               <div className="py-10 text-center space-y-2 text-xs text-amber-800 bg-amber-50 rounded-xl border border-amber-200 p-4">
@@ -2156,6 +2629,12 @@ export default function ReportsPage() {
           </div>
         )}
       </Card>
+
+      {/* Detailed Driver Attendance, Assignments & Trip History Modal */}
+      <DetailedDriverHistoryModal
+        bundle={detailedDriverHistoryBundle}
+        onClose={() => setInspectDriverId(null)}
+      />
 
       {/* Printable Nanjil Dairy Operation Statement Sheet Modal */}
       {inspectStatementRow && (

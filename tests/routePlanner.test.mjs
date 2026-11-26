@@ -1,5 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {
+  createEmptyRouteDraft,
+  validateManualRouteConfig,
+} from "../src/lib/routeTemplates.ts";
 
 // Mock dairy depot and presets
 const NANJIL_DAIRY_DEPOT = {
@@ -453,4 +457,47 @@ test("11. Start New Route: Clears editingRouteId and cleanly resets active works
   assert.equal(loaded.routeName, "New Milk Collection Loop");
   assert.equal(loaded.outboundStops.length, 2);
 });
+
+test("12. Empty Designer State: createEmptyRouteDraft starts with blank route and zero preset stops", () => {
+  const draft = createEmptyRouteDraft();
+  assert.equal(draft.routeName, "");
+  assert.equal(draft.startPoint, null);
+  assert.equal(draft.destinationPoint, null);
+  assert.deepEqual(draft.outboundStops, []);
+  assert.deepEqual(draft.returnStops, []);
+  assert.equal(draft.roundTripType, "one_way");
+});
+
+test("13. Manual Route Validation: rejects missing endpoints or stops and accepts complete manual routes", () => {
+  const emptyCheck = validateManualRouteConfig(createEmptyRouteDraft());
+  assert.equal(emptyCheck.valid, false);
+  assert.match(emptyCheck.error || "", /Route Name/i);
+
+  const missingStopCheck = validateManualRouteConfig({
+    routeName: "Route A - Coastal",
+    startPoint: { name: "Plant Origin", lat: 8.2607, lng: 77.2883 },
+    destinationPoint: { name: "Colachel Hub", lat: 8.1755, lng: 77.2562 },
+    outboundStops: [],
+    returnStops: [],
+    roundTripType: "one_way",
+  });
+  assert.equal(missingStopCheck.valid, false);
+  assert.match(missingStopCheck.error || "", /outbound collection stop/i);
+
+  const validManualRoute = validateManualRouteConfig({
+    routeName: "Route A - Coastal",
+    startPoint: { name: "Plant Origin", lat: 8.2607, lng: 77.2883 },
+    destinationPoint: { name: "Colachel Hub", lat: 8.1755, lng: 77.2562 },
+    outboundStops: [
+      { id: "m-1", name: "Villukuri Centre", lat: 8.2435, lng: 77.3325, serviceDurationMins: 5, isMandatory: true },
+      { id: "m-2", name: "Eraniel Union", lat: 8.2045, lng: 77.3065, serviceDurationMins: 6, isMandatory: false },
+    ],
+    returnStops: [
+      { id: "r-1", name: "Thingal Nagar", lat: 8.2165, lng: 77.2785, serviceDurationMins: 5, isMandatory: false },
+    ],
+    roundTripType: "different_path",
+  });
+  assert.equal(validManualRoute.valid, true);
+});
+
 
