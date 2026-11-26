@@ -5,6 +5,7 @@ import { Badge, Button, Card, CardHeader } from "@/components/ui-kit";
 import { DataTable } from "@/components/DataTable";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
+import { archiveCollectionRoute } from "@/lib/driverRouteAssignments";
 import { Plus, X, Loader2, Route, MapPin } from "lucide-react";
 
 function Page() {
@@ -41,22 +42,26 @@ function Page() {
     }
 
     if (rRes.data) {
-      setRoutes(rRes.data.map(r => {
-        const vObj = vRes.data?.find(x => x.id === r.vehicle_id);
-        const dObj = dRes.data?.find(d => d.id === r.driver_id);
-        return {
-          id: r.id,
-          name: r.name,
-          vehicle: vObj ? vObj.number : 'Unassigned',
-          driver: dObj ? dObj.name : 'Unassigned',
-          centres: r.centres,
-          startTime: r.start_time || '',
-          endTime: r.end_time || '',
-          status: r.status,
-          litres: r.litres,
-          completion: r.completion
-        };
-      }));
+      setRoutes(
+        rRes.data
+          .filter((r: any) => r.is_archived !== true)
+          .map((r: any) => {
+            const vObj = vRes.data?.find(x => x.id === r.vehicle_id);
+            const dObj = dRes.data?.find(d => d.id === r.driver_id);
+            return {
+              id: r.id,
+              name: r.name,
+              vehicle: vObj ? vObj.number : 'Unassigned',
+              driver: dObj ? dObj.name : 'Unassigned',
+              centres: r.centres,
+              startTime: r.start_time || '',
+              endTime: r.end_time || '',
+              status: r.status,
+              litres: r.litres,
+              completion: r.completion
+            };
+          })
+      );
     }
   }
 
@@ -107,11 +112,9 @@ function Page() {
   }
 
   async function handleDeleteRoute(id: string) {
-    if (!confirm("Delete this route? This is permanent.")) return;
+    if (!confirm("Archive this route? Historical trips and assignments will be preserved.")) return;
     setRoutes(prev => prev.filter(r => r.id !== id));
-    try {
-      await supabase.from('collection_routes').delete().eq('id', id);
-    } catch (err) { }
+    await archiveCollectionRoute(supabase, id);
   }
 
   return (

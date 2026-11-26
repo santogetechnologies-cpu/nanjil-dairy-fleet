@@ -12,7 +12,6 @@ import {
   ArrowDown,
   Upload,
   Save,
-  FolderOpen,
   RotateCcw,
   Navigation,
   Clock,
@@ -45,12 +44,13 @@ import {
 } from "@/lib/roadRouting";
 import {
   NANJIL_DAIRY_DEPOT,
-  PRESET_DAIRY_CENTRES,
-  DEFAULT_ROUTE_TEMPLATES,
-  type RouteTemplate,
+  createEmptyRouteDraft,
+  validateManualRouteConfig,
+  type ManualRouteEndpoint,
 } from "@/lib/routeTemplates";
+import { archiveCollectionRoute, isValidSavedRoute } from "@/lib/driverRouteAssignments";
 
-export const PLANNER_WORKSPACE_KEY = "nanjil_planner_active_workspace";
+export const PLANNER_WORKSPACE_KEY = "nanjil_planner_manual_workspace_v2";
 
 export interface StoredPlannerWorkspace {
   editingRouteId?: string | null;
@@ -59,8 +59,8 @@ export interface StoredPlannerWorkspace {
   departureTime?: string;
   assignedVehicleId?: string;
   assignedDriverId?: string;
-  startPoint?: any;
-  destinationPoint?: any;
+  startPoint?: ManualRouteEndpoint | null;
+  destinationPoint?: ManualRouteEndpoint | null;
   roundTripType?: "same_path" | "different_path" | "one_way";
   revisitStopsOnReturn?: boolean;
   outboundStops?: RoutePoint[];
@@ -77,43 +77,11 @@ export interface StoredPlannerWorkspace {
 export function getInitialPlannerWorkspace(): StoredPlannerWorkspace | null {
   if (typeof window === "undefined") return null;
   try {
-    // 1. Primary: load the active working draft
     const raw = localStorage.getItem(PLANNER_WORKSPACE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object") {
         return parsed;
-      }
-    }
-
-    // 2. Fallback: if user previously saved custom routes in localStorage before active workspace key existed
-    const customRaw = localStorage.getItem("nanjil_custom_routes");
-    if (customRaw) {
-      const customList = JSON.parse(customRaw);
-      if (Array.isArray(customList) && customList.length > 0) {
-        const latest = customList[0];
-        if (latest && Array.isArray(latest.outboundStops) && latest.outboundStops.length > 0) {
-          return {
-            editingRouteId: latest.id || null,
-            routeName: latest.name || "Daily Morning Milk Collection Loop",
-            routeDate: latest.routeDate || new Date().toISOString().split("T")[0],
-            departureTime: latest.start_time || "05:30",
-            assignedVehicleId: latest.vehicle_id || "",
-            assignedDriverId: latest.driver_id || "",
-            startPoint: latest.startPoint || NANJIL_DAIRY_DEPOT,
-            destinationPoint: latest.destinationPoint || latest.destination || PRESET_DAIRY_CENTRES[7],
-            roundTripType: latest.roundTripType || "same_path",
-            revisitStopsOnReturn: latest.revisitStopsOnReturn ?? false,
-            outboundStops: latest.outboundStops,
-            returnStops: latest.returnStops || [],
-            speedLimitKmh: latest.speedLimitKmh || 60,
-            deviationThresholdMeters: latest.deviationThresholdMeters || 250,
-            alertOnMissedStops: latest.alertOnMissedStops ?? true,
-            alertOnDelay: latest.alertOnDelay ?? true,
-            routeNotes: latest.routeNotes || "Maintain refrigerated tanker temp at 4°C. Check seals at each depot.",
-            activeTab: "planner",
-          };
-        }
       }
     }
   } catch (err) {
@@ -128,21 +96,22 @@ export default function RoutesPlannerPage() {
   const liveVehicles = useVehicles();
 
   const initialWorkspace = useMemo(() => getInitialPlannerWorkspace(), []);
+  const emptyDraft = useMemo(() => createEmptyRouteDraft(), []);
 
-  // Mode: "planner" (designing route) or "execution" (tracking active route)
+  // Mode: "planner" (designing route), "saved" (DB routes), or "execution" (tracking)
   const [activeTab, setActiveTab] = useState<"planner" | "saved" | "execution">(
     () => initialWorkspace?.activeTab || "planner"
   );
 
-  // Core Route Details
+  // Core Route Details — clean empty defaults when no draft exists
   const [routeName, setRouteName] = useState(
-    () => initialWorkspace?.routeName || "Daily Morning Milk Collection Loop"
+    () => initialWorkspace?.routeName ?? emptyDraft.routeName
   );
   const [routeDate, setRouteDate] = useState(
     () => initialWorkspace?.routeDate || new Date().toISOString().split("T")[0]
   );
   const [departureTime, setDepartureTime] = useState(
-    () => initialWorkspace?.departureTime || "05:30"
+    () => initialWorkspace?.departureTime || emptyDraft.departureTime
   );
   const [assignedVehicleId, setAssignedVehicleId] = useState(
     () => initialWorkspace?.assignedVehicleId || ""
@@ -151,70 +120,36 @@ export default function RoutesPlannerPage() {
     () => initialWorkspace?.assignedDriverId || ""
   );
 
-  // Start & End
-  const [startPoint, setStartPoint] = useState(
-    () => initialWorkspace?.startPoint || NANJIL_DAIRY_DEPOT
+  // Start & End — manually selected or picked on map
+  const [startPoint, setStartPoint] = useState<ManualRouteEndpoint | null>(
+    () => initialWorkspace?.startPoint ?? null
   );
-  const [destinationPoint, setDestinationPoint] = useState(
-    () => initialWorkspace?.destinationPoint || PRESET_DAIRY_CENTRES[7]
+  const [destinationPoint, setDestinationPoint] = useState<ManualRouteEndpoint | null>(
+    () => initialWorkspace?.destinationPoint ?? null
   );
 
   // Round Trip Configuration
   const [roundTripType, setRoundTripType] = useState<"same_path" | "different_path" | "one_way">(
-    () => initialWorkspace?.roundTripType || "same_path"
+    () => initialWorkspace?.roundTripType || emptyDraft.roundTripType
   );
   const [revisitStopsOnReturn, setRevisitStopsOnReturn] = useState(
-    () => initialWorkspace?.revisitStopsOnReturn ?? false
+    () => initialWorkspace?.revisitStopsOnReturn ?? emptyDraft.revisitStopsOnReturn
   );
 
-  // Stop Sequences (Supports 40+ stops) - restored from workspace or default 15 presets
-  const [outboundStops, setOutboundStops] = useState<RoutePoint[]>(() => {
-    if (initialWorkspace?.outboundStops && initialWorkspace.outboundStops.length > 0) {
-      return initialWorkspace.outboundStops;
-    }
-    return PRESET_DAIRY_CENTRES.slice(0, 15).map((c, i) => ({
-      id: `out-${i + 1}`,
-      name: c.name,
-      lat: c.lat,
-      lng: c.lng,
-      serviceDurationMins: 5,
-      isMandatory: true,
-      status: "Pending",
-    }));
-  });
-
-  const [returnStops, setReturnStops] = useState<RoutePoint[]>(() => {
-    if (initialWorkspace?.returnStops) {
-      return initialWorkspace.returnStops;
-    }
-    return [
-      {
-        id: "ret-1",
-        name: PRESET_DAIRY_CENTRES[18].name,
-        lat: PRESET_DAIRY_CENTRES[18].lat,
-        lng: PRESET_DAIRY_CENTRES[18].lng,
-        serviceDurationMins: 5,
-        isMandatory: false,
-        status: "Pending",
-      },
-      {
-        id: "ret-2",
-        name: PRESET_DAIRY_CENTRES[13].name,
-        lat: PRESET_DAIRY_CENTRES[13].lat,
-        lng: PRESET_DAIRY_CENTRES[13].lng,
-        serviceDurationMins: 5,
-        isMandatory: false,
-        status: "Pending",
-      },
-    ];
-  });
+  // Manual Stop Sequences — starts empty
+  const [outboundStops, setOutboundStops] = useState<RoutePoint[]>(
+    () => initialWorkspace?.outboundStops ?? []
+  );
+  const [returnStops, setReturnStops] = useState<RoutePoint[]>(
+    () => initialWorkspace?.returnStops ?? []
+  );
 
   // Route-Specific Settings
   const [speedLimitKmh, setSpeedLimitKmh] = useState(
-    () => initialWorkspace?.speedLimitKmh || 60
+    () => initialWorkspace?.speedLimitKmh ?? emptyDraft.speedLimitKmh
   );
   const [deviationThresholdMeters, setDeviationThresholdMeters] = useState(
-    () => initialWorkspace?.deviationThresholdMeters || 250
+    () => initialWorkspace?.deviationThresholdMeters ?? emptyDraft.deviationThresholdMeters
   );
   const [alertOnMissedStops, setAlertOnMissedStops] = useState(
     () => initialWorkspace?.alertOnMissedStops ?? true
@@ -223,7 +158,7 @@ export default function RoutesPlannerPage() {
     () => initialWorkspace?.alertOnDelay ?? true
   );
   const [routeNotes, setRouteNotes] = useState(
-    () => initialWorkspace?.routeNotes || "Maintain refrigerated tanker temp at 4°C. Check seals at each depot."
+    () => initialWorkspace?.routeNotes ?? ""
   );
 
   // Calculated Road Network Paths
@@ -235,26 +170,38 @@ export default function RoutesPlannerPage() {
   const [dbVehicles, setDbVehicles] = useState<any[]>([]);
   const [dbDrivers, setDbDrivers] = useState<any[]>([]);
   const [savedRoutes, setSavedRoutes] = useState<any[]>([]);
-  const dbHasRouteConfigColRef = useRef<boolean>(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
   const [editingRouteId, setEditingRouteId] = useState<string | null>(
     () => searchParams.get("id") || searchParams.get("routeId") || initialWorkspace?.editingRouteId || null
   );
   const [savedRoutesSearch, setSavedRoutesSearch] = useState("");
+  const [viewingRoute, setViewingRoute] = useState<any | null>(null);
+  const [archivingRouteId, setArchivingRouteId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<{
     text: string;
     type: "success" | "error" | "info";
   } | null>(null);
 
-  // Address search query
+  // Manual stop quick-add + drag reorder + geocoding search state
   const [searchLocationQuery, setSearchLocationQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<Array<{ name: string; displayName: string; lat: number; lng: number }>>([]);
   const [isSearchingLocation, setIsSearchingLocation] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [showManualStopForm, setShowManualStopForm] = useState<"outbound" | "return" | null>(null);
+  const [manualStopName, setManualStopName] = useState("");
+  const [manualStopLat, setManualStopLat] = useState("");
+  const [manualStopLng, setManualStopLng] = useState("");
+  const [manualStopDuration, setManualStopDuration] = useState(5);
+  const [manualStopMandatory, setManualStopMandatory] = useState(true);
+  const [draggedStop, setDraggedStop] = useState<{ index: number; isReturn: boolean } | null>(null);
+  const [editingCoordsStopId, setEditingCoordsStopId] = useState<string | null>(null);
 
-  // Selected stop on map
+  // Selected stop on map + click mode
   const [activeStopId, setActiveStopId] = useState<string | null>(null);
-  const [mapClickMode, setMapClickMode] = useState<"add_stop" | "set_destination">("add_stop");
+  const [mapClickMode, setMapClickMode] = useState<
+    "add_stop" | "add_return_stop" | "set_start" | "set_destination"
+  >("add_stop");
 
   // Auto-sync active workspace to localStorage on any state modification
   useEffect(() => {
@@ -324,34 +271,20 @@ export default function RoutesPlannerPage() {
     setTimeout(() => setToastMessage(null), 4000);
   }
 
-  // Extract route configuration from DB or localStorage backup
+  // Parse route configuration cleanly from Supabase row
   function extractRouteConfig(r: any) {
-    let config = r.route_config;
+    let config = r?.route_config;
     if (typeof config === "string") {
       try {
         config = JSON.parse(config);
-      } catch (e) {
+      } catch {
         config = null;
       }
     }
-    if (!config || typeof config !== "object" || Object.keys(config).length === 0) {
-      try {
-        const local = localStorage.getItem(`nanjil_route_config_${r.id}`);
-        if (local) {
-          config = JSON.parse(local);
-        } else {
-          const allCustom = JSON.parse(localStorage.getItem("nanjil_custom_routes") || "[]");
-          const found = allCustom.find((c: any) => c.id === r.id || c.name === r.name);
-          if (found) config = found;
-        }
-      } catch (e) {
-        // Silently catch
-      }
-    }
-    return config || null;
+    return config && typeof config === "object" && Object.keys(config).length > 0 ? config : null;
   }
 
-  // Reload saved routes from database
+  // Reload active non-archived routes from Supabase database (single source of truth)
   async function loadSavedRoutes() {
     setIsLoadingRoutes(true);
     try {
@@ -367,14 +300,13 @@ export default function RoutesPlannerPage() {
       }
 
       if (data) {
-        if (data.length > 0) {
-          dbHasRouteConfigColRef.current = "route_config" in data[0];
-        }
-        const enriched = data.map((r: any) => ({
-          ...r,
-          route_config: extractRouteConfig(r),
-        }));
-        setSavedRoutes(enriched);
+        const activeRows = data
+          .filter((r: any) => r.is_archived !== true)
+          .map((r: any) => ({
+            ...r,
+            route_config: extractRouteConfig(r),
+          }));
+        setSavedRoutes(activeRows);
       }
     } catch (err: any) {
       console.error("loadSavedRoutes exception:", err);
@@ -401,28 +333,24 @@ export default function RoutesPlannerPage() {
 
         if (vRes.data && vRes.data.length > 0) {
           setDbVehicles(vRes.data);
-          setAssignedVehicleId((prev) => prev || vRes.data[0].id);
         }
         if (dRes.data && dRes.data.length > 0) {
           const uniqueDrivers = new Map();
           dRes.data.forEach((d) => {
             if (!uniqueDrivers.has(d.name)) uniqueDrivers.set(d.name, d);
           });
-          const dList = Array.from(uniqueDrivers.values());
-          setDbDrivers(dList);
-          setAssignedDriverId((prev) => prev || (dList.length > 0 ? dList[0].id : ""));
+          setDbDrivers(Array.from(uniqueDrivers.values()));
         }
         if (rRes.error) {
           console.error("Failed to load collection_routes:", rRes.error);
           showToast("Could not load saved routes: " + rRes.error.message, "error");
         } else if (rRes.data) {
-          if (rRes.data.length > 0) {
-            dbHasRouteConfigColRef.current = "route_config" in rRes.data[0];
-          }
-          const enriched = rRes.data.map((r: any) => ({
-            ...r,
-            route_config: extractRouteConfig(r),
-          }));
+          const enriched = rRes.data
+            .filter((r: any) => r.is_archived !== true)
+            .map((r: any) => ({
+              ...r,
+              route_config: extractRouteConfig(r),
+            }));
           setSavedRoutes(enriched);
 
           // If URL specifically requested a route (?id=... or ?routeId=...)
@@ -467,38 +395,45 @@ export default function RoutesPlannerPage() {
     let isCancelled = false;
 
     async function computeRoutes() {
+      const validOutPoints: Array<{ lat: number; lng: number }> = [
+        ...(startPoint ? [{ lat: startPoint.lat, lng: startPoint.lng }] : []),
+        ...outboundStops.map((s) => ({ lat: s.lat, lng: s.lng })),
+        ...(destinationPoint ? [{ lat: destinationPoint.lat, lng: destinationPoint.lng }] : []),
+      ];
+
+      if (validOutPoints.length < 2) {
+        setOutboundRoadResult(null);
+        setReturnRoadResult(null);
+        return;
+      }
+
       setIsCalculatingRoute(true);
       try {
-        // 1. Build Outbound Points: Start -> Outbound Stops -> Destination
-        const outPoints = [
-          startPoint,
-          ...outboundStops.map((s) => ({ lat: s.lat, lng: s.lng })),
-          destinationPoint,
-        ];
-        const outRes = await calculateRoadRoute(outPoints);
+        const outRes = await calculateRoadRoute(validOutPoints);
         if (isCancelled) return;
         setOutboundRoadResult(outRes);
 
-        // 2. Build Return Points if applicable
-        if (roundTripType === "same_path") {
-          // Same path in reverse
+        // Build Return Points when endpoints exist and round-trip enabled
+        if (startPoint && destinationPoint && roundTripType === "same_path") {
           const retPoints = revisitStopsOnReturn
             ? [
-                destinationPoint,
+                { lat: destinationPoint.lat, lng: destinationPoint.lng },
                 ...[...outboundStops].reverse().map((s) => ({ lat: s.lat, lng: s.lng })),
-                startPoint,
+                { lat: startPoint.lat, lng: startPoint.lng },
               ]
-            : [destinationPoint, startPoint];
+            : [
+                { lat: destinationPoint.lat, lng: destinationPoint.lng },
+                { lat: startPoint.lat, lng: startPoint.lng },
+              ];
 
           const retRes = await calculateRoadRoute(retPoints);
           if (isCancelled) return;
           setReturnRoadResult(retRes);
-        } else if (roundTripType === "different_path") {
-          // Different path via independent return stops
+        } else if (startPoint && destinationPoint && roundTripType === "different_path") {
           const retPoints = [
-            destinationPoint,
+            { lat: destinationPoint.lat, lng: destinationPoint.lng },
             ...returnStops.map((s) => ({ lat: s.lat, lng: s.lng })),
-            startPoint,
+            { lat: startPoint.lat, lng: startPoint.lng },
           ];
           const retRes = await calculateRoadRoute(retPoints);
           if (isCancelled) return;
@@ -605,31 +540,201 @@ export default function RoutesPlannerPage() {
     };
   }, [returnRoadResult, roundTripType]);
 
-  // Handle map click to add a stop or set destination
-  function handleMapClick(e: { lngLat: { lng: number; lat: number } }) {
-    if (mapClickMode === "set_destination") {
-      const destName = `Destination (${e.lngLat.lat.toFixed(4)}, ${e.lngLat.lng.toFixed(4)})`;
-      setDestinationPoint({
-        name: destName,
-        lat: e.lngLat.lat,
-        lng: e.lngLat.lng,
-      });
+  // Reverse-geocode optional friendly name via OpenStreetMap Nominatim (falls back cleanly to coordinates)
+  async function lookupPlaceLabel(lat: number, lng: number, fallbackPrefix: string): Promise<string> {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=14`,
+        { signal: AbortSignal.timeout(3000) }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const label =
+          data?.name ||
+          data?.address?.village ||
+          data?.address?.town ||
+          data?.address?.suburb ||
+          data?.address?.city;
+        if (label) return String(label);
+      }
+    } catch {
+      // Ignore network/rate limit; keep clean coordinate fallback
+    }
+    return `${fallbackPrefix} (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+  }
+
+  // Forward search place / address or "lat, lng"
+  async function handleSearchLocation(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    const q = searchLocationQuery.trim();
+    if (!q) return;
+    setSearchError(null);
+
+    // Direct coordinate entry "lat, lng"
+    const coordMatch = q.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+    if (coordMatch) {
+      const lat = parseFloat(coordMatch[1]);
+      const lng = parseFloat(coordMatch[2]);
+      if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+        setSearchResults([
+          {
+            name: `Pinned Point (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+            displayName: `Custom Coordinates: ${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+            lat,
+            lng,
+          },
+        ]);
+        return;
+      }
+    }
+
+    setIsSearchingLocation(true);
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(
+        q
+      )}&countrycodes=in&limit=6`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      if (!res.ok) throw new Error(`Search failed (${res.status})`);
+      const rows = await res.json();
+      if (!Array.isArray(rows) || rows.length === 0) {
+        setSearchResults([]);
+        setSearchError("No matching locations found. Try another town/village name or enter lat, lng.");
+        return;
+      }
+      setSearchResults(
+        rows.map((r: any) => ({
+          name: String(r.display_name || q).split(",")[0].trim(),
+          displayName: String(r.display_name || q),
+          lat: Number(r.lat),
+          lng: Number(r.lon),
+        }))
+      );
+    } catch (err: any) {
+      setSearchError(err?.message || "Unable to search locations right now. You can click directly on the map.");
+    } finally {
+      setIsSearchingLocation(false);
+    }
+  }
+
+  // Handle map click to set origin, destination, outbound stop, or return stop
+  async function handleMapClick(e: { lngLat: { lng: number; lat: number } }) {
+    const lat = Number(e.lngLat.lat.toFixed(6));
+    const lng = Number(e.lngLat.lng.toFixed(6));
+
+    if (mapClickMode === "set_start") {
+      const tempName = `Origin (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+      setStartPoint({ name: tempName, lat, lng });
       setMapClickMode("add_stop");
-      showToast(`Destination updated to coordinates`);
+      showToast("Starting location set from map");
+      const friendly = await lookupPlaceLabel(lat, lng, "Origin");
+      setStartPoint((prev) => (prev && prev.lat === lat && prev.lng === lng ? { ...prev, name: friendly } : prev));
       return;
     }
 
+    if (mapClickMode === "set_destination") {
+      const tempName = `Destination (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+      setDestinationPoint({ name: tempName, lat, lng });
+      setMapClickMode("add_stop");
+      showToast("Destination updated from map");
+      const friendly = await lookupPlaceLabel(lat, lng, "Destination");
+      setDestinationPoint((prev) =>
+        prev && prev.lat === lat && prev.lng === lng ? { ...prev, name: friendly } : prev
+      );
+      return;
+    }
+
+    if (mapClickMode === "add_return_stop") {
+      const id = `ret-${Date.now()}`;
+      const newStop: RoutePoint = {
+        id,
+        name: `Return Stop #${returnStops.length + 1}`,
+        lat,
+        lng,
+        serviceDurationMins: 5,
+        isMandatory: false,
+        status: "Pending",
+      };
+      setReturnStops((prev) => [...prev, newStop]);
+      setActiveStopId(id);
+      showToast(`Added return stop #${returnStops.length + 1}`);
+      const friendly = await lookupPlaceLabel(lat, lng, `Return Stop`);
+      setReturnStops((prev) => prev.map((s) => (s.id === id ? { ...s, name: friendly } : s)));
+      return;
+    }
+
+    const id = `stop-${Date.now()}`;
     const newStop: RoutePoint = {
-      id: `stop-${Date.now()}`,
-      name: `Custom Waypoint (${e.lngLat.lat.toFixed(4)}, ${e.lngLat.lng.toFixed(4)})`,
-      lat: e.lngLat.lat,
-      lng: e.lngLat.lng,
+      id,
+      name: `Stop #${outboundStops.length + 1}`,
+      lat,
+      lng,
       serviceDurationMins: 5,
       isMandatory: true,
       status: "Pending",
     };
     setOutboundStops((prev) => [...prev, newStop]);
-    showToast(`Added stop #${outboundStops.length + 1} at coordinates`);
+    setActiveStopId(id);
+    showToast(`Added outbound stop #${outboundStops.length + 1}`);
+    const friendly = await lookupPlaceLabel(lat, lng, `Stop`);
+    setOutboundStops((prev) => prev.map((s) => (s.id === id ? { ...s, name: friendly } : s)));
+  }
+
+  // Manual inline Add Stop submit (coordinates optional)
+  function handleSubmitManualStop(e: React.FormEvent) {
+    e.preventDefault();
+    const isReturn = showManualStopForm === "return";
+    const parsedLat = parseFloat(manualStopLat);
+    const parsedLng = parseFloat(manualStopLng);
+    const lat = Number.isFinite(parsedLat) ? parsedLat : 0;
+    const lng = Number.isFinite(parsedLng) ? parsedLng : 0;
+    if (!manualStopName.trim()) {
+      showToast("Enter a stop name.", "error");
+      return;
+    }
+    const newStop: RoutePoint = {
+      id: `${isReturn ? "ret" : "stop"}-${Date.now()}`,
+      name: manualStopName.trim(),
+      lat,
+      lng,
+      serviceDurationMins: Math.max(1, Number(manualStopDuration) || 5),
+      isMandatory: manualStopMandatory,
+      status: "Pending",
+    };
+    if (isReturn) {
+      setReturnStops((prev) => [...prev, newStop]);
+    } else {
+      setOutboundStops((prev) => [...prev, newStop]);
+    }
+    setActiveStopId(newStop.id);
+    setShowManualStopForm(null);
+    setManualStopName("");
+    setManualStopLat("");
+    setManualStopLng("");
+    showToast(`Added "${newStop.name}"`);
+  }
+
+  function reorderStopByDragDrop(fromIdx: number, toIdx: number, isReturn = false) {
+    if (fromIdx === toIdx) return;
+    const updater = (prev: RoutePoint[]) => {
+      const next = [...prev];
+      if (fromIdx < 0 || fromIdx >= next.length || toIdx < 0 || toIdx >= next.length) return prev;
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      return next;
+    };
+    if (isReturn) setReturnStops(updater);
+    else setOutboundStops(updater);
+  }
+
+  function updateStopFields(
+    id: string,
+    patch: Partial<RoutePoint>,
+    isReturn = false
+  ) {
+    const updater = (prev: RoutePoint[]) =>
+      prev.map((s) => (s.id === id ? { ...s, ...patch } : s));
+    if (isReturn) setReturnStops(updater);
+    else setOutboundStops(updater);
   }
 
   // Stop sequence manipulation functions
@@ -734,48 +839,37 @@ export default function RoutesPlannerPage() {
     e.target.value = "";
   }
 
-  // Load a Route Template
-  function applyTemplate(tpl: RouteTemplate) {
-    setEditingRouteId(null);
-    setSearchParams({}, { replace: true });
-    setRouteName(tpl.name);
-    setStartPoint(tpl.startPoint);
-    setDestinationPoint(tpl.destination);
-    setRoundTripType(tpl.roundTripType);
-    setRevisitStopsOnReturn(tpl.revisitStopsOnReturn);
-    setOutboundStops(tpl.outboundStops);
-    setReturnStops(tpl.returnStops || []);
-    setSpeedLimitKmh(tpl.speedLimitKmh || 60);
-    setDeviationThresholdMeters(tpl.deviationThresholdMeters || 250);
-    showToast(`Loaded template: "${tpl.name}" with ${tpl.outboundStops.length} stops`);
-  }
-
-  // Save or Update Route in Supabase & Local Mirror
+  // Save or Update Route directly in Supabase `public.collection_routes`
   async function handleSaveRoute(asNewCopy = false) {
-    if (!routeName.trim()) {
-      showToast("Please enter a route name.", "error");
-      return;
-    }
-    if (outboundStops.length === 0) {
-      showToast("Please add at least one stop to the route before saving.", "error");
+    const check = validateManualRouteConfig({
+      routeName,
+      startPoint,
+      destinationPoint,
+      outboundStops,
+      returnStops,
+      roundTripType,
+    });
+    if (!check.valid) {
+      showToast(check.error || "Please complete all required route fields.", "error");
       return;
     }
 
     setIsSaving(true);
     try {
-      // 1. Build complete persistent configuration
       const routeConfigData = {
+        createdManually: true,
         startPoint,
         destinationPoint,
         roundTripType,
         revisitStopsOnReturn,
         outboundStops,
-        returnStops,
+        returnStops: roundTripType === "different_path" ? returnStops : [],
+        departureTime,
         speedLimitKmh,
         deviationThresholdMeters,
         alertOnMissedStops,
         alertOnDelay,
-        routeNotes,
+        routeNotes: routeNotes.trim(),
         routeDate,
         totalDistanceKm: routeStats.totalDistanceKm,
         totalDurationMins: routeStats.totalDurationMins,
@@ -790,68 +884,31 @@ export default function RoutesPlannerPage() {
         start_time: departureTime,
         end_time: routeStats.completionTimeStr,
         status: "In Progress",
+        is_archived: false,
         litres: 0,
         completion: 0,
+        route_config: routeConfigData,
       };
 
       let savedRecord: any = null;
       const isUpdate = Boolean(editingRouteId && !asNewCopy);
 
       if (isUpdate) {
-        const payloadToUpdate = dbHasRouteConfigColRef.current
-          ? { ...basePayload, route_config: routeConfigData }
-          : basePayload;
-
-        let updateRes = await supabase
+        const updateRes = await supabase
           .from("collection_routes")
-          .update(payloadToUpdate)
+          .update(basePayload)
           .eq("id", editingRouteId)
           .select()
           .single();
 
-        // Fallback if route_config column not yet created in PostgreSQL
-        if (
-          updateRes.error &&
-          (updateRes.error.message?.includes("route_config") ||
-            updateRes.error.code === "PGRST204" ||
-            updateRes.error.code === "42703")
-        ) {
-          dbHasRouteConfigColRef.current = false;
-          updateRes = await supabase
-            .from("collection_routes")
-            .update(basePayload)
-            .eq("id", editingRouteId)
-            .select()
-            .single();
-        }
-
         if (updateRes.error) throw updateRes.error;
         savedRecord = updateRes.data;
       } else {
-        const payloadToInsert = dbHasRouteConfigColRef.current
-          ? { ...basePayload, route_config: routeConfigData }
-          : basePayload;
-
-        let insertRes = await supabase
+        const insertRes = await supabase
           .from("collection_routes")
-          .insert(payloadToInsert)
+          .insert(basePayload)
           .select()
           .single();
-
-        // Fallback if route_config column not yet created in PostgreSQL
-        if (
-          insertRes.error &&
-          (insertRes.error.message?.includes("route_config") ||
-            insertRes.error.code === "PGRST204" ||
-            insertRes.error.code === "42703")
-        ) {
-          dbHasRouteConfigColRef.current = false;
-          insertRes = await supabase
-            .from("collection_routes")
-            .insert(basePayload)
-            .select()
-            .single();
-        }
 
         if (insertRes.error) throw insertRes.error;
         savedRecord = insertRes.data;
@@ -861,21 +918,7 @@ export default function RoutesPlannerPage() {
         throw new Error("No database record was returned after saving.");
       }
 
-      // Persist full route metadata in localStorage for instant offline resilience and cross-session restoration
       try {
-        localStorage.setItem(`nanjil_route_config_${savedRecord.id}`, JSON.stringify(routeConfigData));
-
-        const fullRouteRecord = {
-          ...basePayload,
-          id: savedRecord.id,
-          ...routeConfigData,
-        };
-        const existingStored = JSON.parse(localStorage.getItem("nanjil_custom_routes") || "[]");
-        const filtered = existingStored.filter((r: any) => r.id !== savedRecord.id);
-        filtered.unshift(fullRouteRecord);
-        localStorage.setItem("nanjil_custom_routes", JSON.stringify(filtered.slice(0, 50)));
-
-        // Immediately update active planner workspace draft with the saved ID
         const activeDraft: StoredPlannerWorkspace = {
           editingRouteId: savedRecord.id,
           routeName: routeName.trim(),
@@ -888,12 +931,12 @@ export default function RoutesPlannerPage() {
           roundTripType,
           revisitStopsOnReturn,
           outboundStops,
-          returnStops,
+          returnStops: roundTripType === "different_path" ? returnStops : [],
           speedLimitKmh,
           deviationThresholdMeters,
           alertOnMissedStops,
           alertOnDelay,
-          routeNotes,
+          routeNotes: routeNotes.trim(),
           activeTab: "planner",
           lastUpdated: new Date().toISOString(),
         };
@@ -904,7 +947,7 @@ export default function RoutesPlannerPage() {
 
       const completeRecord = {
         ...savedRecord,
-        route_config: routeConfigData,
+        route_config: extractRouteConfig(savedRecord) || routeConfigData,
       };
 
       setEditingRouteId(savedRecord.id);
@@ -920,189 +963,193 @@ export default function RoutesPlannerPage() {
 
       showToast(
         isUpdate
-          ? `Route "${savedRecord.name}" updated successfully with ${routeStats.totalStopsCount} stops!`
-          : `New route "${savedRecord.name}" saved successfully with ${routeStats.totalStopsCount} stops!`,
+          ? `Route "${savedRecord.name}" updated in Supabase with ${routeStats.totalStopsCount} stops!`
+          : `New route "${savedRecord.name}" saved to Supabase with ${routeStats.totalStopsCount} stops!`,
         "success"
       );
     } catch (err: any) {
       console.error("Failed to save route:", err);
-      showToast("Failed to save route: " + (err.message || "Database error"), "error");
+      const msg = err?.message || "Database error while saving route";
+      if (msg.includes("is_archived") || msg.includes("route_config")) {
+        showToast(
+          "Database schema is missing lifecycle columns. Apply migration 20261126120000_manual_routes_lifecycle_and_snapshots.sql in Supabase first.",
+          "error"
+        );
+      } else {
+        showToast("Failed to save route: " + msg, "error");
+      }
     } finally {
       setIsSaving(false);
     }
   }
 
-  // Open and restore saved route into Route Designer
-  function handleOpenInDesigner(r: any) {
-    setEditingRouteId(r.id);
-    setSearchParams({ id: r.id }, { replace: true });
-    setRouteName(r.name || "Milk Collection Route");
-    if (r.vehicle_id) setAssignedVehicleId(r.vehicle_id);
-    if (r.driver_id) setAssignedDriverId(r.driver_id);
-    if (r.start_time) setDepartureTime(r.start_time);
-
-    let loadedOutbound: RoutePoint[] = [];
-    let loadedReturn: RoutePoint[] = [];
-
-    const cfg = r.route_config || extractRouteConfig(r);
-    if (cfg) {
-      if (cfg.startPoint && typeof cfg.startPoint.lat === "number") setStartPoint(cfg.startPoint);
-      if (cfg.destinationPoint && typeof cfg.destinationPoint.lat === "number") {
-        setDestinationPoint(cfg.destinationPoint);
-      } else if (cfg.destination && typeof cfg.destination.lat === "number") {
-        setDestinationPoint(cfg.destination);
-      }
-      if (cfg.roundTripType) setRoundTripType(cfg.roundTripType);
-      if (typeof cfg.revisitStopsOnReturn === "boolean") setRevisitStopsOnReturn(cfg.revisitStopsOnReturn);
-      if (Array.isArray(cfg.outboundStops) && cfg.outboundStops.length > 0) {
-        loadedOutbound = cfg.outboundStops;
-        setOutboundStops(cfg.outboundStops);
-      }
-      if (Array.isArray(cfg.returnStops)) {
-        loadedReturn = cfg.returnStops;
-        setReturnStops(cfg.returnStops);
-      }
-      if (typeof cfg.speedLimitKmh === "number") setSpeedLimitKmh(cfg.speedLimitKmh);
-      if (typeof cfg.deviationThresholdMeters === "number") setDeviationThresholdMeters(cfg.deviationThresholdMeters);
-      if (typeof cfg.alertOnMissedStops === "boolean") setAlertOnMissedStops(cfg.alertOnMissedStops);
-      if (typeof cfg.alertOnDelay === "boolean") setAlertOnDelay(cfg.alertOnDelay);
-      if (typeof cfg.routeNotes === "string") setRouteNotes(cfg.routeNotes);
-      if (typeof cfg.routeDate === "string") setRouteDate(cfg.routeDate);
+  // Open and restore saved route into Route Designer (optionally as duplicate)
+  function handleOpenInDesigner(r: any, asDuplicate = false) {
+    setEditingRouteId(asDuplicate ? null : r.id);
+    if (asDuplicate) {
+      setSearchParams({}, { replace: true });
     } else {
-      // Legacy records: reconstruct realistic stops matching recorded centres count
-      const stopCount = Math.max(r.centres || 8, 2);
-      loadedOutbound = PRESET_DAIRY_CENTRES.slice(0, Math.min(stopCount, PRESET_DAIRY_CENTRES.length)).map((c, i) => ({
-        id: `out-${i + 1}`,
-        name: c.name,
-        lat: c.lat,
-        lng: c.lng,
-        serviceDurationMins: 5,
-        isMandatory: true,
-        status: "Pending",
-      }));
-      setOutboundStops(loadedOutbound);
-      setReturnStops([]);
+      setSearchParams({ id: r.id }, { replace: true });
     }
+
+    const resolvedName = asDuplicate ? `${r.name || "Route"} (Copy)` : r.name || "";
+    setRouteName(resolvedName);
+    setAssignedVehicleId(r.vehicle_id || "");
+    setAssignedDriverId(r.driver_id || "");
+
+    const cfg = extractRouteConfig(r) || r.route_config;
+    setDepartureTime(r.start_time || cfg?.departureTime || "05:30");
+
+    const loadedStart = cfg?.startPoint || null;
+    const loadedDest = cfg?.destinationPoint || cfg?.destination || null;
+    const loadedOutbound: RoutePoint[] = Array.isArray(cfg?.outboundStops) ? cfg.outboundStops : [];
+    const loadedReturn: RoutePoint[] = Array.isArray(cfg?.returnStops) ? cfg.returnStops : [];
+
+    setStartPoint(loadedStart);
+    setDestinationPoint(loadedDest);
+    setRoundTripType(
+      cfg?.roundTripType || (loadedReturn.length > 0 ? "different_path" : "one_way")
+    );
+    setRevisitStopsOnReturn(Boolean(cfg?.revisitStopsOnReturn));
+    setOutboundStops(loadedOutbound);
+    setReturnStops(loadedReturn);
+    setSpeedLimitKmh(typeof cfg?.speedLimitKmh === "number" ? cfg.speedLimitKmh : 55);
+    setDeviationThresholdMeters(
+      typeof cfg?.deviationThresholdMeters === "number" ? cfg.deviationThresholdMeters : 200
+    );
+    setAlertOnMissedStops(typeof cfg?.alertOnMissedStops === "boolean" ? cfg.alertOnMissedStops : true);
+    setAlertOnDelay(typeof cfg?.alertOnDelay === "boolean" ? cfg.alertOnDelay : true);
+    setRouteNotes(typeof cfg?.routeNotes === "string" ? cfg.routeNotes : "");
+    if (typeof cfg?.routeDate === "string") setRouteDate(cfg.routeDate);
 
     try {
       const workspaceDraft: StoredPlannerWorkspace = {
-        editingRouteId: r.id,
-        routeName: r.name || "Milk Collection Route",
+        editingRouteId: asDuplicate ? null : r.id,
+        routeName: resolvedName,
         routeDate: cfg?.routeDate || new Date().toISOString().split("T")[0],
-        departureTime: r.start_time || "05:30",
+        departureTime: r.start_time || cfg?.departureTime || "05:30",
         assignedVehicleId: r.vehicle_id || "",
         assignedDriverId: r.driver_id || "",
-        startPoint: cfg?.startPoint || NANJIL_DAIRY_DEPOT,
-        destinationPoint: cfg?.destinationPoint || cfg?.destination || PRESET_DAIRY_CENTRES[7],
-        roundTripType: cfg?.roundTripType || "same_path",
-        revisitStopsOnReturn: cfg?.revisitStopsOnReturn ?? false,
-        outboundStops: loadedOutbound.length > 0 ? loadedOutbound : outboundStops,
+        startPoint: loadedStart,
+        destinationPoint: loadedDest,
+        roundTripType:
+          cfg?.roundTripType || (loadedReturn.length > 0 ? "different_path" : "one_way"),
+        revisitStopsOnReturn: Boolean(cfg?.revisitStopsOnReturn),
+        outboundStops: loadedOutbound,
         returnStops: loadedReturn,
-        speedLimitKmh: cfg?.speedLimitKmh || speedLimitKmh,
-        deviationThresholdMeters: cfg?.deviationThresholdMeters || deviationThresholdMeters,
-        alertOnMissedStops: cfg?.alertOnMissedStops ?? alertOnMissedStops,
-        alertOnDelay: cfg?.alertOnDelay ?? alertOnDelay,
-        routeNotes: cfg?.routeNotes || routeNotes,
+        speedLimitKmh: typeof cfg?.speedLimitKmh === "number" ? cfg.speedLimitKmh : 55,
+        deviationThresholdMeters:
+          typeof cfg?.deviationThresholdMeters === "number" ? cfg.deviationThresholdMeters : 200,
+        alertOnMissedStops:
+          typeof cfg?.alertOnMissedStops === "boolean" ? cfg.alertOnMissedStops : true,
+        alertOnDelay: typeof cfg?.alertOnDelay === "boolean" ? cfg.alertOnDelay : true,
+        routeNotes: typeof cfg?.routeNotes === "string" ? cfg.routeNotes : "",
         activeTab: "planner",
         lastUpdated: new Date().toISOString(),
       };
       localStorage.setItem(PLANNER_WORKSPACE_KEY, JSON.stringify(workspaceDraft));
-    } catch (e) {
+    } catch {
       // Ignore
     }
 
     setActiveTab("planner");
-    showToast(`Loaded "${r.name}" into Route Designer`, "info");
+    showToast(
+      asDuplicate
+        ? `Duplicated "${r.name}" into editor — click Save Route to store copy`
+        : `Loaded "${r.name}" into Route Designer`,
+      "info"
+    );
   }
 
-  // Delete route from Supabase and cache
-  async function handleDeleteRoute(id: string, name: string) {
-    if (!window.confirm(`Are you sure you want to delete route "${name}"?\nThis cannot be undone.`)) {
+  // Safely archive a route (sets is_archived = true so historical trips & assignments stay intact)
+  async function handleArchiveRoute(id: string, name: string) {
+    if (
+      !window.confirm(
+        `Archive route "${name}"?\n\nIt will be removed from active Route Planner and Admin Assignment dropdowns, while preserving all historical trips and attendance reports.`
+      )
+    ) {
       return;
     }
 
+    setArchivingRouteId(id);
     try {
-      const { error } = await supabase.from("collection_routes").delete().eq("id", id);
-      if (error) throw error;
-
-      // Clean local storage
-      try {
-        localStorage.removeItem(`nanjil_route_config_${id}`);
-        const allCustom = JSON.parse(localStorage.getItem("nanjil_custom_routes") || "[]");
-        const filtered = allCustom.filter((c: any) => c.id !== id);
-        localStorage.setItem("nanjil_custom_routes", JSON.stringify(filtered));
-      } catch (e) {
-        // Ignore
+      const res = await archiveCollectionRoute(supabase, id);
+      if (!res.ok) {
+        throw new Error(res.error || "Failed to archive route.");
       }
 
       setSavedRoutes((prev) => prev.filter((r) => r.id !== id));
       if (editingRouteId === id) {
-        setEditingRouteId(null);
-        setSearchParams({}, { replace: true });
-        try {
-          localStorage.removeItem(PLANNER_WORKSPACE_KEY);
-        } catch (e) {
-          // Ignore
-        }
+        handleStartNewRoute(true);
       }
-      showToast(`Route "${name}" deleted successfully.`);
+      if (viewingRoute?.id === id) setViewingRoute(null);
+      showToast(`Route "${name}" archived safely.`);
     } catch (err: any) {
-      console.error("Failed to delete route:", err);
-      showToast("Failed to delete route: " + (err.message || "Database error"), "error");
+      console.error("Failed to archive route:", err);
+      showToast("Failed to archive route: " + (err.message || "Database error"), "error");
+    } finally {
+      setArchivingRouteId(null);
     }
   }
 
-  // Clear editing state and start a fresh route
-  function handleStartNewRoute() {
+  // Clear editor state completely for scratch manual route creation
+  function handleStartNewRoute(silent = false) {
+    const clean = createEmptyRouteDraft();
     setEditingRouteId(null);
     setSearchParams({}, { replace: true });
-    setRouteName("New Milk Collection Loop");
-    setStartPoint(NANJIL_DAIRY_DEPOT);
-    setDestinationPoint(PRESET_DAIRY_CENTRES[7]);
-    setRoundTripType("same_path");
-    setRevisitStopsOnReturn(false);
-    const freshStops: RoutePoint[] = PRESET_DAIRY_CENTRES.slice(0, 10).map((c, i) => ({
-      id: `out-${i + 1}`,
-      name: c.name,
-      lat: c.lat,
-      lng: c.lng,
-      serviceDurationMins: 5,
-      isMandatory: true,
-      status: "Pending",
-    }));
-    setOutboundStops(freshStops);
+    setRouteName(clean.routeName);
+    setDepartureTime(clean.departureTime);
+    setAssignedVehicleId("");
+    setAssignedDriverId("");
+    setStartPoint(null);
+    setDestinationPoint(null);
+    setRoundTripType(clean.roundTripType);
+    setRevisitStopsOnReturn(clean.revisitStopsOnReturn);
+    setOutboundStops([]);
     setReturnStops([]);
-    setRouteNotes("Maintain refrigerated tanker temp at 4°C. Check seals at each depot.");
+    setSpeedLimitKmh(clean.speedLimitKmh);
+    setDeviationThresholdMeters(clean.deviationThresholdMeters);
+    setRouteNotes("");
+    setOutboundRoadResult(null);
+    setReturnRoadResult(null);
+    setSearchResults([]);
+    setSearchLocationQuery("");
+    setSearchError(null);
+    setActiveStopId(null);
+    setShowManualStopForm(null);
+    setMapClickMode("set_start");
     setActiveTab("planner");
 
     try {
       const cleanDraft: StoredPlannerWorkspace = {
         editingRouteId: null,
-        routeName: "New Milk Collection Loop",
+        routeName: "",
         routeDate: new Date().toISOString().split("T")[0],
-        departureTime: "05:30",
-        assignedVehicleId,
-        assignedDriverId,
-        startPoint: NANJIL_DAIRY_DEPOT,
-        destinationPoint: PRESET_DAIRY_CENTRES[7],
-        roundTripType: "same_path",
-        revisitStopsOnReturn: false,
-        outboundStops: freshStops,
+        departureTime: clean.departureTime,
+        assignedVehicleId: "",
+        assignedDriverId: "",
+        startPoint: null,
+        destinationPoint: null,
+        roundTripType: clean.roundTripType,
+        revisitStopsOnReturn: clean.revisitStopsOnReturn,
+        outboundStops: [],
         returnStops: [],
-        speedLimitKmh: 60,
-        deviationThresholdMeters: 250,
+        speedLimitKmh: clean.speedLimitKmh,
+        deviationThresholdMeters: clean.deviationThresholdMeters,
         alertOnMissedStops: true,
         alertOnDelay: true,
-        routeNotes: "Maintain refrigerated tanker temp at 4°C. Check seals at each depot.",
+        routeNotes: "",
         activeTab: "planner",
         lastUpdated: new Date().toISOString(),
       };
       localStorage.setItem(PLANNER_WORKSPACE_KEY, JSON.stringify(cleanDraft));
-    } catch (e) {
+    } catch {
       // Ignore
     }
 
-    showToast("Ready to design a new route.", "info");
+    if (!silent) {
+      showToast("Clean Route Designer ready. Set Origin, Destination & add stops.", "info");
+    }
   }
 
   // Active Vehicle Execution Status
@@ -1176,17 +1223,15 @@ export default function RoutesPlannerPage() {
               </button>
             </div>
 
-            {editingRouteId && (
-              <Button
-                onClick={handleStartNewRoute}
-                variant="outline"
-                className="text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 border-slate-200 text-slate-700 hover:bg-slate-50"
-                title="Clear editor and start designing a new route"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                New Route
-              </Button>
-            )}
+            <Button
+              onClick={() => handleStartNewRoute()}
+              variant="outline"
+              className="text-xs px-2.5 py-1.5 rounded-xl flex items-center gap-1 border-slate-200 text-slate-700 hover:bg-slate-50"
+              title="Clear editor and create a new manual route from scratch"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Create New Route
+            </Button>
 
             {editingRouteId ? (
               <div className="flex items-center gap-1.5">
@@ -1268,7 +1313,7 @@ export default function RoutesPlannerPage() {
               Update Route
             </button>
             <button
-              onClick={handleStartNewRoute}
+              onClick={() => handleStartNewRoute()}
               className="text-slate-500 hover:text-slate-700 text-[11px]"
             >
               Start New Route
@@ -1282,16 +1327,29 @@ export default function RoutesPlannerPage() {
         <div className="bg-slate-50 border border-slate-200 text-slate-700 px-4 py-1.5 rounded-xl text-xs flex items-center justify-between shadow-xs">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-amber-500" />
-            <span className="font-medium">Active Workspace: {routeName} ({outboundStops.length} stops)</span>
-            <span className="text-[10px] text-slate-500 hidden sm:inline">· Auto-saved in browser across refresh</span>
+            <span className="font-medium">
+              Manual Draft: {routeName.trim() || "Untitled Route"} ({outboundStops.length} outbound
+              {roundTripType === "different_path" ? `, ${returnStops.length} return` : ""} stops)
+            </span>
+            <span className="text-[10px] text-slate-500 hidden sm:inline">· Saved only when confirmed in Supabase</span>
           </div>
-          <button
-            onClick={() => handleSaveRoute(false)}
-            className="text-indigo-600 hover:text-indigo-800 font-semibold text-[11px] flex items-center gap-1"
-          >
-            <Save className="h-3 w-3" />
-            Save to Database
-          </button>
+          <div className="flex items-center gap-3">
+            {(routeName || startPoint || destinationPoint || outboundStops.length > 0) && (
+              <button
+                onClick={() => handleStartNewRoute()}
+                className="text-slate-500 hover:text-slate-800 text-[11px]"
+              >
+                Clear Designer
+              </button>
+            )}
+            <button
+              onClick={() => handleSaveRoute(false)}
+              className="text-indigo-600 hover:text-indigo-800 font-semibold text-[11px] flex items-center gap-1"
+            >
+              <Save className="h-3 w-3" />
+              Save to Supabase
+            </button>
+          </div>
         </div>
       )}
 
@@ -1312,7 +1370,7 @@ export default function RoutesPlannerPage() {
           <div className="text-xl font-bold text-slate-900 mt-1">
             {formatDurationMins(routeStats.totalDurationMins)}
           </div>
-          <div className="text-[11px] text-slate-500 mt-1">Dep: {departureTime} · Arr: {routeStats.completionTimeStr}</div>
+          <div className="text-[11px] text-slate-500 mt-1">Drive + planned stop wait time</div>
         </div>
 
         <div className="bg-white border border-slate-200/80 p-3.5 rounded-2xl shadow-xs">
@@ -1367,38 +1425,66 @@ export default function RoutesPlannerPage() {
                   <div>
                     <div className="text-xs font-bold text-slate-800">Interactive Road Route Map</div>
                     <div className="text-[10px] text-slate-500">
-                      {mapClickMode === "set_destination"
-                        ? "Click anywhere on the map to place the Destination marker"
-                        : "Click anywhere on the road to place a new stop point"}
+                      {mapClickMode === "set_start"
+                        ? "Click anywhere on the map to set Starting Location (Origin)"
+                        : mapClickMode === "set_destination"
+                        ? "Click anywhere on the map to set the Destination marker"
+                        : mapClickMode === "add_return_stop"
+                        ? "Click anywhere on the road to add a Return Stop"
+                        : "Click anywhere on the road to add an Outbound Stop"}
                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2 flex-wrap">
                   {/* Mode Selector */}
                   <div className="flex items-center rounded-lg border border-slate-200 bg-white p-0.5 text-[11px] shadow-2xs">
                     <button
                       type="button"
+                      onClick={() => setMapClickMode("set_start")}
+                      className={`px-2 py-1 rounded-md font-medium transition-all ${
+                        mapClickMode === "set_start"
+                          ? "bg-slate-900 text-white shadow-xs"
+                          : "text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      Set Origin
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setMapClickMode("add_stop")}
-                      className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+                      className={`px-2 py-1 rounded-md font-medium transition-all ${
                         mapClickMode === "add_stop"
                           ? "bg-indigo-600 text-white shadow-xs"
                           : "text-slate-600 hover:text-slate-900"
                       }`}
                     >
-                      + Add Stop
+                      + Outbound Stop
                     </button>
+                    {roundTripType === "different_path" && (
+                      <button
+                        type="button"
+                        onClick={() => setMapClickMode("add_return_stop")}
+                        className={`px-2 py-1 rounded-md font-medium transition-all ${
+                          mapClickMode === "add_return_stop"
+                            ? "bg-emerald-600 text-white shadow-xs"
+                            : "text-emerald-700 hover:bg-emerald-50"
+                        }`}
+                      >
+                        + Return Stop
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setMapClickMode("set_destination")}
-                      className={`px-2.5 py-1 rounded-md font-medium transition-all flex items-center gap-1 ${
+                      className={`px-2 py-1 rounded-md font-medium transition-all flex items-center gap-1 ${
                         mapClickMode === "set_destination"
                           ? "bg-amber-600 text-white shadow-xs"
                           : "text-amber-700 hover:text-amber-800"
                       }`}
                     >
                       <CheckCircle2 className="h-3 w-3" />
-                      Set Destination
+                      Set Dest
                     </button>
                   </div>
 
@@ -1429,8 +1515,8 @@ export default function RoutesPlannerPage() {
                 <GoogleRoutePlannerMap
                   outboundCoordinates={outboundRoadResult?.coordinates}
                   returnCoordinates={returnRoadResult?.coordinates}
-                  startPoint={startPoint}
-                  destinationPoint={destinationPoint}
+                  startPoint={startPoint || undefined}
+                  destinationPoint={destinationPoint || undefined}
                   outboundStops={outboundStops}
                   returnStops={returnStops}
                   roundTripType={roundTripType}
@@ -1441,73 +1527,136 @@ export default function RoutesPlannerPage() {
                 />
               </div>
 
-              {/* Map Footer Toolbar */}
-              <div className="p-3 bg-white border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-500 font-medium">Quick Center Presets:</span>
-                  <select
-                    onChange={(e) => {
-                      const idx = parseInt(e.target.value, 10);
-                      if (!isNaN(idx) && PRESET_DAIRY_CENTRES[idx]) {
-                        const c = PRESET_DAIRY_CENTRES[idx];
-                        const newStop: RoutePoint = {
-                          id: `preset-${Date.now()}`,
-                          name: c.name,
-                          lat: c.lat,
-                          lng: c.lng,
-                          serviceDurationMins: 5,
-                          isMandatory: true,
-                          status: "Pending",
-                        };
-                        setOutboundStops((prev) => [...prev, newStop]);
-                        showToast(`Added ${c.name}`);
-                      }
-                      e.target.value = "";
-                    }}
-                    defaultValue=""
-                    className="border border-slate-200 rounded-lg px-2.5 py-1 text-xs bg-slate-50 text-slate-700 outline-none"
-                  >
-                    <option value="" disabled>
-                      + Add Regional Dairy Centre…
-                    </option>
-                    {PRESET_DAIRY_CENTRES.map((c, i) => (
-                      <option key={c.name} value={i}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              {/* Map Footer: Manual Location Search + CSV Import (No Presets/Templates) */}
+              <div className="p-3 bg-white border-t border-slate-200/80 space-y-2.5 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <form onSubmit={handleSearchLocation} className="flex items-center gap-1.5 flex-1 min-w-[240px]">
+                    <div className="relative flex-1">
+                      <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        value={searchLocationQuery}
+                        onChange={(e) => setSearchLocationQuery(e.target.value)}
+                        placeholder="Search town, centre or enter lat, lng (e.g. 8.1833, 77.4119)"
+                        className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 text-xs bg-slate-50 focus:bg-white outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={isSearchingLocation}
+                      className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-semibold inline-flex items-center gap-1"
+                    >
+                      {isSearchingLocation ? <Loader2 className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
+                      Search
+                    </button>
+                    {searchResults.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSearchResults([]);
+                          setSearchError(null);
+                        }}
+                        className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50"
+                        title="Clear search results"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </form>
 
-                <div className="flex items-center gap-2">
                   <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium">
                     <Upload className="h-3.5 w-3.5 text-slate-500" />
                     <span>Import Stops (CSV)</span>
                     <input type="file" accept=".csv" onChange={handleCsvImport} className="hidden" />
                   </label>
-
-                  {/* Load Template Dropdown */}
-                  <div className="relative group">
-                    <button className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium">
-                      <FolderOpen className="h-3.5 w-3.5 text-slate-500" />
-                      <span>Route Templates</span>
-                    </button>
-                    <div className="absolute right-0 bottom-full mb-1 w-72 bg-white rounded-xl shadow-lg border border-slate-200 py-1.5 hidden group-hover:block z-30">
-                      <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                        Available Templates
-                      </div>
-                      {DEFAULT_ROUTE_TEMPLATES.map((tpl) => (
-                        <button
-                          key={tpl.id}
-                          onClick={() => applyTemplate(tpl)}
-                          className="w-full text-left px-3 py-2 text-xs hover:bg-slate-50 text-slate-800 transition-colors"
-                        >
-                          <div className="font-semibold text-indigo-700">{tpl.name}</div>
-                          <div className="text-[10px] text-slate-500 truncate mt-0.5">{tpl.description}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
                 </div>
+
+                {searchError && (
+                  <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                    {searchError}
+                  </div>
+                )}
+
+                {searchResults.length > 0 && (
+                  <div className="max-h-44 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 bg-slate-50/70">
+                    {searchResults.map((res, idx) => (
+                      <div key={idx} className="p-2 flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-slate-800 truncate">{res.name}</div>
+                          <div className="text-[10px] text-slate-500 truncate">
+                            {res.displayName} ({res.lat.toFixed(4)}, {res.lng.toFixed(4)})
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setStartPoint({ name: res.name, lat: res.lat, lng: res.lng });
+                              showToast(`Origin set to ${res.name}`);
+                            }}
+                            className="px-2 py-1 rounded-md bg-slate-900 text-white text-[10px] font-semibold"
+                          >
+                            Set Origin
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOutboundStops((prev) => [
+                                ...prev,
+                                {
+                                  id: `stop-${Date.now()}-${idx}`,
+                                  name: res.name,
+                                  lat: res.lat,
+                                  lng: res.lng,
+                                  serviceDurationMins: 5,
+                                  isMandatory: true,
+                                  status: "Pending",
+                                },
+                              ]);
+                              showToast(`Added "${res.name}" to Outbound Stops`);
+                            }}
+                            className="px-2 py-1 rounded-md bg-indigo-600 text-white text-[10px] font-semibold"
+                          >
+                            + Outbound
+                          </button>
+                          {roundTripType === "different_path" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReturnStops((prev) => [
+                                  ...prev,
+                                  {
+                                    id: `ret-${Date.now()}-${idx}`,
+                                    name: res.name,
+                                    lat: res.lat,
+                                    lng: res.lng,
+                                    serviceDurationMins: 5,
+                                    isMandatory: false,
+                                    status: "Pending",
+                                  },
+                                ]);
+                                showToast(`Added "${res.name}" to Return Stops`);
+                              }}
+                              className="px-2 py-1 rounded-md bg-emerald-600 text-white text-[10px] font-semibold"
+                            >
+                              + Return
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDestinationPoint({ name: res.name, lat: res.lat, lng: res.lng });
+                              showToast(`Destination set to ${res.name}`);
+                            }}
+                            className="px-2 py-1 rounded-md bg-amber-600 text-white text-[10px] font-semibold"
+                          >
+                            Set Dest
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </Card>
           </div>
@@ -1519,7 +1668,7 @@ export default function RoutesPlannerPage() {
               <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
                 <div className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
                   <Sliders className="h-3.5 w-3.5 text-indigo-600" />
-                  Route Details & Schedule
+                  Route Details
                 </div>
                 <Badge variant="outline" className="text-[10px]">
                   Configurable
@@ -1537,133 +1686,81 @@ export default function RoutesPlannerPage() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5">
+                {/* Manual Origin & Destination Controls (Search or Pick on Map) */}
+                <div className="pt-2 border-t border-slate-100 space-y-3">
                   <div>
-                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">Scheduled Date</label>
-                    <input
-                      type="date"
-                      value={routeDate}
-                      onChange={(e) => setRouteDate(e.target.value)}
-                      className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">Departure Time</label>
-                    <input
-                      type="time"
-                      value={departureTime}
-                      onChange={(e) => setDepartureTime(e.target.value)}
-                      className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">Assigned Vehicle</label>
-                    <select
-                      value={assignedVehicleId}
-                      onChange={(e) => setAssignedVehicleId(e.target.value)}
-                      className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white outline-none"
-                    >
-                      <option value="">Select vehicle…</option>
-                      {dbVehicles.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.number} ({v.type})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">Assigned Driver</label>
-                    <select
-                      value={assignedDriverId}
-                      onChange={(e) => setAssignedDriverId(e.target.value)}
-                      className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white outline-none"
-                    >
-                      <option value="">Select driver…</option>
-                      {dbDrivers.map((d) => (
-                        <option key={d.id} value={d.id}>
-                          {d.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Origin (Depot) & Destination Selectors */}
-                <div className="pt-2 border-t border-slate-100 space-y-2">
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-600 flex items-center gap-1 mb-1">
+                    <label className="text-[11px] font-semibold text-slate-600 flex items-center justify-between mb-1">
+                      <span className="flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-slate-900 inline-block" />
-                        <span>Origin (Depot)</span>
-                      </label>
-                      <select
-                        value={startPoint?.name || NANJIL_DAIRY_DEPOT.name}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          if (val === NANJIL_DAIRY_DEPOT.name) {
-                            setStartPoint(NANJIL_DAIRY_DEPOT);
-                          } else {
-                            const found = PRESET_DAIRY_CENTRES.find((c) => c.name === val);
-                            if (found) setStartPoint(found);
-                          }
+                        <span>Starting Location (Origin) *</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMapClickMode("set_start");
+                          showToast("Click on the map to set Starting Location");
                         }}
-                        className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white outline-none truncate font-medium text-slate-800"
+                        className="text-[10px] text-indigo-700 hover:underline font-semibold"
                       >
-                        <option value={NANJIL_DAIRY_DEPOT.name}>
-                          {NANJIL_DAIRY_DEPOT.name}
-                        </option>
-                        {PRESET_DAIRY_CENTRES.map((c) => (
-                          <option key={c.name} value={c.name}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                        Pick on map
+                      </button>
+                    </label>
+                    <input
+                      type="text"
+                      value={startPoint?.name || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setStartPoint((prev) =>
+                          prev ? { ...prev, name: val } : { name: val, lat: 0, lng: 0 }
+                        );
+                      }}
+                      placeholder="Type starting location name or Pick on map..."
+                      className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white outline-none focus:border-indigo-500 font-medium text-slate-800"
+                    />
+                  </div>
 
-                    <div>
-                      <label className="text-[11px] font-semibold text-slate-600 flex items-center justify-between mb-1">
-                        <span className="flex items-center gap-1">
-                          <span className="h-2 w-2 rounded-full bg-amber-600 inline-block" />
-                          <span>Destination</span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMapClickMode("set_destination");
-                            showToast("Click anywhere on the map to set Destination");
-                          }}
-                          className="text-[10px] text-amber-700 hover:underline font-semibold"
-                        >
-                          Pick on map
-                        </button>
-                      </label>
-                      <select
-                        value={destinationPoint?.name || ""}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const found = PRESET_DAIRY_CENTRES.find((c) => c.name === val);
-                          if (found) {
-                            setDestinationPoint(found);
-                            showToast(`Destination set to ${found.name}`);
-                          }
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-600 flex items-center justify-between mb-1">
+                      <span className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full bg-amber-600 inline-block" />
+                        <span>Destination *</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMapClickMode("set_destination");
+                          showToast("Click anywhere on the map to set Destination");
                         }}
-                        className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50/60 outline-none truncate font-semibold text-amber-900"
+                        className="text-[10px] text-amber-700 hover:underline font-semibold"
                       >
-                        {!PRESET_DAIRY_CENTRES.some((c) => c.name === destinationPoint?.name) && destinationPoint?.name && (
-                          <option value={destinationPoint.name}>
-                            {destinationPoint.name}
-                          </option>
-                        )}
-                        {PRESET_DAIRY_CENTRES.map((c) => (
-                          <option key={c.name} value={c.name}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                        Pick on map
+                      </button>
+                    </label>
+                    <input
+                      type="text"
+                      value={destinationPoint?.name || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setDestinationPoint((prev) =>
+                          prev ? { ...prev, name: val } : { name: val, lat: 0, lng: 0 }
+                        );
+                      }}
+                      placeholder="Type destination name or Pick on map..."
+                      className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50/40 outline-none focus:border-amber-500 font-semibold text-amber-950"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                      Route Notes (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={routeNotes}
+                      onChange={(e) => setRouteNotes(e.target.value)}
+                      placeholder="Special collection instructions, seals, or shift notes..."
+                      className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 outline-none focus:border-indigo-500"
+                    />
                   </div>
                 </div>
               </div>
@@ -1746,31 +1843,27 @@ export default function RoutesPlannerPage() {
               </div>
             </Card>
 
-            {/* 3. Stop Sequence Manager */}
-            <Card className="border border-slate-200/80 shadow-xs p-4 flex flex-col max-h-[500px]">
+            {/* 3. Outbound Stop Sequence Manager */}
+            <Card className="border border-slate-200/80 shadow-xs p-4 flex flex-col max-h-[540px]">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2.5 mb-3">
                 <div>
                   <div className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
                     <Layers className="h-3.5 w-3.5 text-indigo-600" />
                     Outbound Stops Sequence ({outboundStops.length})
                   </div>
-                  <div className="text-[10px] text-slate-500">Reorder, set service times, or mark mandatory</div>
+                  <div className="text-[10px] text-slate-500">
+                    Click map, search place, or add manually · Drag or use arrows to reorder
+                  </div>
                 </div>
                 <button
+                  type="button"
                   onClick={() => {
-                    const center = PRESET_DAIRY_CENTRES[outboundStops.length % PRESET_DAIRY_CENTRES.length];
-                    setOutboundStops((prev) => [
-                      ...prev,
-                      {
-                        id: `stop-${Date.now()}`,
-                        name: center.name,
-                        lat: center.lat,
-                        lng: center.lng,
-                        serviceDurationMins: 5,
-                        isMandatory: true,
-                        status: "Pending",
-                      },
-                    ]);
+                    setShowManualStopForm((prev) => (prev === "outbound" ? null : "outbound"));
+                    setManualStopName("");
+                    setManualStopLat(startPoint?.lat ? String(startPoint.lat) : "");
+                    setManualStopLng(startPoint?.lng ? String(startPoint.lng) : "");
+                    setManualStopDuration(5);
+                    setManualStopMandatory(true);
                   }}
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-semibold hover:bg-indigo-100"
                 >
@@ -1779,107 +1872,386 @@ export default function RoutesPlannerPage() {
                 </button>
               </div>
 
-              {/* Scrollable list */}
-              <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                {outboundStops.map((stop, index) => (
-                  <div
-                    key={stop.id}
-                    className={`p-2.5 rounded-xl border text-xs transition-all ${
-                      activeStopId === stop.id
-                        ? "border-indigo-400 bg-indigo-50/50"
-                        : "border-slate-200 bg-white hover:border-slate-300"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="h-5 w-5 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-[10px] shrink-0">
-                          {index + 1}
-                        </span>
-                        <span className="font-semibold text-slate-800 truncate" title={stop.name}>
-                          {stop.name}
-                        </span>
-                      </div>
-
-                      {/* Reorder and action controls */}
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          onClick={() => moveStop(index, "up")}
-                          disabled={index === 0}
-                          className="p-1 rounded text-slate-400 hover:text-slate-800 disabled:opacity-30"
-                          title="Move up"
-                        >
-                          <ArrowUp className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => moveStop(index, "down")}
-                          disabled={index === outboundStops.length - 1}
-                          className="p-1 rounded text-slate-400 hover:text-slate-800 disabled:opacity-30"
-                          title="Move down"
-                        >
-                          <ArrowDown className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => duplicateStop(stop)}
-                          className="p-1 rounded text-slate-400 hover:text-indigo-600"
-                          title="Duplicate stop"
-                        >
-                          <Copy className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            setDestinationPoint({
-                              name: stop.name,
-                              lat: stop.lat,
-                              lng: stop.lng,
-                            });
-                            showToast(`Set "${stop.name}" as Route Destination`);
-                          }}
-                          className="p-1 rounded text-slate-400 hover:text-amber-600"
-                          title="Set as Destination"
-                        >
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => deleteStop(stop.id)}
-                          className="p-1 rounded text-slate-400 hover:text-red-600"
-                          title="Remove stop"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-                      <div className="flex items-center gap-1.5">
-                        <Clock className="h-3 w-3 text-slate-400" />
-                        <span>Wait:</span>
-                        <input
-                          type="number"
-                          value={stop.serviceDurationMins || 5}
-                          onChange={(e) => updateStopServiceDuration(stop.id, parseInt(e.target.value, 10))}
-                          className="w-12 px-1.5 py-0.5 rounded border border-slate-200 text-center text-xs font-semibold"
-                          min={1}
-                          max={60}
-                        />
-                        <span>mins</span>
-                      </div>
-
+              {showManualStopForm === "outbound" && (
+                <form
+                  onSubmit={handleSubmitManualStop}
+                  className="mb-3 p-3 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-2 text-xs"
+                >
+                  <div className="font-bold text-indigo-900 text-[11px]">Add Outbound Stop Manually</div>
+                  <input
+                    type="text"
+                    value={manualStopName}
+                    onChange={(e) => setManualStopName(e.target.value)}
+                    placeholder="Stop / Collection Centre Name *"
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-white outline-none text-xs"
+                  />
+                  <div className="grid grid-cols-3 gap-2">
+                    <input
+                      type="number"
+                      step="0.0001"
+                      value={manualStopLat}
+                      onChange={(e) => setManualStopLat(e.target.value)}
+                      placeholder="Lat (optional)"
+                      className="px-2 py-1.5 rounded-lg border border-indigo-200 bg-white text-xs font-mono"
+                    />
+                    <input
+                      type="number"
+                      step="0.0001"
+                      value={manualStopLng}
+                      onChange={(e) => setManualStopLng(e.target.value)}
+                      placeholder="Lng (optional)"
+                      className="px-2 py-1.5 rounded-lg border border-indigo-200 bg-white text-xs font-mono"
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      max={60}
+                      value={manualStopDuration}
+                      onChange={(e) => setManualStopDuration(Number(e.target.value))}
+                      placeholder="Wait (min)"
+                      className="px-2 py-1.5 rounded-lg border border-indigo-200 bg-white text-xs"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={manualStopMandatory}
+                        onChange={(e) => setManualStopMandatory(e.target.checked)}
+                      />
+                      Mandatory Stop
+                    </label>
+                    <div className="flex items-center gap-1.5">
                       <button
                         type="button"
-                        onClick={() => toggleStopMandatory(stop.id)}
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
-                          stop.isMandatory
-                            ? "bg-red-50 text-red-700 border border-red-200"
-                            : "bg-slate-100 text-slate-600"
-                        }`}
+                        onClick={() => setShowManualStopForm(null)}
+                        className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-600"
                       >
-                        {stop.isMandatory ? "Mandatory" : "Optional"}
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-3 py-1 rounded-lg bg-indigo-600 text-white font-semibold"
+                      >
+                        Add Stop
                       </button>
                     </div>
                   </div>
-                ))}
+                </form>
+              )}
+
+              {/* Scrollable Outbound Stops List */}
+              <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                {outboundStops.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl">
+                    No outbound stops yet. Click on the map, search a location above, or click <strong>+ Add Stop</strong>.
+                  </div>
+                ) : (
+                  outboundStops.map((stop, index) => (
+                    <div
+                      key={stop.id}
+                      draggable
+                      onDragStart={() => setDraggedStop({ index, isReturn: false })}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={() => {
+                        if (draggedStop && !draggedStop.isReturn) {
+                          reorderStopByDragDrop(draggedStop.index, index, false);
+                        }
+                        setDraggedStop(null);
+                      }}
+                      className={`p-2.5 rounded-xl border text-xs transition-all cursor-grab active:cursor-grabbing ${
+                        activeStopId === stop.id
+                          ? "border-indigo-400 bg-indigo-50/50"
+                          : "border-slate-200 bg-white hover:border-slate-300"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <span className="h-5 w-5 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-[10px] shrink-0">
+                            {index + 1}
+                          </span>
+                          <input
+                            type="text"
+                            value={stop.name}
+                            onChange={(e) => updateStopFields(stop.id, { name: e.target.value }, false)}
+                            onClick={() => setActiveStopId(stop.id)}
+                            className="w-full font-semibold text-slate-800 bg-transparent border-b border-transparent focus:border-indigo-400 focus:bg-white px-1 py-0.5 outline-none"
+                          />
+                        </div>
+
+                        {/* Reorder and action controls */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => moveStop(index, "up")}
+                            disabled={index === 0}
+                            className="p-1 rounded text-slate-400 hover:text-slate-800 disabled:opacity-30"
+                            title="Move up"
+                          >
+                            <ArrowUp className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moveStop(index, "down")}
+                            disabled={index === outboundStops.length - 1}
+                            className="p-1 rounded text-slate-400 hover:text-slate-800 disabled:opacity-30"
+                            title="Move down"
+                          >
+                            <ArrowDown className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => duplicateStop(stop)}
+                            className="p-1 rounded text-slate-400 hover:text-indigo-600"
+                            title="Duplicate stop"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditingCoordsStopId((prev) => (prev === stop.id ? null : stop.id))
+                            }
+                            className="p-1 rounded text-slate-400 hover:text-indigo-600"
+                            title="Edit coordinates"
+                          >
+                            <Edit className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteStop(stop.id)}
+                            className="p-1 rounded text-slate-400 hover:text-red-600"
+                            title="Remove stop"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {editingCoordsStopId === stop.id && (
+                        <div className="mt-2 grid grid-cols-2 gap-1.5">
+                          <input
+                            type="number"
+                            step="0.0001"
+                            value={stop.lat}
+                            onChange={(e) => {
+                              const v = parseFloat(e.target.value);
+                              if (Number.isFinite(v)) updateStopFields(stop.id, { lat: v }, false);
+                            }}
+                            className="px-2 py-1 rounded border border-slate-200 text-[11px] font-mono bg-slate-50"
+                          />
+                          <input
+                            type="number"
+                            step="0.0001"
+                            value={stop.lng}
+                            onChange={(e) => {
+                              const v = parseFloat(e.target.value);
+                              if (Number.isFinite(v)) updateStopFields(stop.id, { lng: v }, false);
+                            }}
+                            className="px-2 py-1 rounded border border-slate-200 text-[11px] font-mono bg-slate-50"
+                          />
+                        </div>
+                      )}
+
+                      <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="h-3 w-3 text-slate-400" />
+                          <span>Wait:</span>
+                          <input
+                            type="number"
+                            value={stop.serviceDurationMins || 5}
+                            onChange={(e) => updateStopServiceDuration(stop.id, parseInt(e.target.value, 10))}
+                            className="w-12 px-1.5 py-0.5 rounded border border-slate-200 text-center text-xs font-semibold"
+                            min={1}
+                            max={60}
+                          />
+                          <span>mins · {stop.lat.toFixed(4)}, {stop.lng.toFixed(4)}</span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => toggleStopMandatory(stop.id)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
+                            stop.isMandatory
+                              ? "bg-red-50 text-red-700 border border-red-200"
+                              : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {stop.isMandatory ? "Mandatory" : "Optional"}
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </Card>
+
+            {/* 3B. Independent Return Stops Manager (for Different Return Path) */}
+            {roundTripType === "different_path" && (
+              <Card className="border border-emerald-200/80 shadow-xs p-4 flex flex-col max-h-[380px]">
+                <div className="flex items-center justify-between border-b border-emerald-100 pb-2.5 mb-3">
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+                      <RotateCcw className="h-3.5 w-3.5 text-emerald-600" />
+                      Return Stops Sequence ({returnStops.length})
+                    </div>
+                    <div className="text-[10px] text-slate-500">Stops visited on return leg back to Origin</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowManualStopForm((prev) => (prev === "return" ? null : "return"));
+                      setManualStopName("");
+                      setManualStopLat(destinationPoint?.lat ? String(destinationPoint.lat) : "");
+                      setManualStopLng(destinationPoint?.lng ? String(destinationPoint.lng) : "");
+                      setManualStopDuration(5);
+                      setManualStopMandatory(false);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold hover:bg-emerald-100"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Add Return Stop
+                  </button>
+                </div>
+
+                {showManualStopForm === "return" && (
+                  <form
+                    onSubmit={handleSubmitManualStop}
+                    className="mb-3 p-3 rounded-xl bg-emerald-50/70 border border-emerald-200 space-y-2 text-xs"
+                  >
+                    <div className="font-bold text-emerald-900 text-[11px]">Add Return Stop Manually</div>
+                    <input
+                      type="text"
+                      value={manualStopName}
+                      onChange={(e) => setManualStopName(e.target.value)}
+                      placeholder="Return Stop Name *"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-white outline-none text-xs"
+                    />
+                    <div className="grid grid-cols-3 gap-2">
+                      <input
+                        type="number"
+                        step="0.0001"
+                        value={manualStopLat}
+                        onChange={(e) => setManualStopLat(e.target.value)}
+                        placeholder="Lat (optional)"
+                        className="px-2 py-1.5 rounded-lg border border-emerald-200 bg-white text-xs font-mono"
+                      />
+                      <input
+                        type="number"
+                        step="0.0001"
+                        value={manualStopLng}
+                        onChange={(e) => setManualStopLng(e.target.value)}
+                        placeholder="Lng (optional)"
+                        className="px-2 py-1.5 rounded-lg border border-emerald-200 bg-white text-xs font-mono"
+                      />
+                      <input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={manualStopDuration}
+                        onChange={(e) => setManualStopDuration(Number(e.target.value))}
+                        placeholder="Wait (min)"
+                        className="px-2 py-1.5 rounded-lg border border-emerald-200 bg-white text-xs"
+                      />
+                    </div>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setShowManualStopForm(null)}
+                        className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-600"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-3 py-1 rounded-lg bg-emerald-600 text-white font-semibold"
+                      >
+                        Add Return Stop
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                  {returnStops.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-slate-400 border border-dashed border-emerald-200 rounded-xl">
+                      No return stops yet. Switch map click mode to <strong>+ Return Stop</strong> or click <strong>Add Return Stop</strong>.
+                    </div>
+                  ) : (
+                    returnStops.map((stop, index) => (
+                      <div
+                        key={stop.id}
+                        draggable
+                        onDragStart={() => setDraggedStop({ index, isReturn: true })}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={() => {
+                          if (draggedStop && draggedStop.isReturn) {
+                            reorderStopByDragDrop(draggedStop.index, index, true);
+                          }
+                          setDraggedStop(null);
+                        }}
+                        className="p-2.5 rounded-xl border border-emerald-200/80 bg-white text-xs cursor-grab"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className="h-5 w-5 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-[10px] shrink-0">
+                              R{index + 1}
+                            </span>
+                            <input
+                              type="text"
+                              value={stop.name}
+                              onChange={(e) => updateStopFields(stop.id, { name: e.target.value }, true)}
+                              className="w-full font-semibold text-slate-800 bg-transparent border-b border-transparent focus:border-emerald-400 px-1 py-0.5 outline-none"
+                            />
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => moveStop(index, "up", true)}
+                              disabled={index === 0}
+                              className="p-1 rounded text-slate-400 hover:text-slate-800 disabled:opacity-30"
+                            >
+                              <ArrowUp className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => moveStop(index, "down", true)}
+                              disabled={index === returnStops.length - 1}
+                              className="p-1 rounded text-slate-400 hover:text-slate-800 disabled:opacity-30"
+                            >
+                              <ArrowDown className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteStop(stop.id, true)}
+                              className="p-1 rounded text-slate-400 hover:text-red-600"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-500">
+                          <span>
+                            Wait: {stop.serviceDurationMins || 5}m · {stop.lat.toFixed(4)}, {stop.lng.toFixed(4)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => toggleStopMandatory(stop.id, true)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                              stop.isMandatory
+                                ? "bg-red-50 text-red-700 border border-red-200"
+                                : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            {stop.isMandatory ? "Mandatory" : "Optional"}
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </Card>
+            )}
 
             {/* 4. Independent Route Policies & Deviation Thresholds */}
             <Card className="border border-slate-200/80 shadow-xs p-4 space-y-3">
@@ -2087,13 +2459,13 @@ export default function RoutesPlannerPage() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
             <div>
               <div className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <span>Saved Fleet Routes & Templates</span>
+                <span>Active Saved Collection Routes</span>
                 <Badge variant="outline" className="bg-indigo-50 text-indigo-700 text-xs font-semibold">
-                  {savedRoutes.length} Persisted
+                  {savedRoutes.length} Active in Supabase
                 </Badge>
               </div>
               <div className="text-xs text-slate-500 mt-0.5">
-                Manage, activate, update or inspect saved multi-stop collection routes
+                Single source of truth synced with Driver &amp; Route Assignment and Driver Portal
               </div>
             </div>
 
@@ -2121,7 +2493,7 @@ export default function RoutesPlannerPage() {
               </Button>
 
               <Button
-                onClick={handleStartNewRoute}
+                onClick={() => handleStartNewRoute()}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-xs"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -2133,7 +2505,7 @@ export default function RoutesPlannerPage() {
           {isLoadingRoutes && savedRoutes.length === 0 ? (
             <div className="py-16 text-center space-y-2">
               <Loader2 className="h-7 w-7 text-indigo-600 animate-spin mx-auto" />
-              <div className="text-xs text-slate-500">Loading saved fleet routes from database...</div>
+              <div className="text-xs text-slate-500">Loading saved routes from Supabase...</div>
             </div>
           ) : filteredSavedRoutes.length === 0 ? (
             <div className="py-14 text-center space-y-3">
@@ -2141,12 +2513,12 @@ export default function RoutesPlannerPage() {
                 <RouteIcon className="h-6 w-6" />
               </div>
               <div className="text-sm font-bold text-slate-800">
-                {savedRoutesSearch ? "No routes matching your search" : "No saved routes yet"}
+                {savedRoutesSearch ? "No routes matching your search" : "No active routes saved yet"}
               </div>
               <div className="text-xs text-slate-500 max-w-sm mx-auto">
                 {savedRoutesSearch
                   ? `No routes found matching "${savedRoutesSearch}". Try clearing your search.`
-                  : "Design and customize multi-stop collection routes in the Route Designer, then click Save Route to store them."}
+                  : "Create routes manually from scratch in Route Designer and click Save Route to store them in Supabase."}
               </div>
               {savedRoutesSearch ? (
                 <Button
@@ -2158,10 +2530,10 @@ export default function RoutesPlannerPage() {
                 </Button>
               ) : (
                 <Button
-                  onClick={() => setActiveTab("planner")}
+                  onClick={() => handleStartNewRoute()}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-4 py-2 rounded-xl"
                 >
-                  Open Route Designer
+                  Create New Manual Route
                 </Button>
               )}
             </div>
@@ -2171,22 +2543,25 @@ export default function RoutesPlannerPage() {
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-400 uppercase text-[10px] tracking-wider font-semibold bg-slate-50/50">
                     <th className="py-2.5 px-3">Route Name</th>
-                    <th className="py-2.5 px-3">Trip Mode</th>
-                    <th className="py-2.5 px-3">Assigned Vehicle</th>
-                    <th className="py-2.5 px-3">Assigned Driver</th>
+                    <th className="py-2.5 px-3">Start → Destination</th>
+                    <th className="py-2.5 px-3">Mode</th>
                     <th className="py-2.5 px-3">Stops / Distance</th>
-                    <th className="py-2.5 px-3">Departure</th>
+                    <th className="py-2.5 px-3">Est. Time &amp; Dep</th>
                     <th className="py-2.5 px-3">Status</th>
                     <th className="py-2.5 px-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredSavedRoutes.map((r) => {
-                    const v = dbVehicles.find((x) => x.id === r.vehicle_id);
-                    const d = dbDrivers.find((x) => x.id === r.driver_id);
                     const cfg = r.route_config;
-                    const mode = cfg?.roundTripType || "same_path";
+                    const mode = cfg?.roundTripType || "one_way";
                     const distKm = cfg?.totalDistanceKm || null;
+                    const durMins = cfg?.totalDurationMins || null;
+                    const outCount = Array.isArray(cfg?.outboundStops) ? cfg.outboundStops.length : 0;
+                    const retCount = Array.isArray(cfg?.returnStops) ? cfg.returnStops.length : 0;
+                    const startName = cfg?.startPoint?.name || "Not configured";
+                    const destName = cfg?.destinationPoint?.name || cfg?.destination?.name || "Not configured";
+                    const validCfg = isValidSavedRoute(r);
                     const isCurrent = editingRouteId === r.id;
 
                     return (
@@ -2201,12 +2576,20 @@ export default function RoutesPlannerPage() {
                             {r.name}
                             {isCurrent && (
                               <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 font-bold uppercase">
-                                Active
+                                Editing
                               </span>
                             )}
                           </div>
                           <div className="text-[10px] text-slate-400 mt-0.5">
-                            Saved {r.created_at ? new Date(r.created_at).toLocaleDateString() : "Recently"}
+                            Created {r.created_at ? new Date(r.created_at).toLocaleDateString() : "Recently"}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-slate-700">
+                          <div className="font-medium text-slate-800 truncate max-w-[200px]" title={startName}>
+                            {startName}
+                          </div>
+                          <div className="text-[11px] text-slate-500 truncate max-w-[200px]" title={destName}>
+                            → {destName}
                           </div>
                         </td>
                         <td className="py-3 px-3">
@@ -2221,54 +2604,75 @@ export default function RoutesPlannerPage() {
                             }`}
                           >
                             {mode === "same_path"
-                              ? "Same Path Loop"
+                              ? "Same Path"
                               : mode === "different_path"
-                              ? "Split Path Loop"
+                              ? "Different Return"
                               : "One-Way"}
                           </Badge>
                         </td>
-                        <td className="py-3 px-3 text-slate-700">
-                          {v ? (
-                            <span className="font-medium text-slate-900">{v.number}</span>
-                          ) : (
-                            <span className="text-slate-400 italic">Unassigned</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-slate-700">
-                          {d ? (
-                            <span>{d.name}</span>
-                          ) : (
-                            <span className="text-slate-400 italic">Unassigned</span>
-                          )}
-                        </td>
                         <td className="py-3 px-3 font-semibold text-indigo-700">
-                          {r.centres || (cfg?.outboundStops?.length ?? 0)} stops
+                          {outCount + retCount || r.centres || 0} stops
+                          {retCount > 0 ? ` (${outCount}+${retCount})` : ""}
                           {distKm ? (
-                            <span className="text-slate-400 font-normal ml-1">({distKm} km)</span>
+                            <div className="text-[10px] text-slate-500 font-normal">{distKm} km</div>
                           ) : null}
                         </td>
-                        <td className="py-3 px-3 text-slate-600">{r.start_time || "05:30"}</td>
+                        <td className="py-3 px-3 text-slate-600">
+                          <div>Dep: {r.start_time || cfg?.departureTime || "05:30"}</div>
+                          {durMins ? (
+                            <div className="text-[10px] text-slate-400">{formatDurationMins(durMins)}</div>
+                          ) : null}
+                        </td>
                         <td className="py-3 px-3">
-                          <Badge variant="outline" className="bg-slate-50 text-slate-700 text-[10px]">
-                            {r.status || "Ready"}
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] ${
+                              validCfg
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : "bg-amber-50 text-amber-700 border-amber-200"
+                            }`}
+                          >
+                            {validCfg ? "Ready" : "Incomplete"}
                           </Badge>
                         </td>
                         <td className="py-3 px-3 text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setViewingRoute(r)}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-700 hover:bg-indigo-50 transition-colors"
+                              title="View full stop sequence"
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                            </button>
                             <Button
-                              onClick={() => handleOpenInDesigner(r)}
+                              onClick={() => handleOpenInDesigner(r, false)}
                               className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 font-medium transition-colors"
-                              title="Load full route into Route Designer"
+                              title="Edit route in Route Designer"
                             >
                               <Edit className="h-3 w-3" />
-                              Open in Designer
+                              Edit
                             </Button>
                             <button
-                              onClick={() => handleDeleteRoute(r.id, r.name)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                              title="Delete route permanently"
+                              type="button"
+                              onClick={() => handleOpenInDesigner(r, true)}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-slate-100 transition-colors"
+                              title="Duplicate route into editor"
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={archivingRouteId === r.id}
+                              onClick={() => handleArchiveRoute(r.id, r.name)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-amber-700 hover:bg-amber-50 transition-colors disabled:opacity-40"
+                              title="Archive route (preserves trip & assignment history)"
+                            >
+                              {archivingRouteId === r.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
                             </button>
                           </div>
                         </td>
@@ -2280,6 +2684,127 @@ export default function RoutesPlannerPage() {
             </div>
           )}
         </Card>
+      )}
+
+      {/* Route Preview Modal */}
+      {viewingRoute && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden">
+            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                  Saved Route Details
+                </div>
+                <div className="text-base font-bold">{viewingRoute.name}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingRoute(null)}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3 text-xs max-h-[75vh] overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Origin</div>
+                  <div className="font-semibold text-slate-900">
+                    {viewingRoute.route_config?.startPoint?.name || "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Destination</div>
+                  <div className="font-semibold text-slate-900">
+                    {viewingRoute.route_config?.destinationPoint?.name || "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Departure Time</div>
+                  <div className="font-semibold">{viewingRoute.start_time || "05:30"}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Distance / Est. Time</div>
+                  <div className="font-semibold">
+                    {viewingRoute.route_config?.totalDistanceKm || 0} km ·{" "}
+                    {formatDurationMins(viewingRoute.route_config?.totalDurationMins || 0)}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[11px] font-bold uppercase text-slate-500 mb-1.5">
+                  Outbound Stops ({viewingRoute.route_config?.outboundStops?.length || 0})
+                </div>
+                <div className="space-y-1">
+                  {(viewingRoute.route_config?.outboundStops || []).map((s: any, idx: number) => (
+                    <div
+                      key={s.id || idx}
+                      className="flex items-center justify-between p-2 rounded-lg bg-slate-50 border border-slate-200/70"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="h-5 w-5 rounded-full bg-indigo-600 text-white text-[10px] font-bold flex items-center justify-center">
+                          {idx + 1}
+                        </span>
+                        <span className="font-semibold text-slate-800">{s.name}</span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        {Number(s.lat).toFixed(4)}, {Number(s.lng).toFixed(4)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {Array.isArray(viewingRoute.route_config?.returnStops) &&
+                viewingRoute.route_config.returnStops.length > 0 && (
+                  <div>
+                    <div className="text-[11px] font-bold uppercase text-emerald-700 mb-1.5">
+                      Return Stops ({viewingRoute.route_config.returnStops.length})
+                    </div>
+                    <div className="space-y-1">
+                      {viewingRoute.route_config.returnStops.map((s: any, idx: number) => (
+                        <div
+                          key={s.id || idx}
+                          className="flex items-center justify-between p-2 rounded-lg bg-emerald-50/50 border border-emerald-200/70"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="h-5 w-5 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center">
+                              R{idx + 1}
+                            </span>
+                            <span className="font-semibold text-slate-800">{s.name}</span>
+                          </div>
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            {Number(s.lat).toFixed(4)}, {Number(s.lng).toFixed(4)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setViewingRoute(null)}
+                  className="text-xs px-3 py-1.5 rounded-xl"
+                >
+                  Close
+                </Button>
+                <Button
+                  onClick={() => {
+                    const target = viewingRoute;
+                    setViewingRoute(null);
+                    handleOpenInDesigner(target, false);
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-3 py-1.5 rounded-xl"
+                >
+                  Edit in Designer
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

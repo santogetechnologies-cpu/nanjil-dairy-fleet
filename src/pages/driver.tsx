@@ -17,7 +17,10 @@ import { useAuth, REDIRECT_MAP } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
 import { supabase } from "@/lib/supabase";
 import { useVehicles } from "@/hooks/useVehicleTracking";
-import { getTodayIstDateString } from "@/lib/odometerTrackingEngine";
+import {
+  getTodayIstDateString,
+  notifyManualOdometerUpdate,
+} from "@/lib/odometerTrackingEngine";
 import {
   type ValidationFieldErrors,
   type VehicleOperationTripRecord,
@@ -34,6 +37,12 @@ import {
   validateTripCloseStatement,
   validateTripStart,
 } from "@/lib/driverOperationStatement";
+import {
+  type RouteAssignmentRecord,
+  type RouteSummaryInfo,
+  extractRouteSummary,
+  fetchAssignmentsWithFallback,
+} from "@/lib/driverRouteAssignments";
 import type {
   DriverAlertItem,
   DriverAssignedVehicle,
@@ -100,7 +109,10 @@ export default function DriverPage() {
   const [alerts, setAlerts] = useState<DriverAlertItem[]>([]);
   const [showNotifDrawer, setShowNotifDrawer] = useState(false);
 
-  // Shift & Trip State
+  // Shift, Assignment, Route & Trip State
+  const [activeAssignment, setActiveAssignment] = useState<RouteAssignmentRecord | null>(null);
+  const [upcomingAssignment, setUpcomingAssignment] = useState<RouteAssignmentRecord | null>(null);
+  const [routeSummary, setRouteSummary] = useState<RouteSummaryInfo | null>(null);
   const [activeShift, setActiveShift] = useState<any>(null);
   const [ongoingTrip, setOngoingTrip] = useState<VehicleOperationTripRecord | null>(null);
   const [tripsHistory, setTripsHistory] = useState<VehicleOperationTripRecord[]>([]);
@@ -257,27 +269,60 @@ export default function DriverPage() {
           };
       setDriver(resolvedDriver);
 
-      // 2. Fetch Admin-assigned vehicles strictly from active vehicle_assignments
+      // 2. Fetch Admin-assigned vehicles & route assignments strictly for resolvedDriver.id
       let vehiclesArray: any[] = [];
-      if (resolvedDriver.id) {
-        const { data: assignments } = await supabase
-          .from("vehicle_assignments")
-          .select("vehicle_id, assigned_at, vehicles(*)")
-          .eq("driver_id", resolvedDriver.id)
-          .eq("is_active", true)
-          .order("assigned_at", { ascending: false });
+      let chosenActiveAsg: RouteAssignmentRecord | null = null;
+      let chosenUpcomingAsg: RouteAssignmentRecord | null = null;
+      const todayIst = getTodayIstDateString();
 
-        if (assignments && assignments.length > 0) {
-          vehiclesArray = assignments
-            .filter((a: any) => a.vehicles)
-            .map((a: any) => ({
-              ...a.vehicles,
-              assigned_at: a.assigned_at,
-              driver_name: resolvedDriver.name,
-              driver_id: resolvedDriver.id,
-            }));
+      if (resolvedDriver.id) {
+        const { data: allAsgs } = await fetchAssignmentsWithFallback(supabase, {
+          driverId: resolvedDriver.id,
+          limit: 20,
+        });
+        chosenActiveAsg =
+          allAsgs.find(
+            (a) =>
+              a.is_active === true ||
+              a.status === "Assigned" ||
+              a.status === "In Progress"
+          ) || null;
+
+        chosenUpcomingAsg =
+          allAsgs
+            .filter((a) => a.status === "Scheduled")
+            .sort((a, b) => (a.assignment_date || "").localeCompare(b.assignment_date || ""))[0] || null;
+
+        const eligibleList = allAsgs.filter(
+          (a) =>
+            a.vehicles &&
+            (a.is_active === true ||
+              a.status === "Assigned" ||
+              a.status === "In Progress" ||
+              (a.status === "Scheduled" && (a.assignment_date || "") <= todayIst))
+        );
+
+        if (eligibleList.length > 0) {
+          vehiclesArray = eligibleList.map((a) => ({
+            ...a.vehicles,
+            assigned_at: a.assigned_at,
+            driver_name: resolvedDriver.name,
+            driver_id: resolvedDriver.id,
+            route:
+              a.route_name ||
+              a.collection_routes?.name ||
+              a.vehicles?.route ||
+              "No route assigned",
+          }));
         }
       }
+
+      setActiveAssignment(chosenActiveAsg);
+      setUpcomingAssignment(chosenUpcomingAsg);
+      const effectiveAsg = chosenActiveAsg || chosenUpcomingAsg;
+      const resolvedRouteSource =
+        effectiveAsg?.collection_routes || effectiveAsg?.route_snapshot || null;
+      setRouteSummary(resolvedRouteSource ? extractRouteSummary(resolvedRouteSource) : null);
 
       setAssignedVehicles(vehiclesArray);
 
@@ -481,6 +526,9 @@ export default function DriverPage() {
       .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_assignments" }, () => {
         if (!cancelled) load();
       })
+      .on("postgres_changes", { event: "*", schema: "public", table: "collection_routes" }, () => {
+        if (!cancelled) load();
+      })
       .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_telemetry" }, () => {
         if (!cancelled) load();
       })
@@ -506,7 +554,7 @@ export default function DriverPage() {
 
   /* ── Handlers ── */
 
-  async function handleClockIn() {
+  async function handleClockIn(payload?: { openingKm?: number; notes?: string }) {
     if (clockingIn) return;
     setWorkflowError(null);
     setCompletionBanner(null);
@@ -527,12 +575,24 @@ export default function DriverPage() {
 
     setClockingIn(true);
     try {
-      const res = await submitDriverClockIn(supabase);
+      const res = await submitDriverClockIn(supabase, {
+        openingKm: payload?.openingKm,
+        notes: payload?.notes,
+      });
       if (!res.ok) {
         setWorkflowError(res.error || "Clock In failed.");
         return;
       }
-      if (res.shift) setActiveShift(res.shift);
+      if (res.shift) {
+        setActiveShift(
+          payload?.openingKm != null && Number.isFinite(payload.openingKm)
+            ? { ...res.shift, opening_km: Math.max(Number(res.shift.opening_km || 0), payload.openingKm) }
+            : res.shift
+        );
+      }
+      if (payload?.openingKm != null && Number.isFinite(payload.openingKm) && vehicle?.id) {
+        notifyManualOdometerUpdate(vehicle.id, payload.openingKm, vehicle.deviceId);
+      }
       if (res.activeTrip) setOngoingTrip(res.activeTrip);
       await load();
     } catch (err: any) {
@@ -586,16 +646,26 @@ export default function DriverPage() {
     setStartingTrip(true);
     try {
       const routeToUse =
-        vehicle?.route && vehicle.route !== "No route assigned"
+        routeSummary?.name ||
+        activeAssignment?.route_name ||
+        (vehicle?.route && vehicle.route !== "No route assigned"
           ? vehicle.route
-          : startRoute.trim() || "Collection Route";
+          : startRoute.trim() || "Collection Route");
+
+      const effectiveOutKm = Math.max(
+        Number(activeShift?.opening_km || 0),
+        Number(authoritativeVehicleOdo || 0)
+      );
 
       const res = await submitStartDriverTripStatement(supabase, {
         vehicleId: vehicle.id!,
         route: routeToUse,
+        routeId: activeAssignment?.route_id || routeSummary?.id || null,
         salesmanName: startSalesman.trim(),
         outDate,
         outTime,
+        outKm: effectiveOutKm > 0 ? effectiveOutKm : undefined,
+        deviceId: vehicle.deviceId,
       });
 
       if (!res.ok) {
@@ -1122,8 +1192,13 @@ export default function DriverPage() {
                 <VehicleConfirmCard
                   driver={driver}
                   vehicle={liveMergedVehicle}
+                  activeAssignment={activeAssignment}
+                  routeSummary={routeSummary}
                   assignedVehicles={assignedVehicles}
-                  authoritativeOdometer={authoritativeVehicleOdo}
+                  authoritativeOdometer={Math.max(
+                    Number(activeShift?.opening_km || 0),
+                    Number(authoritativeVehicleOdo || 0)
+                  )}
                   outDate={getTodayIstDateString()}
                   outTime={getCurrentIstTimeString()}
                   routeValue={startRoute}
@@ -1140,6 +1215,9 @@ export default function DriverPage() {
                 <ClockInScreen
                   driver={driver}
                   vehicle={liveMergedVehicle}
+                  activeAssignment={activeAssignment}
+                  upcomingAssignment={upcomingAssignment}
+                  routeSummary={routeSummary}
                   assignedVehiclesCount={assignedVehicles.length}
                   authoritativeOdometer={authoritativeVehicleOdo}
                   hasOtherDriverTrip={hasOtherDriverTrip}

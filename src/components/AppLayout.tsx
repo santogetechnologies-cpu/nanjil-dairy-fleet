@@ -296,6 +296,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
       title: "OPERATIONS",
       items: [
         {
+          to: "/assignments",
+          label: "Driver & Route Assignment",
+          icon: ShieldCheck,
+          shortcut: "G L",
+          description: "Assign drivers, vehicles & collection routes",
+        },
+        {
           to: "/routes",
           label: "Route Planner",
           icon: RouteIcon,

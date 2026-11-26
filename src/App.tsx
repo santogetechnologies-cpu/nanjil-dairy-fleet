@@ -11,6 +11,7 @@ const AppGate = lazy(() => import("./pages/_app"));
 // Operational Pages
 const DashboardPage = lazy(() => import("./pages/_app.dashboard"));
 const TrackingPage = lazy(() => import("./pages/_app.tracking"));
+const AssignmentsPage = lazy(() => import("./pages/_app.assignments"));
 const RoutesPlannerPage = lazy(() => import("./pages/_app.routes"));
 const TripsPage = lazy(() => import("./pages/_app.trips"));
 const VehicleStopHistoryPage = lazy(() => import("./pages/_app.stops"));
@@ -68,6 +69,7 @@ export default function App() {
           {/* Main 12 Navigation Items */}
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/tracking" element={<TrackingPage />} />
+          <Route path="/assignments" element={<AssignmentsPage />} />
           <Route path="/routes" element={<RoutesPlannerPage />} />
           <Route path="/trips" element={<TripsPage />} />
           <Route path="/stops" element={<VehicleStopHistoryPage />} />

@@ -1,10 +1,13 @@
 import { CheckCircle2, Gauge, Loader2, Lock, MapPin, ShieldCheck, Truck, X } from "lucide-react";
 import { Badge } from "@/components/ui-kit";
+import type { RouteAssignmentRecord, RouteSummaryInfo } from "@/lib/driverRouteAssignments";
 import type { DriverAssignedVehicle, DriverProfileData } from "./types";
 
 interface VehicleConfirmCardProps {
   driver: DriverProfileData;
   vehicle: DriverAssignedVehicle;
+  activeAssignment: RouteAssignmentRecord | null;
+  routeSummary: RouteSummaryInfo | null;
   assignedVehicles: any[];
   authoritativeOdometer: number;
   outDate: string;
@@ -23,6 +26,8 @@ interface VehicleConfirmCardProps {
 export function VehicleConfirmCard({
   driver,
   vehicle,
+  activeAssignment,
+  routeSummary,
   assignedVehicles,
   authoritativeOdometer,
   outDate,
@@ -37,14 +42,16 @@ export function VehicleConfirmCard({
   onConfirmStartTrip,
   onCancelClockIn,
 }: VehicleConfirmCardProps) {
-  const assignedDateLabel = vehicle.assignedAt
-    ? new Date(vehicle.assignedAt).toLocaleDateString("en-IN", {
-        timeZone: "Asia/Kolkata",
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      })
-    : "Active Assignment";
+  const assignedDateLabel =
+    activeAssignment?.assignment_date ||
+    (vehicle.assignedAt
+      ? new Date(vehicle.assignedAt).toLocaleDateString("en-IN", {
+          timeZone: "Asia/Kolkata",
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })
+      : "Active Assignment");
 
   return (
     <div className="space-y-4">
@@ -132,11 +139,18 @@ export function VehicleConfirmCard({
               </div>
               <div className="col-span-2">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                  <MapPin className="h-3 w-3 text-indigo-500" /> Assigned Route
+                  <MapPin className="h-3 w-3 text-indigo-500" /> Assigned Collection Route
                 </div>
                 <div className="font-bold text-slate-800 mt-0.5">
-                  {vehicle.route || routeValue || "Collection Route"}
+                  {routeSummary?.name || activeAssignment?.route_name || vehicle.route || routeValue || "Collection Route"}
                 </div>
+                {routeSummary && (
+                  <div className="text-[11px] text-slate-600 mt-0.5">
+                    {routeSummary.startPoint} → {routeSummary.destination}
+                    {routeSummary.centresCount > 0 ? ` · ${routeSummary.centresCount} Centres` : ""}
+                    {activeAssignment?.departure_time ? ` · Dep: ${activeAssignment.departure_time} IST` : ""}
+                  </div>
+                )}
               </div>
             </div>
 

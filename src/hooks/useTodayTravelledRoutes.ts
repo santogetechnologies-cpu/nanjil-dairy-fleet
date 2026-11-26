@@ -189,9 +189,40 @@ export function anchorPointsToNanjilPlant(points: GpsPoint[]): GpsPoint[] {
 
 /**
  * In-memory cache for computed road-following plant connectors.
- * Avoids redundant network round-trips for identical start coordinates.
+ * Only authentic OSRM road geometries are cached permanently; failed network attempts
+ * use a short cooldown instead of locking in straight-line fallbacks.
  */
 const plantConnectorCache = new Map<string, LatLngPoint[]>();
+
+/**
+ * Lightweight concurrency queue + in-flight deduplication for OSRM road routing
+ * so 7 fleet vehicles never flood router.project-osrm.org into 429 rate limits.
+ */
+const MAX_CONCURRENT_OSRM = 2;
+const OSRM_MIN_SPACING_MS = 90;
+let activeOsrmCount = 0;
+let lastOsrmStartMs = 0;
+const osrmWaitQueue: Array<() => void> = [];
+
+async function runThrottledOsrm<T>(task: () => Promise<T>): Promise<T> {
+  if (activeOsrmCount >= MAX_CONCURRENT_OSRM) {
+    await new Promise<void>((resolve) => osrmWaitQueue.push(resolve));
+  }
+  activeOsrmCount++;
+  try {
+    const now = Date.now();
+    const waitMs = Math.max(0, OSRM_MIN_SPACING_MS - (now - lastOsrmStartMs));
+    if (waitMs > 0) {
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+    lastOsrmStartMs = Date.now();
+    return await task();
+  } finally {
+    activeOsrmCount--;
+    const next = osrmWaitQueue.shift();
+    if (next) next();
+  }
+}
 
 /**
  * Computes an estimated road connector between Nanjil Dairy Plant and the vehicle's earliest GPS location.
@@ -225,40 +256,49 @@ export async function buildPlantConnector(
 
   // Calculate road-following route from Nanjil Dairy Depot to vehicle first GPS point
   try {
-    const roadRes = await calculateRoadRoute([
-      NANJIL_DAIRY_DEPOT,
-      { lat: firstPoint.lat, lng: firstPoint.lng },
-    ]);
+    const roadRes = await runThrottledOsrm(() =>
+      calculateRoadRoute([
+        NANJIL_DAIRY_DEPOT,
+        { lat: firstPoint.lat, lng: firstPoint.lng },
+      ]),
+    );
 
-    if (roadRes.coordinates && roadRes.coordinates.length >= 2) {
+    if (roadRes.coordinates && roadRes.coordinates.length >= 2 && !roadRes.isFallbackStraightLine) {
       const roadPts: LatLngPoint[] = roadRes.coordinates.map(([lng, lat]) => ({ lat, lng }));
       plantConnectorCache.set(cacheKey, roadPts);
       return roadPts;
     }
-  } catch (err) {
-    // Graceful fallback on network/API failure
+  } catch {
+    // Graceful fallback without polluting cache
   }
 
-  const fallback: LatLngPoint[] = [
+  return [
     { lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng },
     { lat: firstPoint.lat, lng: firstPoint.lng },
   ];
-  plantConnectorCache.set(cacheKey, fallback);
-  return fallback;
 }
 
 /**
- * In-memory cache for road route bridges between coordinate pairs.
+ * In-memory cache for authentic road route bridges between coordinate pairs.
  * Key: `${fromLat.toFixed(4)},${fromLng.toFixed(4)}->${toLat.toFixed(4)},${toLng.toFixed(4)}`
  */
 export const roadBridgeCache = new Map<string, LatLngPoint[]>();
+const inFlightRoadBridges = new Map<string, Promise<LatLngPoint[]>>();
+const failedBridgeCooldowns = new Map<string, number>();
+const BRIDGE_RETRY_COOLDOWN_MS = 15000;
+
+export function makeRoadBridgeKey(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+): string {
+  return `${from.lat.toFixed(4)},${from.lng.toFixed(4)}->${to.lat.toFixed(4)},${to.lng.toFixed(4)}`;
+}
 
 export function getCachedRoadBridge(
   from: { lat: number; lng: number },
   to: { lat: number; lng: number },
 ): LatLngPoint[] | null {
-  const key = `${from.lat.toFixed(4)},${from.lng.toFixed(4)}->${to.lat.toFixed(4)},${to.lng.toFixed(4)}`;
-  return roadBridgeCache.get(key) || null;
+  return roadBridgeCache.get(makeRoadBridgeKey(from, to)) || null;
 }
 
 export async function fetchRoadBridge(
@@ -269,23 +309,49 @@ export async function fetchRoadBridge(
   if (distKm < 0.05) {
     return [{ lat: from.lat, lng: from.lng }, { lat: to.lat, lng: to.lng }];
   }
-  const key = `${from.lat.toFixed(4)},${from.lng.toFixed(4)}->${to.lat.toFixed(4)},${to.lng.toFixed(4)}`;
-  if (roadBridgeCache.has(key)) return roadBridgeCache.get(key)!;
 
-  try {
-    const res = await calculateRoadRoute([from, to]);
-    if (res.coordinates && res.coordinates.length >= 2) {
-      const roadPts: LatLngPoint[] = res.coordinates.map(([lng, lat]) => ({ lat, lng }));
-      roadBridgeCache.set(key, roadPts);
-      return roadPts;
-    }
-  } catch {
-    // Graceful fallback on network/API failure
+  const key = makeRoadBridgeKey(from, to);
+  const cached = roadBridgeCache.get(key);
+  if (cached) return cached;
+
+  const existingInFlight = inFlightRoadBridges.get(key);
+  if (existingInFlight) return existingInFlight;
+
+  const cooldownUntil = failedBridgeCooldowns.get(key) || 0;
+  if (Date.now() < cooldownUntil) {
+    return [{ lat: from.lat, lng: from.lng }, { lat: to.lat, lng: to.lng }];
   }
 
-  const fallback: LatLngPoint[] = [{ lat: from.lat, lng: from.lng }, { lat: to.lat, lng: to.lng }];
-  roadBridgeCache.set(key, fallback);
-  return fallback;
+  const promise = (async () => {
+    try {
+      let res = await runThrottledOsrm(() => calculateRoadRoute([from, to]));
+      if (res.isFallbackStraightLine) {
+        // Retry once after brief backoff in case OSRM transient 429/timeout occurred
+        await new Promise((r) => setTimeout(r, 350));
+        res = await runThrottledOsrm(() => calculateRoadRoute([from, to]));
+      }
+
+      if (res.coordinates && res.coordinates.length >= 2 && !res.isFallbackStraightLine) {
+        const roadPts: LatLngPoint[] = res.coordinates.map(([lng, lat]) => ({ lat, lng }));
+        roadBridgeCache.set(key, roadPts);
+        failedBridgeCooldowns.delete(key);
+        return roadPts;
+      }
+    } catch {
+      // Transient network error
+    }
+
+    // Never permanently cache a 2-point straight-line failure in roadBridgeCache
+    failedBridgeCooldowns.set(key, Date.now() + BRIDGE_RETRY_COOLDOWN_MS);
+    return [{ lat: from.lat, lng: from.lng }, { lat: to.lat, lng: to.lng }];
+  })();
+
+  inFlightRoadBridges.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlightRoadBridges.delete(key);
+  }
 }
 
 export interface AssembleRouteOptions {
@@ -297,12 +363,34 @@ export interface AssembleRouteOptions {
 /**
  * Assembles a continuous, road-following display route for a fleet vehicle:
  * 1. Connects from Nanjil Dairy Depot (base plant) to the vehicle's first route point.
- * 2. Includes authentic GPS segments, bridging signal gaps along the real road network.
- * 3. Connects seamlessly up to the vehicle's current live location (v.lat, v.lng).
- * 4. Yields synchronous fallback segments immediately, then enriches with OSRM in background.
+ * 2. Walks inside every GPS segment and snaps sparse consecutive points (>= 150m apart)
+ *    along the real OSRM road network so curves never collapse into straight lines across fields.
+ * 3. Bridges gaps between separate segments along the real road network.
+ * 4. Connects seamlessly up to the vehicle's current live location (v.lat, v.lng).
  */
 export function assembleVehicleRoute(options: AssembleRouteOptions): VehicleRouteSegments {
   const { rawSegments, liveCoord, onBridgesResolved } = options;
+
+  const resultSegments: VehicleRouteSegments = [];
+  const pendingBridgeFetches: Array<Promise<{ idx: number; pts: LatLngPoint[] }>> = [];
+
+  const pushBridge = (from: LatLngPoint, to: LatLngPoint) => {
+    const cached = getCachedRoadBridge(from, to);
+    if (cached) {
+      resultSegments.push(cached);
+      return;
+    }
+    const segIndex = resultSegments.length;
+    resultSegments.push([
+      { lat: from.lat, lng: from.lng },
+      { lat: to.lat, lng: to.lng },
+    ]);
+    if (onBridgesResolved) {
+      pendingBridgeFetches.push(
+        fetchRoadBridge(from, to).then((pts) => ({ idx: segIndex, pts })),
+      );
+    }
+  };
 
   if (!rawSegments || rawSegments.length === 0) {
     if (liveCoord && isFleetOperatingCoordinate(liveCoord.lat, liveCoord.lng)) {
@@ -313,17 +401,26 @@ export function assembleVehicleRoute(options: AssembleRouteOptions): VehicleRout
         liveCoord.lng,
       );
       if (distFromPlant >= 0.15) {
-        const cached = getCachedRoadBridge(NANJIL_DAIRY_DEPOT, liveCoord);
-        if (cached) return [cached];
-        if (onBridgesResolved) {
-          fetchRoadBridge(NANJIL_DAIRY_DEPOT, liveCoord).then((pts) => {
-            if (pts && pts.length >= 2) onBridgesResolved([pts]);
-          });
-        }
-        return [[{ lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng }, { lat: liveCoord.lat, lng: liveCoord.lng }]];
+        pushBridge(
+          { lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng },
+          { lat: liveCoord.lat, lng: liveCoord.lng },
+        );
       }
     }
-    return [];
+    if (pendingBridgeFetches.length > 0 && onBridgesResolved) {
+      Promise.all(pendingBridgeFetches).then((updates) => {
+        const updated = [...resultSegments];
+        let anyResolved = false;
+        updates.forEach(({ idx, pts }) => {
+          if (pts && pts.length > 2 && idx < updated.length) {
+            updated[idx] = pts;
+            anyResolved = true;
+          }
+        });
+        if (anyResolved) onBridgesResolved(updated);
+      });
+    }
+    return resultSegments;
   }
 
   const validMulti = rawSegments.filter((s) => s && s.length >= 2);
@@ -345,17 +442,26 @@ export function assembleVehicleRoute(options: AssembleRouteOptions): VehicleRout
         target.lng,
       );
       if (distFromPlant >= 0.15) {
-        const cached = getCachedRoadBridge(NANJIL_DAIRY_DEPOT, target);
-        if (cached) return [cached];
-        if (onBridgesResolved) {
-          fetchRoadBridge(NANJIL_DAIRY_DEPOT, target).then((pts) => {
-            if (pts && pts.length >= 2) onBridgesResolved([pts]);
-          });
-        }
-        return [[{ lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng }, { lat: target.lat, lng: target.lng }]];
+        pushBridge(
+          { lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng },
+          { lat: target.lat, lng: target.lng },
+        );
       }
     }
-    return [];
+    if (pendingBridgeFetches.length > 0 && onBridgesResolved) {
+      Promise.all(pendingBridgeFetches).then((updates) => {
+        const updated = [...resultSegments];
+        let anyResolved = false;
+        updates.forEach(({ idx, pts }) => {
+          if (pts && pts.length > 2 && idx < updated.length) {
+            updated[idx] = pts;
+            anyResolved = true;
+          }
+        });
+        if (anyResolved) onBridgesResolved(updated);
+      });
+    }
+    return resultSegments;
   }
 
   const initialPt = validMulti[0][0];
@@ -365,57 +471,53 @@ export function assembleVehicleRoute(options: AssembleRouteOptions): VehicleRout
     initialPt.lat,
     initialPt.lng,
   );
-  const resultSegments: VehicleRouteSegments = [];
-  const pendingBridgeFetches: Array<Promise<{ idx: number; pts: LatLngPoint[] }>> = [];
 
   if (distFromPlant >= 0.15) {
-    const cachedPlant = getCachedRoadBridge(NANJIL_DAIRY_DEPOT, initialPt);
-    if (cachedPlant) {
-      resultSegments.push(cachedPlant);
-    } else {
-      const segIndex = resultSegments.length;
-      resultSegments.push([
-        { lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng },
-        { lat: initialPt.lat, lng: initialPt.lng },
-      ]);
-      if (onBridgesResolved) {
-        pendingBridgeFetches.push(
-          fetchRoadBridge(NANJIL_DAIRY_DEPOT, initialPt).then((pts) => ({ idx: segIndex, pts })),
-        );
-      }
-    }
+    pushBridge(
+      { lat: NANJIL_DAIRY_DEPOT.lat, lng: NANJIL_DAIRY_DEPOT.lng },
+      initialPt,
+    );
   }
 
   for (let i = 0; i < validMulti.length; i++) {
-    resultSegments.push(validMulti[i]);
+    const seg = validMulti[i];
+
+    // Walk points inside the segment: preserve dense points (< 150m apart) verbatim,
+    // and snap any sparse jump (>= 150m apart) onto the real road network so curves never
+    // cut across fields as diagonal straight lines.
+    let denseRun: LatLngPoint[] = [seg[0]];
+    for (let j = 1; j < seg.length; j++) {
+      const prevPt = seg[j - 1];
+      const curPt = seg[j];
+      const hopDist = haversineDistanceKm(prevPt.lat, prevPt.lng, curPt.lat, curPt.lng);
+
+      if (hopDist >= 0.15 && hopDist <= 150) {
+        if (denseRun.length >= 2) {
+          resultSegments.push(denseRun);
+        }
+        pushBridge(prevPt, curPt);
+        denseRun = [curPt];
+      } else {
+        denseRun.push(curPt);
+      }
+    }
+    if (denseRun.length >= 2) {
+      resultSegments.push(denseRun);
+    }
 
     if (i < validMulti.length - 1) {
-      const segEnd = validMulti[i][validMulti[i].length - 1];
+      const segEnd = seg[seg.length - 1];
       const nextSegStart = validMulti[i + 1][0];
       const gapDist = haversineDistanceKm(segEnd.lat, segEnd.lng, nextSegStart.lat, nextSegStart.lng);
 
       if (gapDist >= 0.15 && gapDist <= 150) {
-        const cachedGap = getCachedRoadBridge(segEnd, nextSegStart);
-        if (cachedGap) {
-          resultSegments.push(cachedGap);
-        } else {
-          const segIndex = resultSegments.length;
-          resultSegments.push([
-            { lat: segEnd.lat, lng: segEnd.lng },
-            { lat: nextSegStart.lat, lng: nextSegStart.lng },
-          ]);
-          if (onBridgesResolved) {
-            pendingBridgeFetches.push(
-              fetchRoadBridge(segEnd, nextSegStart).then((pts) => ({ idx: segIndex, pts })),
-            );
-          }
-        }
+        pushBridge(segEnd, nextSegStart);
       }
     }
   }
 
-  const lastSeg = validMulti[validMulti.length - 1];
-  const lastPt = lastSeg[lastSeg.length - 1];
+  const lastSegRaw = validMulti[validMulti.length - 1];
+  const lastPt = lastSegRaw[lastSegRaw.length - 1];
 
   let finalTarget = liveCoord;
   const allRawPoints = rawSegments.flat();
@@ -429,35 +531,33 @@ export function assembleVehicleRoute(options: AssembleRouteOptions): VehicleRout
   if (finalTarget && isFleetOperatingCoordinate(finalTarget.lat, finalTarget.lng)) {
     const distToEnd = haversineDistanceKm(lastPt.lat, lastPt.lng, finalTarget.lat, finalTarget.lng);
     if (distToEnd >= 0.15 && distToEnd <= 150) {
-      const cachedEnd = getCachedRoadBridge(lastPt, finalTarget);
-      if (cachedEnd) {
-        resultSegments.push(cachedEnd);
+      pushBridge(lastPt, { lat: finalTarget.lat, lng: finalTarget.lng });
+    } else if (distToEnd >= 0.005) {
+      const tail = resultSegments[resultSegments.length - 1];
+      if (tail && tail.length >= 2) {
+        tail.push({ lat: finalTarget.lat, lng: finalTarget.lng });
       } else {
-        const segIndex = resultSegments.length;
         resultSegments.push([
           { lat: lastPt.lat, lng: lastPt.lng },
           { lat: finalTarget.lat, lng: finalTarget.lng },
         ]);
-        if (onBridgesResolved) {
-          pendingBridgeFetches.push(
-            fetchRoadBridge(lastPt, finalTarget).then((pts) => ({ idx: segIndex, pts })),
-          );
-        }
       }
-    } else if (distToEnd >= 0.005) {
-      lastSeg.push({ lat: finalTarget.lat, lng: finalTarget.lng });
     }
   }
 
   if (pendingBridgeFetches.length > 0 && onBridgesResolved) {
     Promise.all(pendingBridgeFetches).then((updates) => {
       const updated = [...resultSegments];
+      let anyResolved = false;
       updates.forEach(({ idx, pts }) => {
-        if (pts && pts.length >= 2 && idx < updated.length) {
+        if (pts && pts.length > 2 && idx < updated.length) {
           updated[idx] = pts;
+          anyResolved = true;
         }
       });
-      onBridgesResolved(updated);
+      if (anyResolved) {
+        onBridgesResolved(updated);
+      }
     });
   }
 
@@ -847,18 +947,36 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]): UseTodayTravelledR
       const displaySegments = assembleVehicleRoute({
         rawSegments: updatedSegments,
         liveCoord: { lat: Number(lat), lng: Number(lng) },
-        onBridgesResolved: (enhancedSegments) => {
+        onBridgesResolved: (fallbackSegments) => {
+          const latestPoints = rawPointsMapRef.current.get(targetKey);
+          const latestVeh = vehiclesRef.current.find(
+            (v) =>
+              v.id === targetKey ||
+              v.id === uuid ||
+              (devId && (v.deviceId === devId || v.deviceId === `device_${devId}`)),
+          );
+          const latestLiveCoord =
+            latestVeh && isFleetOperatingCoordinate(latestVeh.lat, latestVeh.lng)
+              ? { lat: Number(latestVeh.lat), lng: Number(latestVeh.lng) }
+              : { lat: Number(lat), lng: Number(lng) };
+          const freshSegments = latestPoints
+            ? assembleVehicleRoute({
+                rawSegments: processRawGpsPoints(latestPoints, 15),
+                liveCoord: latestLiveCoord,
+              })
+            : fallbackSegments;
+
           setRoutes((currentRoutes) => {
             const nextMap: TodayRoutesMap = {
               ...currentRoutes,
-              [targetKey]: enhancedSegments,
+              [targetKey]: freshSegments,
             };
             if (uuid && uuid !== targetKey) {
-              nextMap[uuid] = enhancedSegments;
+              nextMap[uuid] = freshSegments;
             }
             if (devId && devId !== targetKey) {
-              nextMap[devId] = enhancedSegments;
-              nextMap[`device_${devId}`] = enhancedSegments;
+              nextMap[devId] = freshSegments;
+              nextMap[`device_${devId}`] = freshSegments;
             }
             routesRef.current = nextMap;
             return nextMap;
@@ -969,12 +1087,29 @@ export function useTodayTravelledRoutes(vehicles: Vehicle[]): UseTodayTravelledR
             const displaySegments = assembleVehicleRoute({
               rawSegments: segments,
               liveCoord,
-              onBridgesResolved: (enhancedSegments) => {
+              onBridgesResolved: (fallbackSegments) => {
+                const latestPoints = rawPointsMapRef.current.get(uuid);
+                const latestVeh = vehiclesRef.current.find(
+                  (v) =>
+                    v.id === uuid ||
+                    (devId && (v.deviceId === devId || v.deviceId === `device_${devId}`)),
+                );
+                const latestLiveCoord =
+                  latestVeh && isFleetOperatingCoordinate(latestVeh.lat, latestVeh.lng)
+                    ? { lat: Number(latestVeh.lat), lng: Number(latestVeh.lng) }
+                    : liveCoord;
+                const freshSegments = latestPoints
+                  ? assembleVehicleRoute({
+                      rawSegments: processRawGpsPoints(latestPoints, 15),
+                      liveCoord: latestLiveCoord,
+                    })
+                  : fallbackSegments;
+
                 setRoutes((curr) => {
                   const updatedMap = {
                     ...curr,
-                    [uuid]: enhancedSegments,
-                    ...(devId ? { [devId]: enhancedSegments, [`device_${devId}`]: enhancedSegments } : {}),
+                    [uuid]: freshSegments,
+                    ...(devId ? { [devId]: freshSegments, [`device_${devId}`]: freshSegments } : {}),
                   };
                   routesRef.current = updatedMap;
                   return updatedMap;

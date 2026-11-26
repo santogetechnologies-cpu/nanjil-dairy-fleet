@@ -14,6 +14,10 @@ import {
   anchorPointsToNanjilPlant,
   buildPlantConnector,
   assembleVehicleRoute,
+  roadBridgeCache,
+  makeRoadBridgeKey,
+  getCachedRoadBridge,
+  fetchRoadBridge,
   NANJIL_DAIRY_DEPOT,
 } from "../src/hooks/useTodayTravelledRoutes.ts";
 import {
@@ -597,6 +601,60 @@ test("26. Real-Time Vehicle Tip Extension: Polyline Tip Always Connects to Live 
   assert.equal(lastCoord.lat, movingLiveCoord.lat);
   assert.equal(lastCoord.lng, movingLiveCoord.lng);
 });
+
+test("27. Intra-Segment Road Snapping: Sparse consecutive GPS points inside a segment use cached road-following geometry", () => {
+  const ptPadmanabhapuram = { lat: 8.2425, lng: 77.3295, recorded_at: "2026-11-26T06:00:00Z" };
+  const ptKumaracoilCurve = { lat: 8.2485, lng: 77.3385 };
+  const ptVillukuri = { lat: 8.2435, lng: 77.3525, recorded_at: "2026-11-26T06:04:00Z" };
+
+  // Pre-seed cached OSRM curve for intra-segment hop (> 150m apart)
+  const key = makeRoadBridgeKey(ptPadmanabhapuram, ptVillukuri);
+  roadBridgeCache.set(key, [ptPadmanabhapuram, ptKumaracoilCurve, ptVillukuri]);
+
+  try {
+    const assembled = assembleVehicleRoute({
+      rawSegments: [[ptPadmanabhapuram, ptVillukuri]],
+    });
+
+    const allPlottedPoints = assembled.flat();
+    const hasCurvePoint = allPlottedPoints.some(
+      (p) => Math.abs(p.lat - ptKumaracoilCurve.lat) < 1e-6 && Math.abs(p.lng - ptKumaracoilCurve.lng) < 1e-6,
+    );
+    assert.equal(
+      hasCurvePoint,
+      true,
+      "Intra-segment sparse hop must include road-following curve point instead of drawing a straight chord",
+    );
+  } finally {
+    roadBridgeCache.delete(key);
+  }
+});
+
+test("28. Negative Cache Prevention: Failed/fallback road bridge fetches never lock straight lines in roadBridgeCache", async () => {
+  const from = { lat: 8.1911, lng: 77.4511 };
+  const to = { lat: 8.2099, lng: 77.4699 };
+  const key = makeRoadBridgeKey(from, to);
+  roadBridgeCache.delete(key);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("Simulated OSRM offline timeout");
+  };
+
+  try {
+    const fallback = await fetchRoadBridge(from, to);
+    assert.equal(fallback.length, 2);
+    assert.equal(
+      getCachedRoadBridge(from, to),
+      null,
+      "Straight-line fallback must NOT be stored permanently in roadBridgeCache",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    roadBridgeCache.delete(key);
+  }
+});
+
 
 
 
