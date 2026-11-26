@@ -452,19 +452,23 @@ export function AppLayout({ children }: { children: ReactNode }) {
         {/* Brand Header */}
         <div
           className={`h-16 flex items-center shrink-0 border-b border-slate-100 transition-all ${
-            collapsed ? "justify-center px-0" : "justify-between px-4"
+            collapsed ? "justify-center px-1.5" : "justify-between px-3"
           }`}
         >
-          <Link to="/dashboard" className="flex items-center gap-3 min-w-0 group">
-            <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 via-indigo-700 to-indigo-900 p-2 text-white shadow-md shadow-indigo-500/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <Logo className="h-full w-full object-contain brightness-0 invert" />
+          <Link to="/dashboard" className="flex items-center gap-2.5 min-w-0 group">
+            <div
+              className={`rounded-xl bg-white border border-slate-200/90 shadow-xs flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform overflow-hidden ${
+                collapsed ? "h-9 w-12 px-1" : "h-9 px-2"
+              }`}
+            >
+              <Logo className={collapsed ? "h-5 w-auto object-contain" : "h-6 w-auto object-contain"} />
             </div>
 
             {!collapsed && (
               <div className="leading-tight min-w-0">
                 <div className="text-slate-900 font-extrabold text-sm tracking-tight truncate flex items-center gap-1.5">
                   <span>Nanjil Fleet</span>
-                  <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse ring-2 ring-emerald-200" />
+                  <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse ring-2 ring-emerald-200 shrink-0" />
                 </div>
                 <div className="text-slate-400 text-[10.5px] font-semibold tracking-wide truncate">
                   Dairy Operations OS
