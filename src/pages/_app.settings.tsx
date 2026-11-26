@@ -4,28 +4,10 @@ import { Card, Button, Badge } from "@/components/ui-kit";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { createClient } from "@supabase/supabase-js";
-
-const tempSettingsClient = (globalThis as any)._tempSupabaseSettingsClient || (() => {
-  const client = createClient(
-    import.meta.env.VITE_SUPABASE_URL || "",
-    import.meta.env.VITE_SUPABASE_ANON_KEY || "",
-    {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-        detectSessionInUrl: false,
-        storageKey: "nanjil-settings-user-creation-temp",
-        storage: {
-          getItem: () => null,
-          setItem: () => {},
-          removeItem: () => {},
-        },
-      },
-    }
-  );
-  (globalThis as any)._tempSupabaseSettingsClient = client;
-  return client;
-})();
+import {
+  executeAdminPasswordReset,
+  validateAdminPasswordReset,
+} from "@/lib/adminUserManagement";
 import {
   Settings,
   Route,
@@ -46,7 +28,26 @@ import {
   Trash2,
   Eye,
   EyeOff,
+  KeyRound,
 } from "lucide-react";
+
+const settingsTempAuthClient = createClient(
+  import.meta.env.VITE_SUPABASE_URL || "",
+  import.meta.env.VITE_SUPABASE_ANON_KEY || "",
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      storageKey: "nanjil-settings-reset-temp",
+      storage: {
+        getItem: () => null,
+        setItem: () => {},
+        removeItem: () => {},
+      },
+    },
+  }
+);
 
 type SettingsTab = "route" | "trip" | "speed" | "fuel" | "fleet_users";
 
@@ -114,6 +115,15 @@ export default function SettingsPage() {
   const [isSubmittingUser, setIsSubmittingUser] = useState(false);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
   const [userActionMsg, setUserActionMsg] = useState<string | null>(null);
+
+  // Reset Password Modal states
+  const [resetTargetUser, setResetTargetUser] = useState<any | null>(null);
+  const [resetNewPwd, setResetNewPwd] = useState("");
+  const [resetConfirmPwd, setResetConfirmPwd] = useState("");
+  const [showResetNewPwd, setShowResetNewPwd] = useState(false);
+  const [showResetConfirmPwd, setShowResetConfirmPwd] = useState(false);
+  const [resettingPwd, setResettingPwd] = useState(false);
+  const [resetPwdError, setResetPwdError] = useState<string | null>(null);
 
   const showUserToast = (msg: string) => {
     setUserActionMsg(msg);
@@ -199,7 +209,7 @@ export default function SettingsPage() {
       const cleanEmail = newUserForm.email.toLowerCase().trim();
       let createdAuthUserId: string | null = null;
 
-      const { data, error } = await tempSettingsClient.auth.signUp({
+      const { data, error } = await settingsTempAuthClient.auth.signUp({
         email: cleanEmail,
         password: newUserForm.password,
         options: {
@@ -218,7 +228,7 @@ export default function SettingsPage() {
           } catch {
             // Ignore
           }
-          const retry = await tempSettingsClient.auth.signUp({
+          const retry = await settingsTempAuthClient.auth.signUp({
             email: cleanEmail,
             password: newUserForm.password,
             options: {
@@ -335,6 +345,59 @@ export default function SettingsPage() {
       loadProfiles();
     } finally {
       setDeletingUserId(null);
+    }
+  }
+
+  function openResetPasswordModal(targetUser: any) {
+    setResetTargetUser(targetUser);
+    setResetNewPwd("");
+    setResetConfirmPwd("");
+    setShowResetNewPwd(false);
+    setShowResetConfirmPwd(false);
+    setResetPwdError(null);
+  }
+
+  async function handleResetUserPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!resetTargetUser) return;
+
+    const validation = validateAdminPasswordReset(resetNewPwd, resetConfirmPwd, user?.role);
+    if (!validation.valid) {
+      setResetPwdError(validation.error || "Invalid password input.");
+      return;
+    }
+
+    setResettingPwd(true);
+    setResetPwdError(null);
+    try {
+      const res = await executeAdminPasswordReset(
+        supabase,
+        settingsTempAuthClient,
+        {
+          id: resetTargetUser.id,
+          name: resetTargetUser.name || resetTargetUser.email,
+          email: resetTargetUser.email,
+          role: resetTargetUser.role || "driver",
+          status: resetTargetUser.status || "Active",
+        },
+        resetNewPwd
+      );
+
+      if (!res.ok) {
+        setResetPwdError(res.error || "Failed to reset user password.");
+        return;
+      }
+
+      const label = resetTargetUser.name || res.email;
+      setResetTargetUser(null);
+      setResetNewPwd("");
+      setResetConfirmPwd("");
+      showUserToast(`Password reset successfully for ${label} (${res.email}).`);
+      loadProfiles();
+    } catch (err: any) {
+      setResetPwdError(err?.message || "Failed to reset user password.");
+    } finally {
+      setResettingPwd(false);
     }
   }
 
@@ -764,25 +827,37 @@ export default function SettingsPage() {
                           : "Driver Trip Portal"}
                       </td>
                       <td className="py-3 px-3 text-right">
-                        {isSelf ? (
-                          <span className="text-[10px] font-medium text-slate-400 italic pr-2">Current User</span>
-                        ) : (
+                        <div className="flex items-center justify-end gap-2">
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => handleDeleteUser(u)}
-                            disabled={deletingUserId === u.id}
-                            className="h-7 px-2.5 text-xs text-rose-600 border-rose-200 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-700 cursor-pointer transition-colors shrink-0"
-                            title={`Delete ${u.name || u.email}`}
+                            onClick={() => openResetPasswordModal(u)}
+                            className="h-7 px-2.5 text-xs text-indigo-700 border-indigo-200 hover:bg-indigo-50 hover:border-indigo-300 cursor-pointer transition-colors shrink-0"
+                            title={`Reset password for ${u.name || u.email}`}
                           >
-                            {deletingUserId === u.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5 mr-1" />
-                            )}
-                            Delete
+                            <KeyRound className="h-3.5 w-3.5 mr-1" />
+                            Reset Password
                           </Button>
-                        )}
+                          {isSelf ? (
+                            <span className="text-[10px] font-medium text-slate-400 italic px-1.5">Current User</span>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleDeleteUser(u)}
+                              disabled={deletingUserId === u.id}
+                              className="h-7 px-2.5 text-xs text-rose-600 border-rose-200 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-700 cursor-pointer transition-colors shrink-0"
+                              title={`Delete ${u.name || u.email}`}
+                            >
+                              {deletingUserId === u.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5 mr-1" />
+                              )}
+                              Delete
+                            </Button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -986,6 +1061,122 @@ export default function SettingsPage() {
                 >
                   {isSubmittingUser ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
                   Create Account
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reset User Password Modal */}
+      {resetTargetUser && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-xs p-4"
+          onClick={() => !resettingPwd && setResetTargetUser(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-md w-full p-5 border border-slate-200 shadow-xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <div className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                  <KeyRound className="h-4 w-4 text-indigo-600" />
+                  <span>Reset User Password</span>
+                </div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Updating password for <strong className="text-slate-800">{resetTargetUser.name}</strong> ({resetTargetUser.email})
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={resettingPwd}
+                onClick={() => setResetTargetUser(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {resetPwdError && (
+              <div
+                role="alert"
+                className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-700"
+              >
+                {resetPwdError}
+              </div>
+            )}
+
+            <form onSubmit={handleResetUserPassword} className="space-y-3 text-xs">
+              <div>
+                <label className="font-semibold text-slate-600 block mb-1">New Password *</label>
+                <div className="relative">
+                  <input
+                    type={showResetNewPwd ? "text" : "password"}
+                    value={resetNewPwd}
+                    onChange={(e) => {
+                      setResetNewPwd(e.target.value);
+                      setResetPwdError(null);
+                    }}
+                    placeholder="Minimum 8 characters"
+                    className="w-full pl-3 pr-10 py-2 rounded-xl border border-slate-200 text-slate-800 outline-none focus:border-indigo-500"
+                    required
+                    minLength={8}
+                    disabled={resettingPwd}
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowResetNewPwd((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
+                  >
+                    {showResetNewPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="font-semibold text-slate-600 block mb-1">Confirm New Password *</label>
+                <div className="relative">
+                  <input
+                    type={showResetConfirmPwd ? "text" : "password"}
+                    value={resetConfirmPwd}
+                    onChange={(e) => {
+                      setResetConfirmPwd(e.target.value);
+                      setResetPwdError(null);
+                    }}
+                    placeholder="Re-enter new password"
+                    className="w-full pl-3 pr-10 py-2 rounded-xl border border-slate-200 text-slate-800 outline-none focus:border-indigo-500"
+                    required
+                    minLength={8}
+                    disabled={resettingPwd}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowResetConfirmPwd((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
+                  >
+                    {showResetConfirmPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <Button
+                  type="button"
+                  disabled={resettingPwd}
+                  onClick={() => setResetTargetUser(null)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-3 py-1.5 rounded-xl"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={resettingPwd || resetNewPwd.length < 8 || resetNewPwd !== resetConfirmPwd}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs px-4 py-1.5 rounded-xl flex items-center gap-1.5"
+                >
+                  {resettingPwd ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
+                  Reset Password
                 </Button>
               </div>
             </form>
