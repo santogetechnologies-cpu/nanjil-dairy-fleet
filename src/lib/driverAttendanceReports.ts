@@ -260,13 +260,14 @@ export function buildDriverAttendanceRows(
           Math.round(((new Date(s.ended_at!).getTime() - startMs) / 3600000) * 100) / 100
         );
 
-    const routeName = r?.name || asg?.route_name || v?.route || "—";
+    const routeName =
+      r?.name || asg?.route_snapshot?.name || asg?.route_name || "—";
 
     rows.push({
       id: s.id,
       shiftId: s.id,
       driverId: s.driver_id,
-      driverName: d?.name || "Unknown Driver",
+      driverName: d?.name || "—",
       driverPhone: d?.phone || "—",
       date: formatIsoToIstDate(s.started_at),
       clockInTime: formatIsoToIstClock(s.started_at),
@@ -276,7 +277,7 @@ export function buildDriverAttendanceRows(
       totalWorkingHoursNum: hrsNum,
       totalWorkingHours: isOpen ? `On Duty (${hrsNum.toFixed(1)} h)` : formatHoursDuration(hrsNum, false),
       vehicleId: effectiveVehId,
-      vehicleRegistration: v?.number || "Unassigned",
+      vehicleRegistration: v?.number || "—",
       routeId: effectiveRouteId,
       routeName,
       attendanceStatus: status,
@@ -284,8 +285,8 @@ export function buildDriverAttendanceRows(
     });
   }
 
-  // Emit Not Clocked In rows for drivers without shifts in the queried window (unless filtered out)
-  if (options?.includeNotClockedIn !== false) {
+  // Only emit Not Clocked In rows when explicitly requested; default strictly reflects actual DB `driver_shifts`
+  if (options?.includeNotClockedIn === true) {
     for (const d of drivers || []) {
       if (driversWithShiftInBounds.has(d.id)) continue;
       const activeAsg = (assignments || []).find(
@@ -540,8 +541,8 @@ export function buildDetailedDriverHistory(
 
   for (const a of driverAssignments) {
     const refIso = a.assigned_at || `${a.assignment_date}T00:00:00+05:30`;
-    const vNum = a.vehicles?.number || vehicles.find((v) => v.id === a.vehicle_id)?.number || "Vehicle";
-    const rName = a.route_name || a.collection_routes?.name || "Assigned Route";
+    const vNum = a.vehicles?.number || vehicles.find((v) => v.id === a.vehicle_id)?.number || "—";
+    const rName = a.route_snapshot?.name || a.route_name || a.collection_routes?.name || "—";
     timeline.push({
       id: `tl-asg-${a.id}`,
       timestampMs: new Date(refIso).getTime() || 0,
@@ -549,7 +550,7 @@ export function buildDetailedDriverHistory(
       timeIst: a.departure_time ? `${a.departure_time} IST` : formatIsoToIstClock(refIso),
       kind: "ASSIGNMENT",
       title: `Route Assignment: ${rName}`,
-      subtitle: `${vNum} · Scheduled departure ${a.departure_time || "05:30"}`,
+      subtitle: a.departure_time ? `${vNum} · Scheduled departure ${a.departure_time}` : vNum,
       badge: a.status || "Assigned",
     });
   }

@@ -472,9 +472,37 @@ export function validateTripCloseStatement(
 }
 
 /**
- * Clocks in an authenticated driver after verifying admin vehicle assignment & availability.
+ * Validates manually entered Starting Vehicle Odometer (KM) at Clock-In.
  */
-export async function submitDriverClockIn(supabaseClient: any): Promise<{
+export function validateStartingOdometerInput(
+  rawValue: string | number | null | undefined,
+  baselineKm?: number | null
+): { valid: boolean; value?: number; error?: string } {
+  if (rawValue == null || String(rawValue).trim() === "") {
+    return { valid: false, error: "Starting Vehicle Odometer (KM) is required." };
+  }
+  const num = Number(String(rawValue).trim());
+  if (!Number.isFinite(num) || num < 0) {
+    return { valid: false, error: "Enter a valid non-negative odometer reading in KM." };
+  }
+  const baseline = Number.isFinite(Number(baselineKm)) ? Math.max(0, Number(baselineKm)) : 0;
+  if (baseline > 0 && num < baseline) {
+    return {
+      valid: false,
+      error: `Starting odometer (${num.toLocaleString()} KM) cannot be less than recorded vehicle baseline (${baseline.toLocaleString()} KM).`,
+    };
+  }
+  return { valid: true, value: Math.round(num * 100) / 100 };
+}
+
+/**
+ * Clocks in an authenticated driver after verifying admin vehicle assignment & availability,
+ * optionally recording the physical Starting Vehicle Odometer (KM) entered on Clock-In.
+ */
+export async function submitDriverClockIn(
+  supabaseClient: any,
+  params?: { openingKm?: number; notes?: string }
+): Promise<{
   ok: boolean;
   shift?: any;
   vehicle?: any;
@@ -483,7 +511,26 @@ export async function submitDriverClockIn(supabaseClient: any): Promise<{
   activeTrip?: VehicleOperationTripRecord | null;
   error?: string;
 }> {
-  const { data, error } = await supabaseClient.rpc("driver_clock_in");
+  const hasOdo = params?.openingKm != null && Number.isFinite(params.openingKm);
+  let res = hasOdo
+    ? await supabaseClient.rpc("driver_clock_in", {
+        p_opening_km: params!.openingKm,
+        p_notes: params?.notes?.trim() || null,
+      })
+    : await supabaseClient.rpc("driver_clock_in");
+
+  // Graceful fallback if migration 20261126130000 has not been applied yet on Supabase
+  if (
+    res.error &&
+    hasOdo &&
+    (res.error.message?.includes("Could not find the function") ||
+      res.error.code === "PGRST202" ||
+      res.error.message?.includes("p_opening_km"))
+  ) {
+    res = await supabaseClient.rpc("driver_clock_in");
+  }
+
+  const { data, error } = res;
   if (error) {
     return { ok: false, error: formatRpcErrorMessage(error.message) };
   }
@@ -526,6 +573,8 @@ export async function submitStartDriverTripStatement(
     outDate?: string;
     outTime?: string;
     notes?: string;
+    outKm?: number;
+    deviceId?: string;
   }
 ): Promise<{
   ok: boolean;
@@ -533,7 +582,8 @@ export async function submitStartDriverTripStatement(
   outKm?: number;
   error?: string;
 }> {
-  const { data, error } = await supabaseClient.rpc("start_driver_trip_statement", {
+  const hasExplicitOutKm = params.outKm != null && Number.isFinite(params.outKm);
+  const baseArgs = {
     p_vehicle_id: params.vehicleId,
     p_route: params.route || null,
     p_route_id: params.routeId || null,
@@ -541,16 +591,39 @@ export async function submitStartDriverTripStatement(
     p_out_date: params.outDate || getTodayIstDateString(),
     p_out_time: params.outTime || getCurrentIstTimeString(),
     p_notes: params.notes?.trim() || null,
-  });
+  };
 
+  let res = hasExplicitOutKm
+    ? await supabaseClient.rpc("start_driver_trip_statement", {
+        ...baseArgs,
+        p_out_km: params.outKm,
+      })
+    : await supabaseClient.rpc("start_driver_trip_statement", baseArgs);
+
+  if (
+    res.error &&
+    hasExplicitOutKm &&
+    (res.error.message?.includes("Could not find the function") ||
+      res.error.code === "PGRST202" ||
+      res.error.message?.includes("p_out_km"))
+  ) {
+    res = await supabaseClient.rpc("start_driver_trip_statement", baseArgs);
+  }
+
+  const { data, error } = res;
   if (error) {
     return { ok: false, error: formatRpcErrorMessage(error.message) };
+  }
+
+  const startedOutKm = data?.out_km != null ? Number(data.out_km) : params.outKm;
+  if (startedOutKm != null && Number.isFinite(startedOutKm)) {
+    notifyManualOdometerUpdate(params.vehicleId, startedOutKm, params.deviceId);
   }
 
   return {
     ok: true,
     trip: data?.trip as VehicleOperationTripRecord | undefined,
-    outKm: data?.out_km != null ? Number(data.out_km) : undefined,
+    outKm: startedOutKm,
   };
 }
 

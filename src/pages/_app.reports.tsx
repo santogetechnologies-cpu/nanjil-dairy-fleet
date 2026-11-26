@@ -188,6 +188,8 @@ export default function ReportsPage() {
   const [allFleetVehicles, setAllFleetVehicles] = useState<any[]>([]);
   const [drivers, setDrivers] = useState<any[]>([]);
   const [assignments, setAssignments] = useState<any[]>([]);
+  const assignmentsRef = useRef<any[]>([]);
+  assignmentsRef.current = assignments;
   const [rawDailyRows, setRawDailyRows] = useState<DailyActivityMetricsRow[]>([]);
   const [dailyTelemetryComputed, setDailyTelemetryComputed] = useState<boolean>(true);
   const [dailyCountsMap, setDailyCountsMap] = useState<Record<string, number>>({});
@@ -455,7 +457,7 @@ export default function ReportsPage() {
                   vehicle,
                   liveVehicle: liveMatch,
                   points,
-                  assignments,
+                  assignments: assignmentsRef.current,
                   drivers,
                   bounds: dateBounds,
                 });
@@ -466,7 +468,7 @@ export default function ReportsPage() {
                     vehicle,
                     liveVehicle: liveMatch,
                     points,
-                    assignments,
+                    assignments: assignmentsRef.current,
                     drivers,
                     bounds: dateBounds,
                     telemetryComputed: true,
@@ -543,7 +545,7 @@ export default function ReportsPage() {
                 vehicle,
                 liveVehicle: liveMatch,
                 points: pseudoPoints,
-                assignments,
+                assignments: assignmentsRef.current,
                 drivers,
                 bounds: dateBounds,
                 telemetryComputed: false,
@@ -783,7 +785,6 @@ export default function ReportsPage() {
     refreshKey,
     vehicles,
     drivers,
-    assignments,
     resolveCoordinatesInBackground,
   ]);
 
@@ -1031,6 +1032,7 @@ export default function ReportsPage() {
         vehicleId: selectedVehObj?.id || "All",
         routeId: selectedRouteFilter,
         statusFilter,
+        includeNotClockedIn: false,
       }
     );
     return filterAndSortReportRows(rows, {
@@ -1173,7 +1175,7 @@ export default function ReportsPage() {
       return ["All", "Active", "Idle", "Parked", "No Telemetry"];
     }
     if (selectedReport === "driver_attendance") {
-      return ["All", "On Duty", "Completed", "Not Clocked In"];
+      return ["All", "On Duty", "Completed"];
     }
     if (selectedReport === "trip_route_history") {
       return ["All", "Completed", "Ongoing", "Delayed"];
@@ -2192,7 +2194,7 @@ export default function ReportsPage() {
               </table>
             ) : (
               <div className="py-10 text-center text-xs text-slate-400">
-                No driver attendance records match your filters.
+                No clock-in / clock-out records found in Supabase for the selected period.
               </div>
             )
           ) : selectedReport === "trip_route_history" ? (

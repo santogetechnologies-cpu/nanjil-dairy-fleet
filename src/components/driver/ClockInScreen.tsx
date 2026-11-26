@@ -11,12 +11,14 @@ import {
   Play,
   ShieldCheck,
   Truck,
+  X,
 } from "lucide-react";
 import { Badge } from "@/components/ui-kit";
 import {
   formatStatementNumber,
   getIstGreeting,
   validateClockInEligibility,
+  validateStartingOdometerInput,
   type VehicleOperationTripRecord,
 } from "@/lib/driverOperationStatement";
 import type { RouteAssignmentRecord, RouteSummaryInfo } from "@/lib/driverRouteAssignments";
@@ -36,7 +38,7 @@ interface ClockInScreenProps {
   clockingIn: boolean;
   errorBanner?: string | null;
   recentTrips: VehicleOperationTripRecord[];
-  onClockIn: () => void;
+  onClockIn: (payload?: { openingKm: number; notes?: string }) => void | Promise<void>;
   onOpenTripHistory: () => void;
   onInspectTrip: (trip: VehicleOperationTripRecord) => void;
 }
@@ -58,6 +60,10 @@ export function ClockInScreen({
   onInspectTrip,
 }: ClockInScreenProps) {
   const [now, setNow] = useState(() => new Date());
+  const [showClockInForm, setShowClockInForm] = useState(false);
+  const [startingOdoInput, setStartingOdoInput] = useState("");
+  const [clockInNotes, setClockInNotes] = useState("");
+  const [formOdoError, setFormOdoError] = useState<string | null>(null);
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000);
@@ -186,17 +192,21 @@ export function ClockInScreen({
           </div>
         )}
 
-        {/* Primary CLOCK IN Action */}
+        {/* Primary CLOCK IN Action -> Opens Starting Vehicle Odometer Form */}
         <button
           type="button"
-          onClick={onClockIn}
+          onClick={() => {
+            setFormOdoError(null);
+            setStartingOdoInput(authoritativeOdometer > 0 ? String(authoritativeOdometer) : "");
+            setShowClockInForm(true);
+          }}
           disabled={clockingIn || !eligibility.allowed}
           className="mt-5 w-full min-h-[58px] rounded-2xl bg-white text-slate-900 font-extrabold text-base tracking-wide shadow-lg flex items-center justify-center gap-2.5 transition-all active:scale-[0.99] hover:bg-slate-50 disabled:opacity-45 disabled:pointer-events-none cursor-pointer"
         >
           {clockingIn ? (
             <>
               <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
-              <span>Verifying Assignment…</span>
+              <span>Clocking In…</span>
             </>
           ) : (
             <>
@@ -205,6 +215,161 @@ export function ClockInScreen({
             </>
           )}
         </button>
+
+        {/* Clock-In Form Modal: Starting Vehicle Odometer Entry */}
+        {showClockInForm && (
+          <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-end sm:items-center justify-center p-4 text-slate-900">
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const check = validateStartingOdometerInput(startingOdoInput, authoritativeOdometer);
+                if (!check.valid || check.value == null) {
+                  setFormOdoError(check.error || "Please enter a valid starting odometer reading.");
+                  return;
+                }
+                setFormOdoError(null);
+                await onClockIn({
+                  openingKm: check.value,
+                  notes: clockInNotes.trim() || undefined,
+                });
+                setShowClockInForm(false);
+              }}
+              className="w-full max-w-md rounded-3xl bg-white overflow-hidden shadow-2xl border border-slate-200"
+            >
+              <div
+                className="px-5 py-4 text-white flex items-center justify-between"
+                style={{ background: "linear-gradient(135deg, oklch(0.24 0.12 260), oklch(0.36 0.18 264))" }}
+              >
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-white/70">
+                    Driver Shift Attendance · Step 1
+                  </div>
+                  <div className="text-base font-extrabold">Clock In &amp; Starting Odometer</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowClockInForm(false)}
+                  className="p-2 rounded-xl bg-white/10 text-white cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 text-xs">
+                <div className="grid grid-cols-2 gap-2.5 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase text-slate-400">Assigned Vehicle</div>
+                    <div className="font-extrabold text-slate-900 mt-0.5 flex items-center gap-1">
+                      <Truck className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                      <span>{vehicle.number}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase text-slate-400">Recorded Odometer</div>
+                    <div className="font-bold text-indigo-700 mt-0.5">
+                      {authoritativeOdometer.toLocaleString()} KM
+                    </div>
+                  </div>
+                  <div className="col-span-2 pt-2 border-t border-slate-200/80">
+                    <div className="text-[10px] font-bold uppercase text-slate-400">Assigned Route</div>
+                    <div className="font-bold text-slate-800 mt-0.5">
+                      {routeSummary?.name || activeAssignment?.route_name || vehicle.route || "Collection Route"}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label
+                      htmlFor="clockin-starting-odometer"
+                      className="text-[11px] font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1"
+                    >
+                      <Gauge className="h-3.5 w-3.5 text-indigo-600" />
+                      <span>Starting Vehicle Odometer (KM) *</span>
+                    </label>
+                    {authoritativeOdometer > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStartingOdoInput(String(authoritativeOdometer));
+                          setFormOdoError(null);
+                        }}
+                        className="text-[10px] font-bold text-indigo-700 hover:underline cursor-pointer"
+                      >
+                        Use Recorded ({authoritativeOdometer.toLocaleString()} KM)
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    id="clockin-starting-odometer"
+                    type="number"
+                    inputMode="decimal"
+                    step="0.1"
+                    min={authoritativeOdometer > 0 ? authoritativeOdometer : 0}
+                    value={startingOdoInput}
+                    onChange={(e) => {
+                      setStartingOdoInput(e.target.value);
+                      setFormOdoError(null);
+                    }}
+                    placeholder={
+                      authoritativeOdometer > 0
+                        ? `e.g. ${authoritativeOdometer}`
+                        : "Enter vehicle starting odometer KM"
+                    }
+                    className="w-full h-12 px-3.5 rounded-xl border border-slate-300 bg-white text-base font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    autoFocus
+                  />
+                  {formOdoError && (
+                    <p role="alert" className="text-[11px] font-semibold text-red-600 mt-1.5">
+                      {formOdoError}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                    Shift Notes <span className="normal-case font-normal text-slate-400">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={clockInNotes}
+                    onChange={(e) => setClockInNotes(e.target.value)}
+                    placeholder="Optional vehicle inspection or seal notes..."
+                    className="w-full h-11 px-3 rounded-xl border border-slate-200 bg-slate-50 text-xs font-medium focus:outline-none focus:bg-white focus:border-indigo-400"
+                  />
+                </div>
+
+                <div className="flex gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowClockInForm(false)}
+                    disabled={clockingIn}
+                    className="w-28 min-h-[48px] rounded-xl border border-slate-200 bg-white text-slate-700 font-bold text-xs cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={clockingIn}
+                    className="flex-1 min-h-[48px] rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 cursor-pointer"
+                  >
+                    {clockingIn ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Submitting…</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span>Confirm &amp; Clock In</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
 
       {/* ── Assigned Work, Vehicle & Collection Route Card ── */}

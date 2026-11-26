@@ -8,6 +8,7 @@ import {
   getIstGreeting,
   resolveAuthoritativeOutKm,
   validateClockInEligibility,
+  validateStartingOdometerInput,
   validateTripStart,
   validateTripCloseStatement,
   submitDriverClockIn,
@@ -471,3 +472,60 @@ test("Test 12: submitDriverFuelRefillRpc forwards station, price per litre, rece
   assert.equal(fallbackRes.ok, true);
   assert.equal(callCount, 2);
 });
+
+test("Test 13: Driver Clock-In Starting Vehicle Odometer validation & RPC forwarding with fallback", async () => {
+  const blank = validateStartingOdometerInput("", 66755);
+  assert.equal(blank.valid, false);
+  assert.match(blank.error || "", /required/i);
+
+  const negative = validateStartingOdometerInput("-10", 0);
+  assert.equal(negative.valid, false);
+
+  const lowerThanBaseline = validateStartingOdometerInput("66700", 66755);
+  assert.equal(lowerThanBaseline.valid, false);
+  assert.match(lowerThanBaseline.error || "", /66,755/);
+
+  const validEntry = validateStartingOdometerInput("66780.5", 66755);
+  assert.equal(validEntry.valid, true);
+  assert.equal(validEntry.value, 66780.5);
+
+  let capturedArgs = null;
+  const mockRpc = {
+    rpc: async (_fn, args) => {
+      capturedArgs = args;
+      return {
+        data: {
+          ok: true,
+          shift: { id: "s-1", opening_km: 66780.5 },
+          authoritative_odometer: 66780.5,
+        },
+        error: null,
+      };
+    },
+  };
+
+  const res = await submitDriverClockIn(mockRpc, {
+    openingKm: 66780.5,
+    notes: "Seal checked",
+  });
+  assert.equal(res.ok, true);
+  assert.equal(capturedArgs.p_opening_km, 66780.5);
+  assert.equal(capturedArgs.p_notes, "Seal checked");
+  assert.equal(res.authoritativeOdometer, 66780.5);
+
+  // Fallback to 0-arg RPC when DB migration 20261126130000 is not applied yet
+  let calls = 0;
+  const oldSchemaRpc = {
+    rpc: async (_fn, args) => {
+      calls += 1;
+      if (calls === 1 && args && "p_opening_km" in args) {
+        return { data: null, error: { message: "Could not find the function public.driver_clock_in (PGRST202)" } };
+      }
+      return { data: { ok: true, shift: { id: "s-old", opening_km: 66755 } }, error: null };
+    },
+  };
+  const fallbackRes = await submitDriverClockIn(oldSchemaRpc, { openingKm: 66780 });
+  assert.equal(fallbackRes.ok, true);
+  assert.equal(calls, 2);
+});
+

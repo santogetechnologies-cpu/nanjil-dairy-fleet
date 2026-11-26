@@ -553,3 +553,23 @@ test("TEST 12: Historical trip report preserves immutable route_snapshot after r
   assert.equal(rpcCalls[0].fn, "admin_archive_collection_route");
   assert.equal(rpcCalls[0].args.p_route_id, ROUTE_A);
 });
+
+test("TEST 13: Driver Attendance returns zero synthetic rows when driver_shifts has no backend records", () => {
+  const drivers = [
+    { id: DRIVER_A, name: "Driver A", phone: "+91 90000 00001" },
+    { id: DRIVER_B, name: "Driver B", phone: "+91 90000 00002" },
+  ];
+  const boundsToday = resolveReportDateBounds("custom", "2026-11-26", "2026-11-26");
+
+  const kpis = computeAttendanceOverviewKpis(drivers, [], "2026-11-26");
+  assert.equal(kpis.totalDrivers, 2);
+  assert.equal(kpis.clockedInToday, 0);
+  assert.equal(kpis.clockedOutToday, 0);
+  assert.equal(kpis.currentlyOnDuty, 0);
+  assert.equal(kpis.totalCompletedShifts, 0);
+  assert.equal(kpis.avgWorkingHours, 0);
+
+  const rows = buildDriverAttendanceRows(drivers, [], [], [], [], boundsToday);
+  assert.equal(rows.length, 0, "Must never synthesize Not Clocked In rows when no backend shifts exist");
+});
+

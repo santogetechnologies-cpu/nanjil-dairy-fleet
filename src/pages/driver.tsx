@@ -17,7 +17,10 @@ import { useAuth, REDIRECT_MAP } from "@/lib/auth";
 import { Logo } from "@/components/Logo";
 import { supabase } from "@/lib/supabase";
 import { useVehicles } from "@/hooks/useVehicleTracking";
-import { getTodayIstDateString } from "@/lib/odometerTrackingEngine";
+import {
+  getTodayIstDateString,
+  notifyManualOdometerUpdate,
+} from "@/lib/odometerTrackingEngine";
 import {
   type ValidationFieldErrors,
   type VehicleOperationTripRecord,
@@ -551,7 +554,7 @@ export default function DriverPage() {
 
   /* ── Handlers ── */
 
-  async function handleClockIn() {
+  async function handleClockIn(payload?: { openingKm?: number; notes?: string }) {
     if (clockingIn) return;
     setWorkflowError(null);
     setCompletionBanner(null);
@@ -572,12 +575,24 @@ export default function DriverPage() {
 
     setClockingIn(true);
     try {
-      const res = await submitDriverClockIn(supabase);
+      const res = await submitDriverClockIn(supabase, {
+        openingKm: payload?.openingKm,
+        notes: payload?.notes,
+      });
       if (!res.ok) {
         setWorkflowError(res.error || "Clock In failed.");
         return;
       }
-      if (res.shift) setActiveShift(res.shift);
+      if (res.shift) {
+        setActiveShift(
+          payload?.openingKm != null && Number.isFinite(payload.openingKm)
+            ? { ...res.shift, opening_km: Math.max(Number(res.shift.opening_km || 0), payload.openingKm) }
+            : res.shift
+        );
+      }
+      if (payload?.openingKm != null && Number.isFinite(payload.openingKm) && vehicle?.id) {
+        notifyManualOdometerUpdate(vehicle.id, payload.openingKm, vehicle.deviceId);
+      }
       if (res.activeTrip) setOngoingTrip(res.activeTrip);
       await load();
     } catch (err: any) {
@@ -637,6 +652,11 @@ export default function DriverPage() {
           ? vehicle.route
           : startRoute.trim() || "Collection Route");
 
+      const effectiveOutKm = Math.max(
+        Number(activeShift?.opening_km || 0),
+        Number(authoritativeVehicleOdo || 0)
+      );
+
       const res = await submitStartDriverTripStatement(supabase, {
         vehicleId: vehicle.id!,
         route: routeToUse,
@@ -644,6 +664,8 @@ export default function DriverPage() {
         salesmanName: startSalesman.trim(),
         outDate,
         outTime,
+        outKm: effectiveOutKm > 0 ? effectiveOutKm : undefined,
+        deviceId: vehicle.deviceId,
       });
 
       if (!res.ok) {
@@ -1173,7 +1195,10 @@ export default function DriverPage() {
                   activeAssignment={activeAssignment}
                   routeSummary={routeSummary}
                   assignedVehicles={assignedVehicles}
-                  authoritativeOdometer={authoritativeVehicleOdo}
+                  authoritativeOdometer={Math.max(
+                    Number(activeShift?.opening_km || 0),
+                    Number(authoritativeVehicleOdo || 0)
+                  )}
                   outDate={getTodayIstDateString()}
                   outTime={getCurrentIstTimeString()}
                   routeValue={startRoute}
