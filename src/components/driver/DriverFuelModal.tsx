@@ -1,4 +1,10 @@
-import { Loader2, Plus, X } from "lucide-react";
+import { useRef, useState } from "react";
+import { Camera, CheckCircle2, ImagePlus, Loader2, Plus, Trash2, X } from "lucide-react";
+import {
+  type DriverFuelStationOption,
+  NANJIL_FUEL_STATION_NAME,
+} from "@/lib/driverOperationStatement";
+import { compressReceiptImageToTarget } from "@/lib/imageCompression";
 import type { DriverAssignedVehicle, DriverProfileData } from "./types";
 
 export interface DriverFuelFormState {
@@ -7,8 +13,13 @@ export interface DriverFuelFormState {
   pricePerLiter: number;
   odometer: number;
   isFullTank: boolean;
+  stationOption: DriverFuelStationOption;
   station: string;
   receiptRef: string;
+  receiptPhotoFile?: File | null;
+  receiptPhotoDataUrl?: string | null;
+  receiptPhotoSizeKb?: number | null;
+  receiptPhotoOriginalSizeKb?: number | null;
 }
 
 interface DriverFuelModalProps {
@@ -38,7 +49,47 @@ export function DriverFuelModal({
   onClose,
   onSubmit,
 }: DriverFuelModalProps) {
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const galleryInputRef = useRef<HTMLInputElement | null>(null);
+  const [compressingPhoto, setCompressingPhoto] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+
   if (!open) return null;
+
+  async function handleReceiptFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const picked = e.target.files?.[0];
+    e.target.value = "";
+    if (!picked) return;
+
+    setPhotoError(null);
+    setCompressingPhoto(true);
+    try {
+      const compressed = await compressReceiptImageToTarget(picked);
+      const origKb = Math.round((compressed.originalSizeBytes / 1024) * 10) / 10;
+      onChangeForm({
+        ...form,
+        receiptPhotoFile: compressed.file,
+        receiptPhotoDataUrl: compressed.dataUrl,
+        receiptPhotoSizeKb: compressed.sizeKb,
+        receiptPhotoOriginalSizeKb: origKb,
+      });
+    } catch (err: any) {
+      setPhotoError(err?.message || "Could not compress receipt photo.");
+    } finally {
+      setCompressingPhoto(false);
+    }
+  }
+
+  function clearReceiptPhoto() {
+    setPhotoError(null);
+    onChangeForm({
+      ...form,
+      receiptPhotoFile: null,
+      receiptPhotoDataUrl: null,
+      receiptPhotoSizeKb: null,
+      receiptPhotoOriginalSizeKb: null,
+    });
+  }
 
   const estimatedTotalCost = Math.round(
     Math.max(0, Number(form.liters || 0)) * Math.max(0, Number(form.pricePerLiter || 0))
@@ -233,14 +284,43 @@ export function DriverFuelModal({
           {/* Fuel Station & Receipt / Invoice Ref */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="font-semibold text-slate-700 block mb-1.5">Fuel Station</label>
-              <input
-                type="text"
-                value={form.station}
-                onChange={(e) => onChangeForm({ ...form, station: e.target.value })}
-                placeholder="Indian Oil Swastik Station, Nagercoil"
-                className="w-full h-11 px-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/25"
-              />
+              <label className="font-semibold text-slate-700 block mb-1.5">Fuel Station *</label>
+              <select
+                value={form.stationOption}
+                onChange={(e) => {
+                  const nextOpt = e.target.value as DriverFuelStationOption;
+                  setPhotoError(null);
+                  onChangeForm({
+                    ...form,
+                    stationOption: nextOpt,
+                    station: nextOpt === NANJIL_FUEL_STATION_NAME ? NANJIL_FUEL_STATION_NAME : "",
+                    ...(nextOpt === NANJIL_FUEL_STATION_NAME
+                      ? {
+                          receiptPhotoFile: null,
+                          receiptPhotoDataUrl: null,
+                          receiptPhotoSizeKb: null,
+                          receiptPhotoOriginalSizeKb: null,
+                        }
+                      : {}),
+                  });
+                }}
+                required
+                className="w-full h-11 px-3 rounded-xl border border-slate-200 bg-white font-semibold text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/25 cursor-pointer"
+              >
+                <option value="Nanjil Fuel Station">1. Nanjil Fuel Station</option>
+                <option value="Others">2. Others</option>
+              </select>
+
+              {form.stationOption === "Others" && (
+                <input
+                  type="text"
+                  value={form.station}
+                  onChange={(e) => onChangeForm({ ...form, station: e.target.value })}
+                  placeholder="Enter other fuel station name..."
+                  required
+                  className="mt-2 w-full h-11 px-3 rounded-xl border border-slate-200 text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/25"
+                />
+              )}
             </div>
 
             <div>
@@ -256,6 +336,106 @@ export function DriverFuelModal({
               />
             </div>
           </div>
+
+          {/* Receipt Camera & Compressed Photo Upload (shown when "2. Others" is selected) */}
+          {form.stationOption === "Others" && (
+            <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <div className="font-semibold text-slate-800 text-xs">
+                    Fuel Receipt Photo <span className="text-slate-400 font-normal">(Auto-compressed 10–50 KB)</span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">
+                    Take a camera photo or upload receipt image for outside fuel station
+                  </div>
+                </div>
+              </div>
+
+              {/* Hidden file inputs: camera (environment capture) + gallery upload */}
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleReceiptFileSelected}
+                className="hidden"
+              />
+              <input
+                ref={galleryInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleReceiptFileSelected}
+                className="hidden"
+              />
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={compressingPhoto || submitting}
+                  onClick={() => cameraInputRef.current?.click()}
+                  className="h-10 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-2xs disabled:opacity-50 cursor-pointer"
+                >
+                  <Camera className="h-4 w-4" />
+                  <span>Open Camera</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={compressingPhoto || submitting}
+                  onClick={() => galleryInputRef.current?.click()}
+                  className="h-10 px-3 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                >
+                  <ImagePlus className="h-4 w-4 text-indigo-600" />
+                  <span>Upload Photo</span>
+                </button>
+              </div>
+
+              {compressingPhoto && (
+                <div className="flex items-center gap-2 text-xs text-indigo-700 font-medium py-1">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Compressing receipt photo to 10–50 KB…</span>
+                </div>
+              )}
+
+              {photoError && (
+                <div className="p-2 rounded-lg bg-red-50 border border-red-200 text-[11px] text-red-700 font-medium">
+                  {photoError}
+                </div>
+              )}
+
+              {form.receiptPhotoDataUrl && !compressingPhoto && (
+                <div className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white border border-emerald-200">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <img
+                      src={form.receiptPhotoDataUrl}
+                      alt="Compressed fuel receipt preview"
+                      className="h-12 w-12 rounded-lg object-cover border border-slate-200 shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-bold text-emerald-700 flex items-center gap-1">
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                        <span>Receipt Attached</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 truncate">
+                        Compressed: <span className="font-bold text-slate-700">{form.receiptPhotoSizeKb} KB</span>
+                        {form.receiptPhotoOriginalSizeKb
+                          ? ` (from ${form.receiptPhotoOriginalSizeKb} KB)`
+                          : ""}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={clearReceiptPhoto}
+                    aria-label="Remove receipt photo"
+                    className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-50 cursor-pointer shrink-0"
+                    title="Remove photo"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Actions: Cancel & + Submit Refill */}
           <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">

@@ -6,6 +6,8 @@ import {
   filterDriverTripsByPeriod,
   formatStatementNumber,
   getIstGreeting,
+  NANJIL_FUEL_STATION_NAME,
+  resolveAndValidateFuelStation,
   resolveAuthoritativeOutKm,
   validateClockInEligibility,
   validateStartingOdometerInput,
@@ -527,5 +529,22 @@ test("Test 13: Driver Clock-In Starting Vehicle Odometer validation & RPC forwar
   const fallbackRes = await submitDriverClockIn(oldSchemaRpc, { openingKm: 66780 });
   assert.equal(fallbackRes.ok, true);
   assert.equal(calls, 2);
+});
+
+test("Test 14: Driver Fuel Station validation supports Nanjil Fuel Station and Others (requiring custom station name)", () => {
+  const nanjil = resolveAndValidateFuelStation(NANJIL_FUEL_STATION_NAME, "");
+  assert.equal(nanjil.valid, true);
+  assert.equal(nanjil.station, "Nanjil Fuel Station");
+
+  const othersBlank = resolveAndValidateFuelStation("Others", "   ");
+  assert.equal(othersBlank.valid, false);
+  assert.match(othersBlank.error || "", /Others/i);
+
+  const othersValid = resolveAndValidateFuelStation("Others", "  HP Pump, Marthandam  ");
+  assert.equal(othersValid.valid, true);
+  assert.equal(othersValid.station, "HP Pump, Marthandam");
+
+  const missingOption = resolveAndValidateFuelStation("", "Some Station");
+  assert.equal(missingOption.valid, false);
 });
 

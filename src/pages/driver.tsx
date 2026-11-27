@@ -27,12 +27,15 @@ import {
   formatIsoToIstTime,
   formatStatementNumber,
   getCurrentIstTimeString,
+  NANJIL_FUEL_STATION_NAME,
+  resolveAndValidateFuelStation,
   resolveAuthoritativeOutKm,
   submitCloseDriverTripStatement,
   submitDriverClockIn,
   submitDriverClockOut,
   submitDriverFuelRefillRpc,
   submitStartDriverTripStatement,
+  uploadCompressedFuelReceipt,
   validateClockInEligibility,
   validateTripCloseStatement,
   validateTripStart,
@@ -159,8 +162,13 @@ export default function DriverPage() {
     pricePerLiter: 94.5,
     odometer: 0,
     isFullTank: true,
-    station: "Indian Oil Swastik Station, Nagercoil",
+    stationOption: NANJIL_FUEL_STATION_NAME,
+    station: NANJIL_FUEL_STATION_NAME,
     receiptRef: "",
+    receiptPhotoFile: null,
+    receiptPhotoDataUrl: null,
+    receiptPhotoSizeKb: null,
+    receiptPhotoOriginalSizeKb: null,
   });
   const [fuelError, setFuelError] = useState<string | null>(null);
   const [fuelSuccess, setFuelSuccess] = useState<string | null>(null);
@@ -849,8 +857,13 @@ export default function DriverPage() {
       pricePerLiter: 94.5,
       odometer: authoritativeVehicleOdo > 0 ? authoritativeVehicleOdo : 0,
       isFullTank: true,
-      station: "Indian Oil Swastik Station, Nagercoil",
+      stationOption: NANJIL_FUEL_STATION_NAME,
+      station: NANJIL_FUEL_STATION_NAME,
       receiptRef: "",
+      receiptPhotoFile: null,
+      receiptPhotoDataUrl: null,
+      receiptPhotoSizeKb: null,
+      receiptPhotoOriginalSizeKb: null,
     });
     setShowFuelModal(true);
   }
@@ -897,8 +910,27 @@ export default function DriverPage() {
       return;
     }
 
+    const stationValidation = resolveAndValidateFuelStation(fuelForm.stationOption, fuelForm.station);
+    if (!stationValidation.valid || !stationValidation.station) {
+      setFuelError(stationValidation.error || "Please select a valid fuel station.");
+      return;
+    }
+
     setSubmittingFuel(true);
     try {
+      let receiptPhotoUrl: string | null = null;
+      if (
+        fuelForm.stationOption === "Others" &&
+        (fuelForm.receiptPhotoFile || fuelForm.receiptPhotoDataUrl)
+      ) {
+        receiptPhotoUrl = await uploadCompressedFuelReceipt(
+          supabase,
+          driver.id,
+          fuelForm.receiptPhotoFile!,
+          fuelForm.receiptPhotoDataUrl
+        );
+      }
+
       const res = await submitDriverFuelRefillRpc(supabase, {
         vehicleId: targetVehicleId,
         liters: Number(fuelForm.liters),
@@ -906,8 +938,9 @@ export default function DriverPage() {
         odometer: Math.round(Number(fuelForm.odometer) * 100) / 100,
         isFullTank: Boolean(fuelForm.isFullTank),
         pricePerLiter: Number(fuelForm.pricePerLiter),
-        station: fuelForm.station,
+        station: stationValidation.station,
         receiptRef: fuelForm.receiptRef,
+        receiptPhotoUrl,
         deviceId: matchedTarget?.device_id || vehicle?.deviceId,
       });
 

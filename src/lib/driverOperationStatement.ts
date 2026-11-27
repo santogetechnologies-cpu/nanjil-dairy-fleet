@@ -700,10 +700,11 @@ export async function submitDriverFuelRefillRpc(
     pricePerLiter?: number;
     station?: string;
     receiptRef?: string;
+    receiptPhotoUrl?: string | null;
     deviceId?: string;
   }
 ): Promise<{ ok: boolean; vehicleOdometer?: number; fuelLog?: any; error?: string }> {
-  let { data, error } = await supabaseClient.rpc("log_driver_fuel_refill", {
+  const base8Args = {
     p_vehicle_id: params.vehicleId,
     p_liters: params.liters,
     p_cost: params.cost,
@@ -712,7 +713,23 @@ export async function submitDriverFuelRefillRpc(
     p_price_per_liter: params.pricePerLiter ?? null,
     p_station: params.station?.trim() || null,
     p_receipt_ref: params.receiptRef?.trim() || null,
+  };
+
+  let { data, error } = await supabaseClient.rpc("log_driver_fuel_refill", {
+    ...base8Args,
+    ...(params.receiptPhotoUrl ? { p_receipt_photo_url: params.receiptPhotoUrl } : {}),
   });
+
+  // Fallback to 8-arg RPC if 9-arg signature (with p_receipt_photo_url) isn't deployed yet
+  if (
+    error &&
+    params.receiptPhotoUrl &&
+    (error.message?.includes("Could not find the function") || error.message?.includes("PGRST202"))
+  ) {
+    const midRes = await supabaseClient.rpc("log_driver_fuel_refill", base8Args);
+    data = midRes.data;
+    error = midRes.error;
+  }
 
   // Backwards-compatible fallback if remote DB only has the earlier 5-parameter RPC deployed
   if (
@@ -742,10 +759,68 @@ export async function submitDriverFuelRefillRpc(
   return { ok: true, vehicleOdometer: updatedOdo, fuelLog: data?.fuel_log };
 }
 
+/**
+ * Uploads compressed (10-50 KB) fuel receipt JPEG to Supabase Storage bucket 'fuel-receipts',
+ * falling back cleanly to the compact compressed Data URL if the bucket isn't deployed yet.
+ */
+export async function uploadCompressedFuelReceipt(
+  supabaseClient: any,
+  driverId: string,
+  file: Blob,
+  fallbackDataUrl?: string | null
+): Promise<string | null> {
+  if (!file && !fallbackDataUrl) return null;
+  try {
+    if (supabaseClient?.storage && file) {
+      const path = `${driverId || "driver"}/receipt-${Date.now()}.jpg`;
+      const { error: upErr } = await supabaseClient.storage
+        .from("fuel-receipts")
+        .upload(path, file, { contentType: "image/jpeg", upsert: true });
+
+      if (!upErr) {
+        const { data: pub } = supabaseClient.storage.from("fuel-receipts").getPublicUrl(path);
+        if (pub?.publicUrl) return pub.publicUrl;
+      }
+    }
+  } catch {
+    // Fall back to embedded compressed 10-50 KB data URL cleanly
+  }
+  return fallbackDataUrl || null;
+}
+
 function formatRpcErrorMessage(raw?: string): string {
   if (!raw) return "Operation failed due to a server validation error.";
   if (raw.includes("Could not find the function") || raw.includes("PGRST202")) {
     return "Database RPC is not deployed yet. Apply migration 20261125163000_driver_dashboard_vip_workflow.sql in Supabase.";
   }
   return raw;
+}
+
+export const NANJIL_FUEL_STATION_NAME = "Nanjil Fuel Station";
+export type DriverFuelStationOption = "Nanjil Fuel Station" | "Others";
+
+/**
+ * Validates the Driver fuel station selector (either Nanjil Fuel Station or Others with custom name).
+ */
+export function resolveAndValidateFuelStation(
+  stationOption: string | undefined | null,
+  customOrRawStation?: string | null
+): { valid: boolean; station?: string; error?: string } {
+  if (stationOption === NANJIL_FUEL_STATION_NAME) {
+    return { valid: true, station: NANJIL_FUEL_STATION_NAME };
+  }
+  if (stationOption === "Others") {
+    const clean = (customOrRawStation || "").trim();
+    if (!clean) {
+      return {
+        valid: false,
+        error: "Please enter the fuel station name when 'Others' is selected.",
+      };
+    }
+    return { valid: true, station: clean };
+  }
+  return {
+    valid: false,
+    error: "Please select a Fuel Station option (Nanjil Fuel Station or Others).",
+  };
 }
