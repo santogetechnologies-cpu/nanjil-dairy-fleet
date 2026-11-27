@@ -141,11 +141,10 @@ export function DriverFuelModal({
                   value={form.vehicleId}
                   onChange={(e) => {
                     const vId = e.target.value;
-                    const vObj = selectableVehicles.find((x) => x.id === vId);
                     onChangeForm({
                       ...form,
                       vehicleId: vId,
-                      odometer: Number(vObj?.odometer ?? authoritativeOdometer ?? 0),
+                      odometer: 0,
                     });
                   }}
                   required
@@ -196,14 +195,14 @@ export function DriverFuelModal({
                 onChange={(e) =>
                   onChangeForm({ ...form, liters: parseFloat(e.target.value) || 0 })
                 }
-                placeholder="60"
+                placeholder="e.g. 60"
                 required
                 className="w-full h-11 px-3 rounded-xl border border-slate-200 font-bold text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/25"
               />
             </div>
 
             <div>
-              <label className="font-semibold text-slate-700 block mb-1.5">Price per Litre (₹)</label>
+              <label className="font-semibold text-slate-700 block mb-1.5">Price per Litre (₹) *</label>
               <input
                 type="number"
                 step="any"
@@ -213,7 +212,7 @@ export function DriverFuelModal({
                 onChange={(e) =>
                   onChangeForm({ ...form, pricePerLiter: parseFloat(e.target.value) || 0 })
                 }
-                placeholder="94.5"
+                placeholder="e.g. 94.5"
                 required
                 className="w-full h-11 px-3 rounded-xl border border-slate-200 font-bold text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/25"
               />

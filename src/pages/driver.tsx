@@ -158,8 +158,8 @@ export default function DriverPage() {
   const [fuelLogs, setFuelLogs] = useState<DriverFuelHistoryRow[]>([]);
   const [fuelForm, setFuelForm] = useState<DriverFuelFormState>({
     vehicleId: "",
-    liters: 60,
-    pricePerLiter: 94.5,
+    liters: 0,
+    pricePerLiter: 0,
     odometer: 0,
     isFullTank: true,
     stationOption: NANJIL_FUEL_STATION_NAME,
@@ -853,9 +853,9 @@ export default function DriverPage() {
     setFuelError(null);
     setFuelForm({
       vehicleId: vehicle?.id || assignedVehicles[0]?.id || "",
-      liters: 60,
-      pricePerLiter: 94.5,
-      odometer: authoritativeVehicleOdo > 0 ? authoritativeVehicleOdo : 0,
+      liters: 0,
+      pricePerLiter: 0,
+      odometer: 0,
       isFullTank: true,
       stationOption: NANJIL_FUEL_STATION_NAME,
       station: NANJIL_FUEL_STATION_NAME,
