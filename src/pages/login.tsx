@@ -257,19 +257,6 @@ function LoginPage() {
 
       {/* ── RIGHT PANEL (Floating White Login Card) ── */}
       <div className="flex-1 flex flex-col items-center justify-center px-5 sm:px-10 py-8 relative z-10">
-        {/* Compact Mobile Branding Header */}
-        <div className="lg:hidden mb-6 flex items-center gap-3 text-left w-full max-w-[410px]">
-          <div className="bg-white rounded-2xl px-3 py-1.5 shadow-md border border-white/80 shrink-0">
-            <Logo className="h-8 w-auto object-contain" />
-          </div>
-          <div>
-            <div className="font-extrabold text-base text-white tracking-tight drop-shadow-xs">
-              Nanjil VIP
-            </div>
-            <div className="text-white/85 text-[11px] font-medium">Vehicle Intelligence Platform</div>
-          </div>
-        </div>
-
         <motion.div
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
