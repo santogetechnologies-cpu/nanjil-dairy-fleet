@@ -7,6 +7,7 @@ import { type Vehicle, type VehicleStatus } from "@/lib/types";
 import { useAverageSpeed, extractTelemetryTimestamp, globalGpsSpeedTracker } from "@/hooks/useAverageSpeed";
 import { getIstDateRange, isFleetOperatingCoordinate } from "@/lib/tripHistoryEngine";
 import { toFleetCoord, isValidFleetCoord, NANJIL_DAIRY_DEPOT } from "@/components/maps/mapConstants";
+import { sanitizePlausibleSpeed } from "@/lib/overspeed";
 
 // ---------------------------------------------------------------------------
 // Last-Known-Good (LKG) coordinate cache
@@ -161,7 +162,7 @@ export function parseFirestoreTelemetry(
   const lat = coord ? coord.lat : 0;
   const lng = coord ? coord.lng : 0;
 
-  const speed = typeof data.speed === "number" ? data.speed : parseFloat(String(data.speed || 0));
+  const speed = sanitizePlausibleSpeed(data.speed, existing?.speed ?? 0);
 
   const temperature =
     typeof data.temperature === "number"
@@ -480,7 +481,7 @@ export function usePureFirebaseTracking() {
           if (cleanDevId) {
             const lat = typeof data.lat === "number" ? data.lat : parseFloat(String(data.lat ?? 0));
             const lng = typeof data.lng === "number" ? data.lng : parseFloat(String(data.lng ?? 0));
-            const speed = typeof data.speed === "number" ? data.speed : parseFloat(String(data.speed || 0));
+            const speed = sanitizePlausibleSpeed(data.speed, 0);
             updateGpsPoint(cleanDevId, lat, lng, speed, timestamp);
 
             // Continuously persist live telemetry into Supabase telemetry_history (throttled)
@@ -708,7 +709,7 @@ export function useFirebaseTracking(initialVehicles: Vehicle[]) {
             // Feed GPS point with true telemetry timestamp into the average speed calculator
             const lat = typeof data.lat === "number" ? data.lat : parseFloat(String(data.lat ?? 0));
             const lng = typeof data.lng === "number" ? data.lng : parseFloat(String(data.lng ?? 0));
-            const speed = typeof data.speed === "number" ? data.speed : parseFloat(String(data.speed || 0));
+            const speed = sanitizePlausibleSpeed(data.speed, 0);
             const timestamp = extractTelemetryTimestamp(data, docSnap);
             updateGpsPoint(cleanDevId, lat, lng, speed, timestamp);
           }
