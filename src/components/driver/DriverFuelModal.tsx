@@ -189,8 +189,8 @@ export function DriverFuelModal({
               <label className="font-semibold text-slate-700 block mb-1.5">Volume (Litres) *</label>
               <input
                 type="number"
-                step="0.5"
-                min={0.1}
+                step="any"
+                min={0.01}
                 inputMode="decimal"
                 value={form.liters || ""}
                 onChange={(e) =>
@@ -206,8 +206,8 @@ export function DriverFuelModal({
               <label className="font-semibold text-slate-700 block mb-1.5">Price per Litre (₹)</label>
               <input
                 type="number"
-                step="0.1"
-                min={0.1}
+                step="any"
+                min={0.01}
                 inputMode="decimal"
                 value={form.pricePerLiter || ""}
                 onChange={(e) =>
@@ -228,6 +228,7 @@ export function DriverFuelModal({
               </label>
               <input
                 type="number"
+                step="any"
                 min={0}
                 inputMode="decimal"
                 value={form.odometer === 0 ? "" : form.odometer}
