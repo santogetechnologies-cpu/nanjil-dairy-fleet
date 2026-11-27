@@ -10,7 +10,6 @@ import {
   ShieldCheck,
   UserCheck,
   Wrench,
-  Fuel,
   MapPin,
   Eye,
   EyeOff,
@@ -84,7 +83,6 @@ function LoginPage() {
 
   const features = [
     { icon: MapPin, label: "Live GPS Tracking" },
-    { icon: Fuel, label: "Fuel Intelligence" },
     { icon: UserCheck, label: "Driver Management" },
     { icon: Wrench, label: "Fleet Maintenance" },
   ];
@@ -219,8 +217,8 @@ function LoginPage() {
             </p>
           </motion.div>
 
-          {/* 4-Card Horizontal Feature Strip */}
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 max-w-xl">
+          {/* 3-Card Horizontal Feature Strip */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-lg">
             {features.map((f, idx) => (
               <motion.div
                 key={f.label}
