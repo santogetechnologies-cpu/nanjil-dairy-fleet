@@ -65,6 +65,7 @@ export interface FuelPurchaseRecord {
   isFullTank: boolean;
   paymentMethod: "Fleet Card" | "Cash" | "UPI" | "Credit";
   receiptRef?: string;
+  receiptPhotoUrl?: string | null;
   approvalStatus: "Approved" | "Pending" | "Rejected";
   notes?: string;
   recordedBy?: string;
@@ -161,15 +162,16 @@ export default function FuelManagementPage() {
             vehicleNumber: vNum,
             driverName: dName,
             loggedAt: log.logged_at || new Date().toISOString(),
-            station: "HP Commercial Fueling Center, Thuckalay",
+            station: log.station || "Nanjil Fuel Station",
             fuelType: "Diesel",
             liters,
-            pricePerLiter: price,
+            pricePerLiter: Number(log.price_per_liter || price),
             totalCost: cost,
             odometer: Number(log.odometer || 0),
             isFullTank: log.is_full_tank !== false,
             paymentMethod: idx % 3 === 0 ? "Fleet Card" : "UPI",
-            receiptRef: `INV-2026-${1000 + idx}`,
+            receiptRef: log.receipt_ref || `INV-2026-${1000 + idx}`,
+            receiptPhotoUrl: log.receipt_photo_url || null,
             approvalStatus: cost > 5000 && idx % 4 === 1 ? "Pending" : "Approved",
             notes: "Routine evening refuel after route completion",
             recordedBy: "Operations Staff",
@@ -704,7 +706,22 @@ export default function FuelManagementPage() {
                         {r.isFullTank ? "Full Tank" : "Partial"}
                       </Badge>
                     </td>
-                    <td className="py-3 px-3 font-mono text-[11px] text-slate-500">{r.receiptRef || "—"}</td>
+                    <td className="py-3 px-3 font-mono text-[11px] text-slate-500">
+                      <div className="flex flex-col gap-1">
+                        <span>{r.receiptRef || "—"}</span>
+                        {r.receiptPhotoUrl && (
+                          <a
+                            href={r.receiptPhotoUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 font-sans text-[10px] font-semibold text-indigo-600 hover:underline"
+                          >
+                            <Receipt className="h-3 w-3" />
+                            Receipt Photo
+                          </a>
+                        )}
+                      </div>
+                    </td>
                     <td className="py-3 px-3">
                       <Badge
                         variant="outline"

@@ -23,6 +23,7 @@ export interface DriverFuelHistoryRow {
   price_per_liter?: number | null;
   station?: string | null;
   receipt_ref?: string | null;
+  receipt_photo_url?: string | null;
   logged_at?: string | null;
 }
 
@@ -181,6 +182,17 @@ export function VehicleTab({
                   <span>Odo: {Number(log.odometer || 0).toLocaleString()} km</span>
                   {log.station && <span>{log.station}</span>}
                   {log.receipt_ref && <span className="font-mono">Ref: {log.receipt_ref}</span>}
+                  {log.receipt_photo_url && (
+                    <a
+                      href={log.receipt_photo_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-indigo-600 hover:underline font-semibold"
+                    >
+                      <Receipt className="h-3 w-3" />
+                      View Receipt
+                    </a>
+                  )}
                 </div>
               </div>
             ))}

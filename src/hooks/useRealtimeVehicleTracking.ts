@@ -23,6 +23,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { type Vehicle, type VehicleStatus } from "@/lib/types";
+import { sanitizePlausibleSpeed } from "@/lib/overspeed";
 import { globalGpsSpeedTracker } from "@/lib/gpsAverageSpeed";
 import { toFleetCoord, NANJIL_DAIRY_DEPOT } from "@/components/maps/mapConstants";
 
@@ -79,7 +80,7 @@ function mapRowToVehicle(row: Record<string, unknown>): Vehicle {
   const lastUpdateStr = row.last_update as string | null;
   const lastUpdateDate = lastUpdateStr ? new Date(lastUpdateStr) : null;
 
-  const speed = Number(row.speed ?? 0);
+  const speed = sanitizePlausibleSpeed(row.speed, 0);
   const engineOn = Boolean(row.engine_on ?? false);
   const ignition = Boolean(row.ignition ?? false);
   const status = deriveStatus(speed, engineOn, ignition, lastUpdateDate);
@@ -199,7 +200,7 @@ export function useRealtimeAllVehicles(enabled: boolean = true): Vehicle[] {
               String(row.device_id || row.vehicle_id),
               Number(row.lat),
               Number(row.lng),
-              Number(row.speed || 0),
+              sanitizePlausibleSpeed(row.speed, 0),
               ts,
             );
             if (row.vehicle_id && row.device_id) {
@@ -373,7 +374,7 @@ export function useRealtimeVehicleList(initialVehicles: Vehicle[], enabled: bool
               String(row.device_id || row.vehicle_id),
               Number(row.lat),
               Number(row.lng),
-              Number(row.speed || 0),
+              sanitizePlausibleSpeed(row.speed, 0),
               ts,
             );
             if (row.vehicle_id && row.device_id) {

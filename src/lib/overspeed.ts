@@ -9,13 +9,14 @@
  * Designed for real-time Firebase telemetry monitoring without alert spam.
  */
 
-import { supabase } from "@/lib/supabase";
-import type { Vehicle } from "@/lib/types";
+import { supabase } from "./supabase.ts";
+import type { Vehicle } from "./types.ts";
 
 // ── Threshold Constants ──────────────────────────────────────────────────────
 export const DEFAULT_SPEED_LIMIT_KMH = 60;
 export const WARNING_SPEED_DELTA_KMH = 10;
 export const CRITICAL_SPEED_DELTA_KMH = 20;
+export const MAX_PLAUSIBLE_SPEED_KMH = 150; // Reject corrupt GPS speed spikes (matches gpsAverageSpeed/tripHistoryEngine)
 export const OVERSPEED_ALERT_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
 
 export type OverspeedLevel = "normal" | "warning" | "critical";
@@ -49,8 +50,45 @@ export function isRealSupabaseVehicleId(id: unknown): boolean {
 }
 
 /**
+ * Returns true if the parsed numeric speed is non-negative and within
+ * commercial fleet plausibility (0..MAX_PLAUSIBLE_SPEED_KMH).
+ */
+export function isPlausibleSpeed(speedVal: unknown): boolean {
+  const speed =
+    typeof speedVal === "number"
+      ? speedVal
+      : typeof speedVal === "string"
+        ? parseFloat(speedVal)
+        : NaN;
+  return Number.isFinite(speed) && speed >= 0 && speed <= MAX_PLAUSIBLE_SPEED_KMH;
+}
+
+/**
+ * Sanitizes incoming telemetry speed. If the raw reading is NaN, negative, or
+ * exceeds MAX_PLAUSIBLE_SPEED_KMH (e.g. a 333 km/h GPS packet glitch), returns
+ * fallbackSpeed (also bounded to [0, MAX_PLAUSIBLE_SPEED_KMH]).
+ */
+export function sanitizePlausibleSpeed(speedVal: unknown, fallbackSpeed = 0): number {
+  const speed =
+    typeof speedVal === "number"
+      ? speedVal
+      : typeof speedVal === "string"
+        ? parseFloat(speedVal)
+        : NaN;
+  if (Number.isFinite(speed) && speed >= 0 && speed <= MAX_PLAUSIBLE_SPEED_KMH) {
+    return speed;
+  }
+  const safeFallback = Number(fallbackSpeed);
+  if (Number.isFinite(safeFallback) && safeFallback >= 0 && safeFallback <= MAX_PLAUSIBLE_SPEED_KMH) {
+    return safeFallback;
+  }
+  return 0;
+}
+
+/**
  * Centralized overspeed classification function.
  * Supports configurable speed threshold (defaults to 60 km/h).
+ * Rejects implausible GPS speed spikes (> MAX_PLAUSIBLE_SPEED_KMH) as normal/no-alert.
  * Normal: <= limit
  * Warning: limit < speed <= limit + 20
  * Critical: > limit + 20
@@ -65,7 +103,7 @@ export function getOverspeedStatus(speedVal: unknown, customLimit: number = DEFA
 
   const limit = typeof customLimit === "number" && customLimit > 0 ? customLimit : DEFAULT_SPEED_LIMIT_KMH;
 
-  if (isNaN(speed) || speed <= 0) {
+  if (!Number.isFinite(speed) || speed <= 0 || speed > MAX_PLAUSIBLE_SPEED_KMH) {
     return {
       level: "normal",
       label: "Normal",
@@ -117,8 +155,11 @@ export function getOverspeedStatus(speedVal: unknown, customLimit: number = DEFA
 export class OverspeedManager {
   private vehicleLevels = new Map<string, OverspeedLevel>();
   private lastAlertTimestamps = new Map<string, number>();
+  private supabaseClient: any;
 
-  constructor(private supabaseClient: any = supabase) {}
+  constructor(supabaseClient: any = supabase) {
+    this.supabaseClient = supabaseClient;
+  }
 
   /**
    * Evaluates vehicles and detects state transitions across snapshots.
@@ -129,6 +170,9 @@ export class OverspeedManager {
     for (const v of vehicles) {
       const key = v.id || v.deviceId;
       if (!key) continue;
+
+      // Ignore implausible GPS speed spikes (e.g. > 150 km/h) instead of flipping overspeed state
+      if (!isPlausibleSpeed(v.speed)) continue;
 
       const prevLevel = this.vehicleLevels.get(key) ?? "normal";
       const status = getOverspeedStatus(v.speed);
@@ -167,6 +211,9 @@ export class OverspeedManager {
 
       // Down-transitions (Critical -> Warning) do not spam a new alert record
       if (ev.previousLevel === "critical" && ev.currentLevel === "warning") continue;
+
+      // Belt-and-suspenders: never persist implausible GPS speed spikes (> MAX_PLAUSIBLE_SPEED_KMH)
+      if (!isPlausibleSpeed(ev.speed)) continue;
 
       let targetVehicleId = ev.vehicleId;
       // Must be a real Supabase vehicle ID; if not, attempt resolving by deviceId or vehicleNumber
@@ -209,7 +256,36 @@ export class OverspeedManager {
           : `Speed recorded at ${Math.round(ev.speed)} km/h in ${warnThreshold} km/h zone (excess: +${excess} km/h)`;
 
       try {
-        // Also check DB for recent active safety alerts for this vehicle within 15 min
+        // Prefer atomic backend dedupe RPC (prevents duplicate inserts across multiple open browser tabs)
+        if (typeof this.supabaseClient.rpc === "function") {
+          const { data: rpcData, error: rpcErr } = await this.supabaseClient.rpc(
+            "record_safety_overspeed_alert",
+            {
+              p_vehicle_id: targetVehicleId,
+              p_speed: Math.round(ev.speed),
+              p_limit: warnThreshold,
+              p_severity: severity,
+              p_message: message,
+              p_cooldown_minutes: Math.round(OVERSPEED_ALERT_COOLDOWN_MS / 60000),
+            }
+          );
+
+          if (!rpcErr) {
+            this.lastAlertTimestamps.set(cooldownKey, now);
+            if ((rpcData as any)?.inserted) {
+              console.log(`[Overspeed Alert] Recorded ${severity} alert for ${ev.vehicleNumber}: ${message}`);
+            }
+            continue;
+          }
+          // Fall back cleanly if RPC is not deployed yet (e.g. PGRST202 / missing function)
+          const rpcMsg = (rpcErr.message || "").toLowerCase();
+          if (!rpcMsg.includes("record_safety_overspeed_alert") && rpcErr.code !== "PGRST202") {
+            console.warn("[Overspeed Alert] RPC warning:", rpcErr.message);
+            continue;
+          }
+        }
+
+        // Fallback: check DB for recent active safety alerts for this vehicle within 15 min
         const cooldownWindow = new Date(now - OVERSPEED_ALERT_COOLDOWN_MS).toISOString();
         const { data: existing } = await this.supabaseClient
           .from("alerts")

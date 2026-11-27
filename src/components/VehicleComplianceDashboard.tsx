@@ -469,19 +469,12 @@ export function VehicleComplianceDashboard() {
       )}
 
       {/* ── Fleet Overview Summary Cards ─────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Kpi
           label="Total Vehicles"
           value={loading ? "…" : records.length}
           icon={<Truck className="h-5 w-5" />}
           hint="Active fleet units"
-        />
-        <Kpi
-          label="Fleet Categories"
-          value={loading ? "…" : distinctGroups.length}
-          accent="info"
-          icon={<Layers className="h-5 w-5" />}
-          hint="Vehicle model groups"
         />
         <Kpi
           label="Statutory Checks"

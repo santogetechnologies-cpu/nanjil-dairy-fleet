@@ -8,6 +8,7 @@
 
 import { supabase } from "./supabase.ts";
 import { safeTimestampToMs, isValidCoordinate } from "./vehicle-stop-detection.ts";
+import { sanitizePlausibleSpeed } from "./overspeed.ts";
 
 export interface NormalizedTelemetryPoint {
   vehicleId: string;
@@ -46,7 +47,7 @@ export function normalizeFirebaseDocument(
     return null;
   }
 
-  const speed = Math.max(0, typeof docData.speed === "number" ? docData.speed : parseFloat(String(docData.speed || 0)) || 0);
+  const speed = sanitizePlausibleSpeed(docData.speed, 0);
   const engineOn = docData.engine_on === true || String(docData.engine_on).toLowerCase() === "true";
   const ignition = docData.ignition === true || String(docData.ignition).toLowerCase() === "true";
 
@@ -95,7 +96,7 @@ export function normalizeEmqxRow(
     return null;
   }
 
-  const speed = Math.max(0, typeof row.speed === "number" ? row.speed : parseFloat(String(row.speed || 0)) || 0);
+  const speed = sanitizePlausibleSpeed(row.speed, 0);
   const rawTs = row.recorded_at || row.timestamp || row.last_update || Date.now();
   const tsMs = safeTimestampToMs(rawTs);
   if (!tsMs) return null;
