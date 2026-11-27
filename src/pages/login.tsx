@@ -20,26 +20,11 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 
-const REMEMBER_IDENTIFIER_KEY = "nanjil_remember_identifier";
-
 function LoginPage() {
   const { login, user } = useAuth();
   const nav = useNavigate();
 
-  const [identifier, setIdentifier] = useState<string>(() => {
-    try {
-      return localStorage.getItem(REMEMBER_IDENTIFIER_KEY) || "";
-    } catch {
-      return "";
-    }
-  });
-  const [rememberMe, setRememberMe] = useState<boolean>(() => {
-    try {
-      return Boolean(localStorage.getItem(REMEMBER_IDENTIFIER_KEY));
-    } catch {
-      return true;
-    }
-  });
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,16 +41,6 @@ function LoginPage() {
     if (!canSubmit) return;
     setBusy(true);
     setError(null);
-
-    try {
-      if (rememberMe) {
-        localStorage.setItem(REMEMBER_IDENTIFIER_KEY, identifier.trim());
-      } else {
-        localStorage.removeItem(REMEMBER_IDENTIFIER_KEY);
-      }
-    } catch {
-      // Ignore storage errors
-    }
 
     try {
       const r = await login(identifier, password);
@@ -279,29 +254,6 @@ function LoginPage() {
                     {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
-              </div>
-
-              {/* Remember me & Forgot password */}
-              <div className="flex items-center justify-between pt-0.5">
-                <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 accent-[#167A2E] cursor-pointer"
-                  />
-                  <span>Remember me</span>
-                </label>
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    alert("Please contact your Fleet Administrator to reset your password.")
-                  }
-                  className="text-xs font-semibold text-[#167A2E] hover:text-[#115E23] hover:underline cursor-pointer"
-                >
-                  Forgot password?
-                </button>
               </div>
 
               {/* Error Popup */}
