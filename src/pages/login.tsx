@@ -99,15 +99,18 @@ function LoginPage() {
       <img
         src={loginHeroBg}
         alt="Nanjil Dairy Fleet Sunrise Highway"
+        loading="eager"
+        decoding="sync"
+        fetchPriority="high"
         className="absolute inset-0 h-full w-full object-cover object-center select-none pointer-events-none"
       />
 
-      {/* Contrast Scrims for Left Hero Legibility */}
+      {/* Subtle Left Contrast Scrim (preserves sky & truck vibrancy) */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
           background:
-            "linear-gradient(105deg, rgba(6, 26, 48, 0.52) 0%, rgba(10, 42, 66, 0.24) 44%, rgba(255, 255, 255, 0) 70%)",
+            "linear-gradient(105deg, rgba(6, 26, 48, 0.40) 0%, rgba(10, 42, 66, 0.14) 40%, rgba(255, 255, 255, 0) 64%)",
         }}
       />
 
