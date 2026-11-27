@@ -99,7 +99,7 @@ function LoginPage() {
       <img
         src={loginHeroBg}
         alt="Nanjil Dairy Fleet Sunrise Highway"
-        className="absolute inset-0 h-full w-full object-cover object-center lg:object-[32%_center] select-none pointer-events-none"
+        className="absolute inset-0 h-full w-full object-cover object-center select-none pointer-events-none"
       />
 
       {/* Contrast Scrims for Left Hero Legibility */}
@@ -107,62 +107,12 @@ function LoginPage() {
         className="absolute inset-0 pointer-events-none"
         style={{
           background:
-            "linear-gradient(105deg, rgba(6, 26, 48, 0.56) 0%, rgba(10, 42, 66, 0.28) 42%, rgba(255, 255, 255, 0) 68%)",
-        }}
-      />
-      <div
-        className="hidden lg:block absolute inset-x-0 bottom-0 h-36 pointer-events-none"
-        style={{
-          background: "linear-gradient(to top, rgba(4, 15, 28, 0.72) 0%, rgba(4, 15, 28, 0) 100%)",
+            "linear-gradient(105deg, rgba(6, 26, 48, 0.52) 0%, rgba(10, 42, 66, 0.24) 44%, rgba(255, 255, 255, 0) 70%)",
         }}
       />
 
-      {/* ── Right Organic Cream & Dairy Green Curve Overlay (Desktop) ── */}
-      <svg
-        viewBox="0 0 1440 900"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-        className="hidden lg:block absolute inset-0 h-full w-full pointer-events-none z-[1]"
-      >
-        <defs>
-          <linearGradient id="nanjilCreamWave" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#F5FBF3" stopOpacity="0.92" />
-            <stop offset="50%" stopColor="#FFFFFF" stopOpacity="0.98" />
-            <stop offset="100%" stopColor="#E6F4E1" stopOpacity="0.96" />
-          </linearGradient>
-          <linearGradient id="nanjilGreenSplash" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#72CA3C" />
-            <stop offset="55%" stopColor="#46AD33" />
-            <stop offset="100%" stopColor="#1B7D2A" />
-          </linearGradient>
-          <linearGradient id="nanjilMilkRibbon" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.95" />
-            <stop offset="100%" stopColor="#E8F5E3" stopOpacity="0.85" />
-          </linearGradient>
-        </defs>
-
-        {/* Sweeping soft cream-white wave dividing hero highway from login card zone */}
-        <path
-          d="M 1030 0 C 905 165, 975 385, 860 585 C 780 725, 710 830, 620 900 L 1440 900 L 1440 0 Z"
-          fill="url(#nanjilCreamWave)"
-        />
-
-        {/* Upper-right vibrant dairy leaf green wave behind card top-right */}
-        <path
-          d="M 1440 0 L 1440 620 C 1390 480, 1345 340, 1215 245 C 1105 165, 1085 65, 1170 0 Z"
-          fill="url(#nanjilGreenSplash)"
-          opacity="0.92"
-        />
-
-        {/* Glossy white milk swirl highlight along top-right of card */}
-        <path
-          d="M 1365 65 C 1335 120, 1375 180, 1410 235 C 1392 170, 1395 110, 1440 60 C 1415 45, 1385 45, 1365 65 Z"
-          fill="url(#nanjilMilkRibbon)"
-        />
-      </svg>
-
-      {/* Mobile top gradient wash so mobile login looks crisp too */}
-      <div className="lg:hidden absolute inset-0 bg-gradient-to-b from-slate-900/55 via-slate-900/35 to-[#eef7eb]/95 pointer-events-none z-[1]" />
+      {/* Mobile wash for form legibility */}
+      <div className="lg:hidden absolute inset-0 bg-gradient-to-b from-slate-900/35 via-slate-900/20 to-white/60 pointer-events-none z-[1]" />
 
       {/* ── LEFT HERO COLUMN (Desktop) ── */}
       <div className="hidden lg:flex flex-col justify-between relative z-10 w-[56%] xl:w-[58%] px-10 xl:px-14 py-9 xl:py-11">
@@ -241,7 +191,7 @@ function LoginPage() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.4 }}
-          className="flex items-center gap-7"
+          className="inline-flex items-center gap-6 px-4 py-2.5 rounded-2xl bg-slate-900/55 backdrop-blur-md border border-white/20 shadow-lg w-fit"
         >
           {stats.map((s) => (
             <div key={s.label} className="flex items-center gap-2.5">
@@ -257,19 +207,6 @@ function LoginPage() {
 
       {/* ── RIGHT PANEL (Floating White Login Card) ── */}
       <div className="flex-1 flex flex-col items-center justify-center px-5 sm:px-10 py-8 relative z-10">
-        {/* Compact Mobile Branding Header */}
-        <div className="lg:hidden mb-6 flex items-center gap-3 text-left w-full max-w-[410px]">
-          <div className="bg-white rounded-2xl px-3 py-1.5 shadow-md border border-white/80 shrink-0">
-            <Logo className="h-8 w-auto object-contain" />
-          </div>
-          <div>
-            <div className="font-extrabold text-base text-white tracking-tight drop-shadow-xs">
-              Nanjil VIP
-            </div>
-            <div className="text-white/85 text-[11px] font-medium">Vehicle Intelligence Platform</div>
-          </div>
-        </div>
-
         <motion.div
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
@@ -277,7 +214,7 @@ function LoginPage() {
           className="w-full max-w-[410px]"
         >
           {/* Floating White Card */}
-          <div className="bg-white rounded-[28px] border border-white shadow-[0_24px_60px_-15px_rgba(12,48,20,0.22)] p-7 sm:p-9">
+          <div className="95 backdrop-blur-md rounded-[28px] border border-white shadow-[0_24px_60px_-15px_rgba(12,48,20,0.28)] p-7 sm:p-9">
             {/* Centered Card Header & Nanjil Logo */}
             <div className="text-center mb-6">
               <div className="flex justify-center mb-3.5">
@@ -393,15 +330,11 @@ function LoginPage() {
               </button>
             </form>
 
-            <div className="mt-5 flex items-center justify-center gap-1.5 text-[11px] font-medium text-slate-500">
-              <ShieldCheck className="h-3.5 w-3.5 text-[#167A2E]" />
+            <div className="mt-5 flex items-center justify-center gap-1.5 text-[11px] font-medium text-black">
+              <ShieldCheck className="h-3.5 w-3.5 text-[#000000]" />
               <span>Secure sign in · Nanjil Fleet Operations</span>
             </div>
           </div>
-
-          <p className="mt-4 text-center text-xs font-medium text-slate-500">
-            v1.4.2 · All rights reserved
-          </p>
         </motion.div>
       </div>
     </div>
